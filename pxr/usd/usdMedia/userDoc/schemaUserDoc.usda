@@ -1,0 +1,81 @@
+#usda 1.0
+(
+    "This file describes the USD Media schemata for code generation."
+    subLayers = [
+        # Sublayer "parent" user doc to get user doc for inherited properties.
+        @../../usdGeom/userDoc/schemaUserDoc.usda@,        
+        # Sublayer domain schema.usda to get proper schema inheritance structure 
+        # and property fallback values. User doc is added as overs to schema 
+        # class metadata. 
+        @../schema.usda@
+    ]   
+)
+
+over "GLOBAL" (
+    customData = {
+        string libraryName      = "usdMedia"
+        string userDocTitle     = "Media"
+    }
+)
+{
+}
+
+over SpatialAudio "SpatialAudio" (
+    customData = {
+        string userDocBrief = """Brief user doc."""
+        string userDoc = """Longer-form user doc."""
+    }
+) {
+    uniform asset filePath (
+        customData = {
+            string userDocBrief = """Brief user doc."""
+            string userDoc = """Longer-form user doc."""
+        }
+    )
+    uniform token auralMode (
+        customData = {
+            string userDocBrief = """Brief user doc."""
+            string userDoc = """Longer-form user doc."""
+        }
+    )
+    uniform token playbackMode (
+        customData = {
+            string userDocBrief = """Brief user doc."""
+            string userDoc = """Longer-form user doc."""
+        }
+    )
+    uniform timecode startTime (
+        customData = {
+            string userDocBrief = """Brief user doc."""
+            string userDoc = """Longer-form user doc."""
+        }
+    )
+    uniform timecode endTime (
+        customData = {
+            string userDocBrief = """Brief user doc."""
+            string userDoc = """Longer-form user doc."""
+        }
+    )
+    uniform double mediaOffset (
+        customData = {
+            string userDocBrief = """Brief user doc."""
+            string userDoc = """Longer-form user doc."""
+        }
+    )
+    double gain (
+        customData = {
+            string userDocBrief = """Brief user doc."""
+            string userDoc = """Longer-form user doc."""
+        }
+    )
+}
+
+over "AssetPreviewsAPI" (
+    customData = {
+        string userDocBrief = """Brief user doc."""
+        string userDoc = """Longer-form user doc."""
+    }
+)
+{
+    # no properties!
+}

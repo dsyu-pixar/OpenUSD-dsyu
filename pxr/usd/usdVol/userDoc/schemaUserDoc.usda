@@ -2,7 +2,7 @@
 (
     subLayers = [
         # Sublayer "parent" user doc to get user doc for inherited properties.
-        #@usdGeom/userDoc/schemaUserDoc.usda@        
+        @../../usdGeom/userDoc/schemaUserDoc.usda@,        
         # Sublayer domain schema.usda to get proper schema inheritance structure 
         # and property fallback values. User doc is added as overs to schema 
         # class metadata. 

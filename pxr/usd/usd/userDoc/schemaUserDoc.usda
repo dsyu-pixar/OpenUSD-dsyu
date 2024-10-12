@@ -1,0 +1,104 @@
+#usda 1.0
+(
+    subLayers = [
+        # Sublayer domain schema.usda to get proper schema inheritance structure 
+        # and property fallback values. User doc is added as overs to schema 
+        # class metadata. 
+        @../schema.usda@
+    ]
+)
+
+over "GLOBAL" (
+    customData = {
+        string libraryName           = "usd"
+        string userDocTitle          = "USD Base Schemas"
+    }
+)
+{
+}
+
+over "Typed" 
+(
+    customData = {
+        string userDocBrief = """Brief user doc."""
+        string userDoc = """Longer-form user doc."""
+    }
+)
+{
+}
+
+over "APISchemaBase"
+(
+    customData = {
+        string userDocBrief = """Brief user doc."""
+        string userDoc = """Longer-form user doc."""
+    }
+)
+{
+}
+
+over "ModelAPI" 
+(
+    customData = {
+        string userDocBrief = """Brief user doc."""
+        string userDoc = """Longer-form user doc."""
+    }
+)
+{
+}
+
+over "CollectionAPI"
+(
+    customData = {
+        string userDocBrief = """Brief user doc."""
+        string userDoc = """Longer-form user doc."""
+    }
+)
+{
+    uniform token expansionRule (
+        customData = {
+            string userDocBrief = """Brief user doc."""
+            string userDoc = """Longer-form user doc."""
+        }
+    )
+    uniform bool includeRoot (
+        customData = {
+            string userDocBrief = """Brief user doc."""
+            string userDoc = """Longer-form user doc."""
+        }
+    )
+    rel includes (
+        customData = {
+            string userDocBrief = """Brief user doc."""
+            string userDoc = """Longer-form user doc."""
+        }
+    )
+    rel excludes (
+        customData = {
+            string userDocBrief = """Brief user doc."""
+            string userDoc = """Longer-form user doc."""
+        }
+    )
+    uniform pathExpression membershipExpression (
+        customData = {
+            string userDocBrief = """Brief user doc."""
+            string userDoc = """Longer-form user doc."""
+        }
+    )
+    uniform opaque __INSTANCE_NAME__ (
+        customData = {
+            string userDocBrief = """Brief user doc."""
+            string userDoc = """Longer-form user doc."""
+        }
+    )
+}
+
+over "ClipsAPI"
+(
+    customData = {
+        string userDocBrief = """Brief user doc."""
+        string userDoc = """Longer-form user doc."""
+    }
+)
+{
+}

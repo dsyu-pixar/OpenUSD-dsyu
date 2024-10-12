@@ -3,13 +3,12 @@
     "This file describes the user doc for the USD Geometric schemata."
     subLayers = [
         # Sublayer "parent" user doc to get user doc for inherited properties.
-        #@usd/userDoc/schemaUserDoc.usda@        
+        @../../usd/userDoc/schemaUserDoc.usda@,        
         # Sublayer domain schema.usda to get proper schema inheritance structure 
         # and property fallback values. User doc is added as overs to schema 
         # class metadata. 
         @../schema.usda@
     ]
-
 )
 
 over "GLOBAL" (

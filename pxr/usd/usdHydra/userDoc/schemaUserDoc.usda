@@ -1,0 +1,41 @@
+#usda 1.0
+(
+    "This file describes the Pixar-specific USD Geometric schemata for code generation."
+    subLayers = [
+        # Sublayer "parent" user doc to get user doc for inherited properties.
+        @../../usd/userDoc/schemaUserDoc.usda@,        
+        # Sublayer domain schema.usda to get proper schema inheritance structure 
+        # and property fallback values. User doc is added as overs to schema 
+        # class metadata. 
+        @../schema.usda@
+    ]    
+)
+
+over "GLOBAL" (
+    customData = {
+        string libraryName           = "usdHydra"
+        string userDocTitle          = "Hydra Schemas"
+    }
+){
+}
+
+over "HydraGenerativeProceduralAPI" (
+    customData = {
+        string userDocBrief = """Brief user doc."""
+        string userDoc = """Longer-form user doc."""
+    }
+){
+    token primvars:hdGp:proceduralType (
+        customData = {
+            string userDocBrief = """Brief user doc."""
+            string userDoc = """Longer-form user doc."""
+        }
+    )
+
+    token proceduralSystem (
+        customData = {
+            string userDocBrief = """Brief user doc."""
+            string userDoc = """Longer-form user doc."""
+        }
+    )
+}

@@ -1,0 +1,126 @@
+#usda 1.0
+(
+    "This file describes the USD Shader schemata for code generation."
+    subLayers = [
+        # Sublayer "parent" user doc to get user doc for inherited properties.
+        @../../usd/userDoc/schemaUserDoc.usda@,        
+        # Sublayer domain schema.usda to get proper schema inheritance structure 
+        # and property fallback values. User doc is added as overs to schema 
+        # class metadata. 
+        @../schema.usda@
+    ]
+)
+
+over "GLOBAL" (
+    customData = {
+        string libraryName = "usdShade"
+        string userDocTitle = "Shader"
+    }
+)
+{
+}
+
+over NodeGraph "NodeGraph" (
+    customData = {
+        string userDocBrief = """Brief user doc."""
+        string userDoc = """Longer-form user doc."""
+    }
+) {
+
+}
+
+
+over Material "Material" (
+    customData = {
+        string userDocBrief = """Brief user doc."""
+        string userDoc = """Longer-form user doc."""
+    }
+) 
+{
+    token outputs:surface (
+        customData = {
+            string userDocBrief = """Brief user doc."""
+            string userDoc = """Longer-form user doc."""
+        }
+    )
+    token outputs:displacement (
+        customData = {
+            string userDocBrief = """Brief user doc."""
+            string userDoc = """Longer-form user doc."""
+        }
+    )
+    token outputs:volume (
+        customData = {
+            string userDocBrief = """Brief user doc."""
+            string userDoc = """Longer-form user doc."""
+        }
+    )
+}
+
+over Shader "Shader" (
+    customData = {
+        string userDocBrief = """Brief user doc."""
+        string userDoc = """Longer-form user doc."""
+    }
+) {
+}
+
+over "NodeDefAPI"
+(
+    customData = {
+        string userDocBrief = """Brief user doc."""
+        string userDoc = """Longer-form user doc."""
+    }
+)
+{
+    uniform token info:implementationSource (
+        customData = {
+            string userDocBrief = """Brief user doc."""
+            string userDoc = """Longer-form user doc."""
+        }
+    )
+
+    uniform token info:id (
+        customData = {
+            string userDocBrief = """Brief user doc."""
+            string userDoc = """Longer-form user doc."""
+        }
+    )
+}
+
+over "ConnectableAPI"
+(
+    customData = {
+        string userDocBrief = """Brief user doc."""
+        string userDoc = """Longer-form user doc."""
+    }
+)
+{
+}
+
+over "MaterialBindingAPI"
+(
+    customData = {
+        string userDocBrief = """Brief user doc."""
+        string userDoc = """Longer-form user doc."""
+    }
+)
+{
+    
+}
+
+over "CoordSysAPI"
+(
+    customData = {
+        string userDocBrief = """Brief user doc."""
+        string userDoc = """Longer-form user doc."""
+    }
+)
+{
+    rel binding (
+        customData = {
+            string userDocBrief = """Brief user doc."""
+            string userDoc = """Longer-form user doc."""
+        }
+    )
+}

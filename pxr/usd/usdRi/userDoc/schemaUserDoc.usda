@@ -1,0 +1,89 @@
+#usda 1.0
+(
+    "This file describes the USD RenderMan Interface (UsdRi) schemata for code generation."
+    subLayers = [
+        # Sublayer "parent" user doc to get user doc for inherited properties.
+        @../../usd/userDoc/schemaUserDoc.usda@,        
+        @../../usdShade/userDoc/schemaUserDoc.usda@,       
+        # Sublayer domain schema.usda to get proper schema inheritance structure 
+        # and property fallback values. User doc is added as overs to schema 
+        # class metadata. 
+        @../schema.usda@
+    ]
+)
+
+def "GLOBAL" (
+    customData = {
+        string libraryName = "usdRi"
+        string userDocTitle = "RenderMan Interface"
+    }
+)
+{
+}
+
+over "StatementsAPI" (
+    customData = {
+        string userDocBrief = """Brief user doc."""
+        string userDoc = """Longer-form user doc."""
+    }
+) {
+}
+
+### Material API common to both RSL and RIS ###
+
+over "RiMaterialAPI" (
+    customData = {
+        string userDocBrief = """Brief user doc."""
+        string userDoc = """Longer-form user doc."""
+    }
+) {
+    token outputs:ri:surface (
+        customData = {
+            string userDocBrief = """Brief user doc."""
+            string userDoc = """Longer-form user doc."""
+        }
+    )
+    token outputs:ri:displacement (
+        customData = {
+            string userDocBrief = """Brief user doc."""
+            string userDoc = """Longer-form user doc."""
+        }
+    )
+    token outputs:ri:volume (
+        customData = {
+            string userDocBrief = """Brief user doc."""
+            string userDoc = """Longer-form user doc."""
+        }
+    )
+}
+
+
+########################################################################
+# Lighting API
+
+over "RiSplineAPI" (
+    customData = {
+        string userDocBrief = """Brief user doc."""
+        string userDoc = """Longer-form user doc."""
+    }
+) {
+}
+
+
+########################################################################
+# Render API
+
+over "RiRenderPassAPI" (
+    customData = {
+        string userDocBrief = """Brief user doc."""
+        string userDoc = """Longer-form user doc."""
+    }
+) {
+
+    uniform bool collection:cameraVisibility:includeRoot (
+        customData = {
+            string userDocBrief = """Brief user doc."""
+            string userDoc = """Longer-form user doc."""
+        }
+    )
+}
