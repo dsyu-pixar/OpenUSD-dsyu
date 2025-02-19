@@ -99,15 +99,63 @@ over "SceneGraphPrimAPI"(
 
 over Backdrop "Backdrop" (
     customData = {
-        string userDocBrief = """Brief user doc."""
-        string userDoc = """Longer-form user doc."""
+        string userDocBrief = """Backdrop is a visual indication of a grouping of nodes."""
+        string userDoc = """Backdrop is a visual indication of a grouping of nodes.
+        
+The Backdrop can take the form of a colored rectangle, making it easier to see node groupings in the node graph.
+
+Consider the following example:
+
+```{code-block} usda
+def Material "MyMaterial"
+{
+    token outputs:mtlx:surface.connect = </World/Material/PreviewSurface.outputs:out>
+
+    def Shader "PreviewSurface" (
+        prepend apiSchemas = ["NodeGraphNodeAPI"]
+    )
+    {
+        uniform token info:id = "ND_UsdPreviewSurface_surfaceshader"
+        color3f inputs:diffuseColor.connect = </World/Material/Color.outputs:out>
+        token outputs:out
+
+        uniform float2 ui:nodegraph:node:pos = (-200, 100)
+        uniform float2 ui:nodegraph:node:size = (100, 100)
+    }
+
+    def Shader "Color" (
+        prepend apiSchemas = ["NodeGraphNodeAPI"]
+    )
+    {
+        uniform token info:id = "ND_constant_color3"
+        color3f inputs:value = (1, 0.023, 0.701)
+        color3f outputs:out
+
+        uniform float2 ui:nodegraph:node:pos = (-500, 100)
+        uniform float2 ui:nodegraph:node:size = (200, 100)
+    }
+
+    def Backdrop "Backdrop" (
+        prepend apiSchemas = ["NodeGraphNodeAPI"]
+    )
+    {
+        uniform token ui:description = "MyMaterial Nodes"
+        uniform color3f ui:nodegraph:node:displayColor = (1, 0, 0)
+        uniform float2 ui:nodegraph:node:pos = (-600, 50)
+        uniform float2 ui:nodegraph:node:size = (1000, 400)
+    }
+}
+```
+
+The two shader nodes, `PreviewSurface` and `Color`, are positioned between -500.0 and -100.0 on the x-axis and between 100.0 and 200.0 on the y-axis. Since the backdrop covers this area, both nodes will appear in front of it, with the backdrop labeled `MyMaterial Nodes`.
+"""
     }
 )
 {
     uniform token ui:description (
         customData = {
-            string userDocBrief = """Brief user doc."""
-            string userDoc = """Longer-form user doc."""
+            string userDocBrief = """A description for the backdrop."""
+            string userDoc = """A description for the backdrop."""
         }
     )
 }
