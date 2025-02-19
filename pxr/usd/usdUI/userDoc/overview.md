@@ -26,67 +26,59 @@ Using Backdrops allows nodes to be grouped by region, by underlaying the
 containing nodes and adding a description (`ui:description`). Backdrops would
 typically have positions and sizes from the `NodeGraphNodeAPI`.
 
-View the image below to see how these details can be presented to the user.
+View the image below to see how these details can be presented, in this case using
+ShapeFX Loki.
 
 ![Example screenshot](usdUINodeGraph.png)
 
 Below is one way to express the above file in usda
 
 ```{code-block} usda
-def Scope "Materials"
+def Material "Material"
 {
-    def Material "MyMaterial"
+    token outputs:mtlx:surface.connect = </World/Material/PreviewSurface.outputs:out>
+
+    def Shader "PreviewSurface" (
+        prepend apiSchemas = ["NodeGraphNodeAPI"]
+    )
     {
-        token outputs:mtlx:surface.connect = </Materials/MyMaterial/PreviewSurface.outputs:out>
+        uniform token info:id = "ND_UsdPreviewSurface_surfaceshader"
+        color3f inputs:diffuseColor.connect = </World/Material/Color.outputs:out>
+        token outputs:out
+        uniform color3f ui:nodegraph:node:displayColor = (0.7, 0, 0.7)
+        uniform token ui:nodegraph:node:expansionState = "open"
+        uniform float2 ui:nodegraph:node:pos = (-.85, 1.9)
+    }
 
-        def Shader "PreviewSurface" (
-            prepend apiSchemas = ["NodeGraphNodeAPI"]
-        )
-        {
-            uniform token info:id = "ND_UsdPreviewSurface_surfaceshader"
-            color3f inputs:diffuseColor.connect = </Materials/MyMaterial/Color.outputs:out>
-            token outputs:out
-            
-            uniform color3f ui:nodegraph:node:displayColor = (1, 1, 0)
-            uniform string ui:nodegraph:node:docURI = "https://openusd.org/release/spec_usdpreviewsurface.html"
-            uniform token ui:nodegraph:node:expansionState = "open"
-            uniform asset ui:nodegraph:node:icon = @preview_surface_icon.png@
-            uniform float2 ui:nodegraph:node:pos = (-200, 100)
-            uniform float2 ui:nodegraph:node:size = (100, 100)
-            uniform int ui:nodegraph:node:stackingOrder = 1
-            uniform token ui:displayGroup = "MyMaterial Nodes"
-            uniform token ui:displayName = "Preview Surface Node"
-        }
-
-        def Shader "Color" (
-            prepend apiSchemas = ["NodeGraphNodeAPI"]
-        )
-        {
-            uniform token info:id = "ND_constant_color3"
-            color3f inputs:value = (1, 0.023, 0.701)
-            color3f outputs:out
-            
-            uniform color3f ui:nodegraph:node:displayColor = (0, 0, 1)
-            uniform string ui:nodegraph:node:docURI = "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.Specification.md#procedural-nodes"
-            uniform token ui:nodegraph:node:expansionState = "closed"
-            uniform asset ui:nodegraph:node:icon = @color_icon.png@
-            uniform float2 ui:nodegraph:node:pos = (-500, 100)
-            uniform float2 ui:nodegraph:node:size = (200, 100)
-            uniform int ui:nodegraph:node:stackingOrder = 2
-            uniform token ui:displayGroup = "MyMaterial Nodes"
-            uniform token ui:displayName = "Color Node"
-        }
+    def Shader "Color" (
+        prepend apiSchemas = ["NodeGraphNodeAPI"]
+    )
+    {
+        uniform token info:id = "ND_constant_color3"
+        color3f inputs:value = (1, 0.023, 0.701)
+        color3f outputs:out
+        uniform color3f ui:nodegraph:node:displayColor = (0, 0.7, 0.7)
+        uniform token ui:nodegraph:node:expansionState = "closed"
+        uniform float2 ui:nodegraph:node:pos = (-2, 2)
+    }
 
         def Backdrop "Backdrop" (
-            prepend apiSchemas = ["NodeGraphNodeAPI"]
-        )
-        {
-            uniform token ui:description = "MyMaterial Backdrop"
-            uniform color3f ui:nodegraph:node:displayColor = (0, 1, 0)
-            uniform float2 ui:nodegraph:node:pos = (-600, 50)
-            uniform float2 ui:nodegraph:node:size = (1000, 400)
-        }
+        prepend apiSchemas = ["NodeGraphNodeAPI"]
+    )
+    {
+        uniform token ui:description = "Do not edit!"
+        uniform color3f ui:nodegraph:node:displayColor = (0.8, 0.5, 0.2)
+        uniform float2 ui:nodegraph:node:pos = (-0.8, 0.5)
+        uniform float2 ui:nodegraph:node:size = (450, 330)
     }
 }
 
 ```
+
+While not all possible variations are shown above, the following can be observed::
+- `ui:nodegraph:node:displayColor` helps distinguish nodes quickly
+- `ui:description` in Backdrop can provide context for regional
+groupings in a node graph
+- `ui:nodegraph:node:expansionState` controls how much information a node displays, 
+note the difference in detail between `PreviewSurface` vs `Color`
+- `ui:nodegraph:node:size` and `ui:nodegraph:node:pos` determine the placement and relative positioning of nodes in a node graph.
