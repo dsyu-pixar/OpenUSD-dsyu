@@ -79,7 +79,7 @@ over "NodeGraphNodeAPI"(
 
 over "SceneGraphPrimAPI"(
     customData = {
-        string userDocBrief = """SceneGraphPrimAPI provides a way to add descriptive information to the node graph."""
+        string userDocBrief = """SceneGraphPrimAPI provides a way to add descriptive information to the node graph. """
         string userDoc = """SceneGraphPrimAPI provides a way to add descriptive information to the node graph.
 
 Consider the following example:
@@ -115,20 +115,20 @@ def Material "MyMaterial"
 }
 ```
 
-Above we can see how the two shader nodes `PreviewSurface` and `Color` can have their own descriptive names. They can also belong to a display group, to allow groups of nodes to be displayed in an organized way.
+The two shader nodes, `PreviewSurface` and `Color`, can have their own descriptive names (`ui:displayName`). They can also belong to a display group (`ui:displayGroup`), allowing groups of nodes to be displayed in an organized way.
 """
     }
 ) {
     uniform token ui:displayName (
         customData = {
-            string userDocBrief = """A descriptive name for the current node."""
-            string userDoc = """A descriptive name for the current node."""
+            string userDocBrief = """A descriptive name for the node."""
+            string userDoc = """A descriptive name for the node."""
         }
     )
     uniform token ui:displayGroup (
         customData = {
-            string userDocBrief = """A descriptive name for the group of nodes that this node belongs to."""
-            string userDoc = """A descriptive name for the group of nodes that this node belongs to."""
+            string userDocBrief = """A descriptive name for the group to which the node belongs."""
+            string userDoc = """A descriptive name for the group to which the node belongs."""
         }
     )
 }
