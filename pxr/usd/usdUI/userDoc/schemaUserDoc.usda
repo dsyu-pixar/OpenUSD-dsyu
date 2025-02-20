@@ -155,7 +155,10 @@ The two shader nodes, `PreviewSurface` and `Color`, are positioned between -500.
     uniform token ui:description (
         customData = {
             string userDocBrief = """A description for the backdrop."""
-            string userDoc = """A description for the backdrop."""
+            string userDoc = """A description for the backdrop.
+
+For example, when creating custom noise with multiple nodes, using a description of 'Noise' helps indicate that these nodes contribute to overall noise generation.
+"""
         }
     )
 }
