@@ -53,7 +53,7 @@ def Material "MyMaterial"
         uniform string ui:nodegraph:node:docURI = "https://openusd.org/release/spec_usdpreviewsurface.html"
         uniform token ui:nodegraph:node:expansionState = "open"
         uniform asset ui:nodegraph:node:icon = @preview_surface_icon.png@
-        uniform float2 ui:nodegraph:node:pos = (-200.0, 100.0)
+        uniform float2 ui:nodegraph:node:pos = (-0.85, 1.9)
         uniform float2 ui:nodegraph:node:size = (300.0, 400.0)
         uniform int ui:nodegraph:node:stackingOrder = 1
     }
@@ -68,7 +68,7 @@ def Material "MyMaterial"
         uniform string ui:nodegraph:node:docURI = "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.Specification.md#procedural-nodes"
         uniform token ui:nodegraph:node:expansionState = "closed"
         uniform asset ui:nodegraph:node:icon = @color_icon.png@
-        uniform float2 ui:nodegraph:node:pos = (-500.0, 50.0)
+        uniform float2 ui:nodegraph:node:pos = (-2, 2)
         uniform float2 ui:nodegraph:node:size = (100.0, 200.0)
         uniform int ui:nodegraph:node:stackingOrder = 2
     }
@@ -84,7 +84,8 @@ def Material "MyMaterial"
 
 If the node has a parent, this position will be relative to the parent. 
 
-The Y coordinate is intended to increase going down. For example -100.0 would be higher than 100.0.
+The Y coordinate is intended to increase going down. For example -1.0 would be higher than 1.0. These
+units are not meant to be in pixel space, but represent the size of a typical node.
 """
         }
     )
