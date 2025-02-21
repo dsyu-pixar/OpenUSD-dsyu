@@ -119,8 +119,7 @@ def Material "MyMaterial"
         color3f inputs:diffuseColor.connect = </World/Material/Color.outputs:out>
         token outputs:out
 
-        uniform float2 ui:nodegraph:node:pos = (-200, 100)
-        uniform float2 ui:nodegraph:node:size = (100, 100)
+        uniform float2 ui:nodegraph:node:pos = (-0.85, 1.9)
     }
 
     def Shader "Color" (
@@ -131,8 +130,7 @@ def Material "MyMaterial"
         color3f inputs:value = (1, 0.023, 0.701)
         color3f outputs:out
 
-        uniform float2 ui:nodegraph:node:pos = (-500, 100)
-        uniform float2 ui:nodegraph:node:size = (200, 100)
+        uniform float2 ui:nodegraph:node:pos = (-2, 2)
     }
 
     def Backdrop "Backdrop" (
@@ -141,13 +139,16 @@ def Material "MyMaterial"
     {
         uniform token ui:description = "MyMaterial Nodes"
         uniform color3f ui:nodegraph:node:displayColor = (1, 0, 0)
-        uniform float2 ui:nodegraph:node:pos = (-600, 50)
-        uniform float2 ui:nodegraph:node:size = (1000, 400)
+        uniform float2 ui:nodegraph:node:pos = (-0.8, 0.5)
+        uniform float2 ui:nodegraph:node:size = (450, 330)
     }
 }
 ```
 
-The two shader nodes, `PreviewSurface` and `Color`, are positioned between -500.0 and -100.0 on the x-axis and between 100.0 and 200.0 on the y-axis. Since the backdrop covers this area, both nodes will appear in front of it, with the backdrop labeled `MyMaterial Nodes`.
+Observe the positions, with the backdrop starting at an x-coordiante of -0.8, `PreviewSurface` at -0.85, and `Color` at -2.0.
+The backdrop’s width of 450 highlights the contrast between size and position units. While a typical node may be around 200px wide, this setup ensures that the backdrop covers both nodes.
+Observing the y-coordinates of 0.5, 1.9, and 2, it should be noted that the Y-coordinate increases as you move downward. This means the backdrop is positioned above both nodes and extends 330px downward.
+The backdrop appears in red and is labeled `MyMaterial Nodes`.
 """
     }
 )
