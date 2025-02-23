@@ -116,70 +116,266 @@ over SkelAnimation "SkelAnimation" (
 
 over "SkelBindingAPI" (
     customData = {
-        string userDocBrief = """Brief user doc."""
-        string userDoc = """Longer-form user doc."""
+        string userDocBrief = """Provides a way to bind both `Skeleton` and 
+`SkelAnimation` prims within a geometry hierarchy. This schema is also 
+responsible for defining joint influences and includes an optional 
+`geomBindTransform` property to specify the space used for skinning.
+"""
+        string userDoc = """Provides a way to bind both `Skeleton` and 
+`SkelAnimation` prims within a geometry hierarchy. This schema is also 
+responsible for defining joint influences and includes an optional 
+`geomBindTransform` property to specify the space used for skinning.
+
+`SkelBindingAPI` is concerned with binding and does not contain data 
+that describes the animation itself.
+
+## Joint based Animation Setup
+
+```{code-block} usda
+def SkelRoot "SkelRoot" (
+    prepend apiSchemas = ["SkelBindingAPI"]
+)
+{
+    prepend rel skel:animationSource = </World/SkelRoot/Animation>
+
+    def Skeleton "Skeleton"
+    {
+        uniform matrix4d[] bindTransforms = [( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1) ), ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 2, 1) ), ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 4, 1) )]
+        uniform token[] joints = ["Shoulder", "Shoulder/Elbow", "Shoulder/Elbow/Hand"]
+        uniform matrix4d[] restTransforms = [( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1) ), ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 2, 1) ), ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 2, 1) )]
+    }
+
+    def SkelAnimation "Animation"
+    {
+        uniform token[] joints = ["Shoulder/Elbow"]
+        quatf[] rotations.timeSamples = {
+            1: [(1, 0, 0, 0)],
+            10: [(0.7071, 0.7071, 0, 0)],
+        }
+        half3[] scales = [(1, 1, 1)]
+        float3[] translations = [(0, 0, 2)]
+    }
+
+    def Mesh "Mesh" (
+        prepend apiSchemas = ["SkelBindingAPI"]
+    )
+    {
+        int[] faceVertexCounts = [4, 4, 4, 4, 4, 4, 4, 4, 4, 4]
+        int[] faceVertexIndices = [2, 3, 1, 0, 6, 7, 5, 4, 8, 9, 7, 6, 3, 2, 9, 8, 10, 11, 4, 5, 0, 1, 11, 10, 7, 9, 10, 5, 9, 2, 0, 10, 3, 8, 11, 1, 8, 6, 4, 11]
+        point3f[] points = [(0.5, -0.5, 4), (-0.5, -0.5, 4), (0.5, 0.5, 4), (-0.5, 0.5, 4), 
+                            (-0.5, -0.5, 0), (0.5, -0.5, 0), (-0.5, 0.5, 0), (0.5, 0.5, 0), 
+                            (-0.5, 0.5, 2), (0.5, 0.5, 2), (0.5, -0.5, 2), (-0.5, -0.5, 2)]
+        matrix4d primvars:skel:geomBindTransform = ( 
+            (1, 0, 0, 0), 
+            (0, 1, 0, 0), 
+            (0, 0, 1, 0), 
+            (0, 0, 0, 1) )
+        int[] primvars:skel:jointIndices = [
+            2, 2, 2, 2, 
+            0, 0, 0, 0, 
+            1, 1, 1, 1] (
+            elementSize = 1
+            interpolation = "vertex"
+        )
+        float[] primvars:skel:jointWeights = [
+            1, 1, 1, 1, 
+            1, 1, 1, 1, 
+            1, 1, 1, 1] (
+            elementSize = 1
+            interpolation = "vertex"
+        )
+        prepend rel skel:skeleton = </World/SkelRoot/Skeleton>
+    }
+}
+```
+
+Notice the following from the above example:
+- `skel:skeleton` must be set to establish a relationship between the geometry 
+and the `Skeleton`. This allows the joints in the `Skeleton` to be indexed by 
+`SkelAnimation`, ensuring the necessary connections to determine which points 
+are affected by a `SkelAnimation`.
+- `skel:animationSource` is set on the `SkelRoot` to bind it to a 
+`SkelAnimation` prim.
+- `primvars:skel:geomBindTransform`, `primvars:skel:jointIndices`, and 
+`primvars:skel:jointWeights` are all set on the geometry prim.
+
+## Blend shape Animation Setup
+
+The `SkelBindingAPI` provides the necessary infrastructure to bind all 
+required prims for blend shape-based animation. The following example 
+outlines the essential prims and relationships needed for a functional setup.
+
+```{code-block} usda
+
+def SkelRoot "MorphingTri" (
+    prepend apiSchemas = ["SkelBindingAPI"]
+)
+{
+    rel skel:skeleton = </World/MorphingTri/Skel>
+    def Skeleton "Skel" {}
+
+    rel skel:animationSource = </World/MorphingTri/Anim>
+    def SkelAnimation "Anim"
+    {
+        uniform token[] blendShapes = ["iso", "right"]
+        float[] blendShapeWeights.timeSamples = {
+            1: [0, 0],
+            5: [1, 0],
+            9: [0, 0],
+            13: [0, 1],
+            17: [1, 1],
+        }
+    }
+
+    def Mesh "Mesh" (
+        prepend apiSchemas = ["SkelBindingAPI"]
+    )
+    {
+        point3f[] points = [(0.5, 0, 0), (0, 0.8660254, 0), (-0.5, 0, 0)]
+
+        uniform token[] skel:blendShapes = ["iso", "right"]
+        rel skel:blendShapeTargets = [
+            </World/MorphingTri/Mesh/iso>,
+            </World/MorphingTri/Mesh/right>,
+        ]
+        def BlendShape "iso"
+        {
+            uniform vector3f[] offsets = [(0, 0.8660254, 0)]
+            uniform int[] pointIndices = [1]
+        }
+        def BlendShape "right"
+        {
+            uniform vector3f[] offsets = [(-0.5, 0.1339746, 0)]
+            uniform int[] pointIndices = [1]
+        }
+
+
+        float3[] extent = [(-0.5, 0, 0), (0.5, 0.8660254, 0)]
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+    }
+}
+```
+
+Notice the following from the above example:
+- `skel:skeleton` must be set, even when using blend shapes where joints are 
+not defined.
+- `skel:animationSource` must be set to bind the geometry to a `SkelAnimation` 
+prim.
+- `skel:blendShapes` must be set on the geometry-based prim within the 
+`SkelBindingAPI` hierarchy. Its contents must match those of blendShapes 
+inside the `SkelAnimation`.
+- `skel:blendShapeTargets` must be set on the geometry-based prim within the 
+`SkelBindingAPI` hierarchy. These define bindings to the BlendShape prims 
+affected by the `SkelAnimation`.
+
+"""
     }
 )
 {
     rel skel:animationSource (
         customData = {
-            string userDocBrief = """Brief user doc."""
-            string userDoc = """Longer-form user doc."""
+            string userDocBrief = """A relationship that binds a 
+`SkelAnimation` to a `Skeleton`, enabling the animation to influence joint 
+transformations and drive skinned deformations.
+"""
+            string userDoc = """A relationship that binds a 
+`SkelAnimation` to a `Skeleton`, enabling the animation to influence joint 
+transformations and drive skinned deformations.
+"""
         }
     )
 
     rel skel:skeleton (
         customData = {
-            string userDocBrief = """Brief user doc."""
-            string userDoc = """Longer-form user doc."""
+            string userDocBrief = """A relationship that binds a `Skeleton` 
+to the geometry it deforms, establishing the connection necessary for 
+skinning and joint-driven animation."""
+            string userDoc = """A relationship that binds a `Skeleton` 
+to the geometry it deforms, establishing the connection necessary for 
+skinning and joint-driven animation."""
         }
     )
 
     uniform token primvars:skel:skinningMethod (
         customData = {
-            string userDocBrief = """Brief user doc."""
-            string userDoc = """Longer-form user doc."""
+            string userDocBrief = """Determines how skinning is calculated.
+Allowed values: `classicLinear` | `dualQuaternion`."""
+            string userDoc = """Determines how skinning is calculated.
+Allowed values:
+- `classicLinear`: Linear Blend Skinning or LBS: Faster and more common skinning 
+method. Suffers from volume loss when twisting geometry.
+- `dualQuaternion`: DQ: More computationally expensive, but preserves volume 
+better than LBS, producing more natural results especially when twisting.
+
+"""
         }
     )
 
     matrix4d primvars:skel:geomBindTransform (
         customData = {
-            string userDocBrief = """Brief user doc."""
-            string userDoc = """Longer-form user doc."""
+            string userDocBrief = """Provides the world space transform of a 
+skinned primitive at bind-time."""
+            string userDoc = """Provides the world space transform of a 
+skinned primitive at bind-time. In practice, this can be the T-pose, or A-pose 
+transform."""
         }
     )
 
     uniform token[] skel:joints (
         customData = {
-            string userDocBrief = """Brief user doc."""
-            string userDoc = """Longer-form user doc."""
+            string userDocBrief = """A list of joint names. Optional override 
+for Skeleton.joints."""
+            string userDoc = """A list of joint names. Optional override 
+for Skeleton.joints."""
         }
     )
 
     int[] primvars:skel:jointIndices (
         customData = {
-            string userDocBrief = """Brief user doc."""
-            string userDoc = """Longer-form user doc."""
+            string userDocBrief = """Indices referencing the joints attribute 
+of the nearest bound `Skeleton`, specifying which joints 
+influence each point of the bound geometry"""
+            string userDoc = """Indices referencing the joints attribute 
+of the nearest bound `Skeleton`, specifying which joints 
+influence each point of the bound geometry"""
         }
     )
 
     float[] primvars:skel:jointWeights (
         customData = {
-            string userDocBrief = """Brief user doc."""
-            string userDoc = """Longer-form user doc."""
+            string userDocBrief = """A list of joint weight values 
+corresponding to each point in the associated geometry's points attribute."""
+            string userDoc = """A list of joint weight values 
+corresponding to each point in the associated geometry's points attribute.
+
+Can have an interpolation of `vertex` or `constant`.
+
+The length, interpolation and elementSize of `primvars:skel:jointWeights` 
+must match that of `primvars:skel:jointIndices`.
+"""
         }
     )
 
     uniform token[] skel:blendShapes (
         customData = {
-            string userDocBrief = """Brief user doc."""
-            string userDoc = """Longer-form user doc."""
+            string userDocBrief = """A list of tokens associated with 
+`skel:blendShapeTargets`."""
+            string userDoc = """A list of tokens associated with 
+`skel:blendShapeTargets`.
+
+The size of `skel:blendShapes` must match that of `skel:blendShapeTargets`.
+These tokens are later referenced in `SkelAnimation:blendShapes` and must 
+match accordingly."""
         }
     )
+
     rel skel:blendShapeTargets (
         customData = {
-            string userDocBrief = """Brief user doc."""
-            string userDoc = """Longer-form user doc."""
+            string userDocBrief = """A list of `BlendShape` prim paths targeted 
+in the skeletal animation."""
+            string userDoc = """A list of `BlendShape` prim paths targeted in 
+the skeletal animation."""
         }
     )
 }
