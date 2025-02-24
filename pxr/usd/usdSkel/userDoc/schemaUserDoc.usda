@@ -23,8 +23,44 @@ over "GLOBAL" (
 
 over SkelRoot "SkelRoot" (
     customData = {
-        string userDocBrief = """Brief user doc."""
-        string userDoc = """Longer-form user doc."""
+        string userDocBrief = """`SkelRoot` identifies the scope in which
+other skel related prims can be defined."""
+        string userDoc = """`SkelRoot` identifies the scope in which
+other skel related prims can be defined. SkelRoot is necessary for 
+UsdSkel related prims to work as intended.
+
+This includes:
+- `SkelAnimation`
+- `Skeleton`
+- Any geometry based prim that applies `SkelBindingAPI`
+
+Below is an example of a possible UsdSkel hierarchy:
+
+```{code-block} usda
+
+def SkelRoot "SkelRoot" (
+    prepend apiSchemas = ["SkelBindingAPI"]
+)
+{
+    prepend rel skel:animationSource = </World/SkelRoot/Animation>
+
+    def Skeleton "Skeleton"
+    {
+    }
+
+    def SkelAnimation "Animation"
+    {
+    }
+
+    def Mesh "Mesh" (
+        prepend apiSchemas = ["SkelBindingAPI"]
+    )
+    {
+        prepend rel skel:skeleton = </World/SkelRoot/Skeleton>
+    }
+}
+```
+"""
     }
 ) {
 }
