@@ -64,52 +64,116 @@ over Skeleton "Skeleton" (
     )
 }
 
-
 over SkelAnimation "SkelAnimation" (
     customData = {
-        string userDocBrief = """Brief user doc."""
-        string userDoc = """Longer-form user doc."""
+        string userDocBrief = """`SkelAnimation` defines how joints and blend 
+shapes are influenced to create an animation."""
+        string userDoc = """`SkelAnimation` defines how joints and blend 
+shapes are influenced to create an animation.
+
+## Joint based Animation Setup
+To animate joints using `SkelAnimation`, the `joints` attribute must be set. 
+Each joint listed must also exist in the `joints` list on the associated 
+`Skeleton`. The `rotations`, `scales`, and `translations` attributes define 
+how the joints are transformed.
+
+
+The example below shows how a joint can be rotated over time.
+
+```{code-block} usda
+def SkelAnimation "Animation"
+{
+    uniform token[] joints = ["Shoulder/Elbow"]
+    quatf[] rotations.timeSamples = {
+        1: [(1, 0, 0, 0)],
+        10: [(0.7071, 0.7071, 0, 0)],
+    }
+    half3[] scales = [(1, 1, 1)]
+    float3[] translations = [(0, 0, 2)]
+}
+```
+
+
+
+## Blend shape Animation Setup
+
+To animate blend shapes using `SkelAnimation`, the `blendShapes` 
+attribute must be set. Each blend shape listed must also exist in the 
+`skel:blendShapes` list on the associated geometry. The `blendShapeWeights` 
+attribute specifies how much each blend shape is applied over time.
+
+The sample below shows how two blendshapes can be applied at different 
+weights over time.
+
+```{code-block} usda
+def SkelAnimation "Anim"
+{
+    uniform token[] blendShapes = ["iso", "right"]
+    float[] blendShapeWeights.timeSamples = {
+        1: [0, 0],
+        5: [1, 0],
+        9: [0, 0],
+        13: [0, 1],
+        17: [1, 1],
+    }
+}
+```
+
+"""
     }
 ) {
+
     uniform token[] joints (
         customData = {
-            string userDocBrief = """Brief user doc."""
-            string userDoc = """Longer-form user doc."""
+            string userDocBrief = """A list of joint names influenced by 
+`translations`, `rotations`, and `scales`."""
+            string userDoc = """A list of joint names influenced by 
+`translations`, `rotations`, and `scales`."""
         }
     )
 
     float3[] translations (
         customData = {
-            string userDocBrief = """Brief user doc."""
-            string userDoc = """Longer-form user doc."""
+            string userDocBrief = """Defines translation transformations for 
+joints. Each value corresponds to a joint at the same index in `joints`."""
+            string userDoc = """Defines translation transformations for 
+joints. Each value corresponds to a joint at the same index in `joints`."""
         }
     )
     
     quatf[] rotations (
         customData = {
-            string userDocBrief = """Brief user doc."""
-            string userDoc = """Longer-form user doc."""
+            string userDocBrief = """Defines rotation transformations for 
+joints. Each value corresponds to a joint at the same index in `joints`."""
+            string userDoc = """Defines rotation transformations for 
+joints. Each value corresponds to a joint at the same index in `joints`."""
         }
     )
 
     half3[] scales (
         customData = {
-            string userDocBrief = """Brief user doc."""
-            string userDoc = """Longer-form user doc."""
+            string userDocBrief = """Defines scale transformations for 
+joints. Each value corresponds to a joint at the same index in `joints`."""
+            string userDoc = """Defines scale transformations for 
+joints. Each value corresponds to a joint at the same index in `joints`."""
         }
     )
 
     uniform token[] blendShapes ( 
         customData = {
-            string userDocBrief = """Brief user doc."""
-            string userDoc = """Longer-form user doc."""
+            string userDocBrief = """A list of tokens specifiying blend shape
+names. This list must match `skel:blendShapes` on the geometry."""
+            string userDoc = """A list of tokens specifiying blend shape
+names. This list must match `skel:blendShapes` on the geometry."""
         }
     )
 
     float[] blendShapeWeights (
         customData = {
-            string userDocBrief = """Brief user doc."""
-            string userDoc = """Longer-form user doc."""
+            string userDocBrief = """A list of weights corresponding to blend 
+shapes in `blendShapes`."""
+            string userDoc = """A list of weights corresponding to blend 
+shapes in `blendShapes`."""
         }
     )
 }
