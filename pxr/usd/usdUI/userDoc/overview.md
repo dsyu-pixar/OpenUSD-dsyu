@@ -33,10 +33,9 @@ description for that group. Unlike `SceneGraphPrimAPI.displayGroup`,
 backdrops are not directly associated with nodes. Visual size and position 
 of a backdrop is determined using `NodeGraphNodeAPI` properties.
 
-View the image below to see how these details can be presented, in this case 
-using ShapeFX Loki.
+View the image below to see how these details can be presented.
 
-![Example screenshot](usdUINodeGraph.png)
+![Example screenshot](usdUINodeGraph.jpg)
 
 Below is one way to express the above file in usda
 
@@ -52,7 +51,7 @@ def Material "Material"
         uniform token info:id = "ND_UsdPreviewSurface_surfaceshader"
         color3f inputs:diffuseColor.connect = </World/Material/Color.outputs:out>
         token outputs:out
-        uniform color3f ui:nodegraph:node:displayColor = (0.7, 0, 0.7)
+        uniform color3f ui:nodegraph:node:displayColor = (0.780, 0.698, 0.6)
         uniform token ui:nodegraph:node:expansionState = "open"
         uniform float2 ui:nodegraph:node:pos = (-.85, 1.9)
     }
@@ -64,7 +63,7 @@ def Material "Material"
         uniform token info:id = "ND_constant_color3"
         color3f inputs:value = (1, 0.023, 0.701)
         color3f outputs:out
-        uniform color3f ui:nodegraph:node:displayColor = (0, 0.7, 0.7)
+        uniform color3f ui:nodegraph:node:displayColor = (0.549, 0.133, 1.0)
         uniform token ui:nodegraph:node:expansionState = "closed"
         uniform float2 ui:nodegraph:node:pos = (-2, 2)
     }
@@ -74,7 +73,7 @@ def Material "Material"
     )
     {
         uniform token ui:description = "Do not edit!"
-        uniform color3f ui:nodegraph:node:displayColor = (0.8, 0.5, 0.2)
+        uniform color3f ui:nodegraph:node:displayColor = (0.764, 1.0, 0.698)
         uniform float2 ui:nodegraph:node:pos = (-0.8, 0.5)
         uniform float2 ui:nodegraph:node:size = (450, 330)
     }
