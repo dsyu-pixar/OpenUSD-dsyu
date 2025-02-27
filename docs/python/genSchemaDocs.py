@@ -247,6 +247,8 @@ class _SchemaDocMarkdownGenerator:
         """
         # Add a label for the property for linking/referring to
         # note that this must come before the header for the property
+        # For namespaced properties, Sphinx/RST does support labels
+        # with ":" characters.
         workStr = self.schemaName + "_" + propData.name
         self.__WriteSphinxLabel(file, workStr)
         # Write a header for the property
@@ -285,6 +287,12 @@ def _GetResourceFilesFromMarkdownString(markdown):
         # We're only looking for local image files, so skip any URLs
         if not match.startswith("http"):
             imageFileList.append(match)
+    # Look for Myst-style images using: ```{image} imagefilename
+    imageMatches = re.findall(r'(?<=```{image} ).*', markdown)
+    for match in imageMatches:
+        # We're only looking for local image files, so skip any URLs
+        if not match.startswith("http"):
+            imageFileList.append(match)    
     # We ignore HTML-style image links, as these most likely point to URLs,
     # not local files
     # Eventually we will also look for other possible resources:
@@ -411,6 +419,10 @@ def _ProcessSchemaDocs(schemaFile):
         # Use UsdClass.GetProperties to get inherited/composed properties as well
         for clsProp in cls.GetProperties():
             propName = clsProp.GetBaseName()
+            # Include property namespace, if any
+            propNamespace = clsProp.GetNamespace()
+            if bool(propNamespace):
+                propName = propNamespace + ":" + propName 
             # Get the property USD type and schema fallback value if any
             if isinstance(clsProp, Usd.Attribute):
                 propTypeName = clsProp.GetTypeName()
