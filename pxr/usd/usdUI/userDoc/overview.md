@@ -37,7 +37,7 @@ View the image below to see how these details can be presented.
 
 ![Example screenshot](usdUINodeGraph.jpg)
 
-Below is one way to express the above file in usda
+Below is example USD content that could be used to produce the previous screenshot
 
 ```{code-block} usda
 def Material "Material"
