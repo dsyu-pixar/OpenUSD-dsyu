@@ -22,16 +22,25 @@ over "GLOBAL" (
 
 over SpatialAudio "SpatialAudio" (
     customData = {
-        string userDocBrief = """Defines the properties that enable audio playback in the scene."""
-        string userDoc = """Defines the properties that enable audio playback in the scene.
+        string userDocBrief = """Defines the properties that enable audio 
+playback in the scene."""
+        string userDoc = """Defines the properties that enable audio playback 
+in the scene.
         
-SpatialAudio specifies which audio should play (`filePath`), the mode in which the audio is played (`auralMode`),
-and the playback settings (combinations of `startTime`, `endTime`, `playbackMode`, and `mediaOffset`).
+SpatialAudio specifies which audio should play (`filePath`), the mode in which 
+the audio is played (`auralMode`), and the playback settings (combinations of 
+`startTime`, `endTime`, `playbackMode`, and `mediaOffset`).
 
-The example below shows a typical use case, featuring `Speech` and `Ambient` prims. We can infer from the example the following information:
-- `Speech` is spatially plays from the location of the Cube in the scene, whereas `Ambient` is non-spatial and sounds the same regardles of the listener's position.
-- `Speech` plays for 10 seconds, based on the math of `endTime` (480) - `startTime` (240) / `timeCodesPerSecond` (24) = 10.
-- The audio from the `mySpeech.mp3` plays from the 10th second (`startTime` (240) / `timeCodesPerSecond` (24)) to the 20th second (`endTime` (480) / `timeCodesPerSecond` (24)).
+The example below shows a typical use case, featuring `Speech` and `Ambient` 
+prims. We can infer from the example the following information:
+- `Speech` spatially plays from the location of the Cube in the scene, whereas 
+`Ambient` is non-spatial and sounds the same regardles of the listener's 
+position.
+- `Speech` plays for 10 seconds, based on: 
+`endTime` (480) - `startTime` (240) / `timeCodesPerSecond` (24) = 10.
+- The audio from the `mySpeech.mp3` plays from the 10th second of the audio 
+file (`startTime` (240) / `timeCodesPerSecond` (24)) to the 20th second of the 
+audio file (`endTime` (480) / `timeCodesPerSecond` (24)).
 - `Speech` does not loop based on `playbackMode = onceFromStartToEnd`.
 - `Ambient` loops based on `playbackMode = loopFromStage`.
 - `Ambient` plays for all 100 seconds of the scene.
@@ -86,52 +95,70 @@ Expected file formats: m4a, mp3, wav
             string userDoc = """How the audio is played, spatially or not.
 
 Valid values are: 
- - `spatial`: Audio is playing from the source of the prim or parented prim. For example this could be used for a character so the audio from the character always comes from their location.
- - `nonSpatial`: Does not consider the prims location, intended to be used for ambient sounds.
+ - `spatial`: Audio is playing from the source of the prim or parent prim. 
+ For example this could be used for a character so the audio from the 
+ character always comes from their location.
+ - `nonSpatial`: Does not consider the prim's location, intended to be used 
+ for ambient sounds.
  """
         }
     )
     uniform token playbackMode (
         customData = {
-            string userDocBrief = """Determines when the audio playback should start and stop, also if it should loop."""
-            string userDoc = """Determines when the audio playback should start and stop, also if it should loop.
+            string userDocBrief = """Determines general rules on the playback 
+of the audio asset. Use this to specify when the audio should start, stop, 
+and if the playback should loop."""
+            string userDoc = """Determines general rules on the playback 
+of the audio asset. Use this to specify when the audio should start, stop, 
+and if the playback should loop.
 
-See table below for available values and what they mean relating to if the audio loops and when the audio starts / stops.
+See table below for available values and what they mean relating to if the 
+audio loops and when the audio starts / stops.
 | Value                 | Audio Loops?  | StartTime                     | EndTime                                       |
 | --------              | -------       | -------                       | -------                                       |
-| `onceFromStart`       | No            | `startTime` of the Prim       | End of audio file                             |
-| `onceFromStartToEnd`  | No            | `startTime` of the Prim       | `endTime` of the Prim, or End of audio file   |
-| `loopFromStart`       | Yes           | `startTime` of the Prim       | `endTimeCode` of the Stage                    |
-| `loopFromStartToEnd`  | Yes           | `startTime` of the Prim       | `endTime` of the Prim                         |
-| `loopFromStage`       | Yes           | `startTimeCode` of the Stage  | `endTimeCode` of the Stage                    |
+| `onceFromStart`       | no            | `startTime` of the prim       | end of audio file                             |
+| `onceFromStartToEnd`  | no            | `startTime` of the prim       | `endTime` of the prim, or end of audio file   |
+| `loopFromStart`       | yes           | `startTime` of the prim       | `endTimeCode` of the stage                    |
+| `loopFromStartToEnd`  | yes           | `startTime` of the prim       | `endTime` of the prim                         |
+| `loopFromStage`       | yes           | `startTimeCode` of the stage  | `endTimeCode` of the stage                    |
 
 """
         }
     )
     uniform timecode startTime (
         customData = {
-            string userDocBrief = """Offset from the start of the audio file for when to start playing, in timeCodes."""
-            string userDoc = """Offset from the start of the audio file for when to start playing, in timeCodes.
+            string userDocBrief = """Offset from the start of the audio file 
+for when to start playing, in timeCodes."""
+            string userDoc = """Offset from the start of the audio file for 
+when to start playing, in timeCodes.
 
-Given a 10 second audio file, with a stage `timeCodesPerSecond` value of 24. A `startTime` value of 24.0 will start playing the audio 1 second into the file.            
-"""
+Given a 10 second audio file, with a stage `timeCodesPerSecond` value of 24, 
+and a `startTime` value of 24.0, audio will start playing 1 second into the 
+audio file."""
         }
     )
     uniform timecode endTime (
         customData = {
-            string userDocBrief = """Offset from the start of the audio file for when to end playing, in timeCodes."""
-            string userDoc = """Offset from the start of the audio file for when to end playing, in timeCodes.
+            string userDocBrief = """Offset from the start of the audio file 
+for when to end playing, in timeCodes."""
+            string userDoc = """Offset from the start of the audio file for 
+when to end playing, in timeCodes.
 
-Given a 10 second audio file, with a stage `timeCodesPerSecond` value of 24. An `endTime` value of 48.0 will end playing the audio 2 seconds into the file.           
-"""
+Given a 10 second audio file, with a stage `timeCodesPerSecond` value of 24, 
+and an `endTime` value of 48.0, audio will end playing 2 seconds into the 
+audio file."""
         }
     )
     uniform double mediaOffset (
         customData = {
-            string userDocBrief = """Amount, in seconds, the audio is offset when playing."""
-            string userDoc = """Amount, in seconds, the audio is offset when playing.
+            string userDocBrief = """Amount, in seconds, the audio is offset 
+when playing."""
+            string userDoc = """Amount, in seconds, the audio is offset when 
+playing.
 
-Given a 10 second audio file, and a `mediaOffset` of 3.0, audio will not play for the first 3 seconds, then will start playing at the beginning of the audio file.
+Given a 10 second audio file, and a `mediaOffset` of 3.0, audio will not play 
+for the first 3 seconds, then will start playing at the beginning of the audio 
+file.
 For looping audio files, this offset is only applied for the first loop.
 """
         }
