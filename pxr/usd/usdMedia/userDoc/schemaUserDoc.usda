@@ -34,7 +34,7 @@ the audio is played (`auralMode`), and the playback settings (combinations of
 The example below shows a typical use case, featuring `Speech` and `Ambient` 
 prims. We can infer from the example the following information:
 - `Speech` spatially plays from the location of the Cube in the scene, whereas 
-`Ambient` is non-spatial and sounds the same regardles of the listener's 
+`Ambient` is non-spatial and sounds the same regardless of the listener's 
 position.
 - `Speech` plays for 10 seconds, based on: 
 `endTime` (480) - `startTime` (240) / `timeCodesPerSecond` (24) = 10.
@@ -112,8 +112,8 @@ and if the playback should loop."""
 of the audio asset. Use this to specify when the audio should start, stop, 
 and if the playback should loop.
 
-See table below for available values and what they mean relating to if the 
-audio loops and when the audio starts / stops.
+See the table below for how available values relate to whether the audio 
+loops and when the audio starts / stops.
 | Value                 | Audio Loops?  | StartTime                     | EndTime                                       |
 | --------              | -------       | -------                       | -------                                       |
 | `onceFromStart`       | no            | `startTime` of the prim       | end of audio file                             |
