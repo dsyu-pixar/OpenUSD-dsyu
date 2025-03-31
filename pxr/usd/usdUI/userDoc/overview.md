@@ -35,7 +35,7 @@ of a backdrop is determined using `NodeGraphNodeAPI` properties.
 
 View the image below to see how these details can be presented.
 
-![Example screenshot](usdUINodeGraph.jpg)
+![Example screenshot](usdUINodeGraph.svg)
 
 Below is example USD content that could be used to produce the previous screenshot
 
