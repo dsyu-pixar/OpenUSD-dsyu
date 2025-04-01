@@ -32,34 +32,96 @@ over SkelRoot "SkelRoot" (
 
 over Skeleton "Skeleton" (
     customData = {
-        string userDocBrief = """Brief user doc."""
-        string userDoc = """Longer-form user doc."""
+        string userDocBrief = """`Skeleton` provides joints and transforms
+that define a skeleton."""
+        string userDoc = """`Skeleton` provides joints and transforms
+that define a skeleton.
+
+`Skeleton` should be parented by a `SkelRoot` and is assigned to geometry
+`skel:skeleton` from the `SkelBindingAPI`.
+
+Below is a simple usda example.
+
+```{code-block} usda
+
+def SkelRoot "SkelRoot" (
+    prepend apiSchemas = ["SkelBindingAPI"]
+)
+{
+    def Skeleton "Skeleton"
+    {
+        uniform matrix4d[] bindTransforms = [( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1) ), ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 2, 1) ), ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 4, 1) )]
+        uniform token[] joints = ["Shoulder", "Shoulder/Elbow", "Shoulder/Elbow/Hand"]
+        uniform matrix4d[] restTransforms = [( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1) ), ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 2, 1) ), ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 2, 1) )]
+    }
+
+    def Mesh "Mesh" (
+        prepend apiSchemas = ["SkelBindingAPI"]
+    )
+    {
+        prepend rel skel:skeleton = </SkelRoot/Skeleton>
+    }
+}
+```
+
+This setup is not functional as there is no mesh data specified or a
+`SkelAnimation` to consider, for a full `UsdSkel` example, check out 
+<insert-link-to-overview-section-here>.
+"""
     }
 ) {
     uniform token[] joints (
         customData = {
-            string userDocBrief = """Brief user doc."""
-            string userDoc = """Longer-form user doc."""
+            string userDocBrief = """An array of path tokens identifying the set of 
+joints that make up the skeleton, and their order."""
+            string userDoc = """An array of path tokens identifying the set of 
+joints that make up the skeleton, and their order.
+
+Ordering of joints does matter. Child joints must be after parent joints.
+
+For example: 
+
+`uniform token[] joints = ["Shoulder", "Shoulder/Elbow", "Shoulder/Elbow/Hand"]`
+
+is valid where 
+
+`uniform token[] joints = ["Shoulder/Elbow/Hand", "Shoulder/Elbow", "Shoulder"]`
+
+is not valid.
+
+It is valid to have multiple root nodes, for example:
+
+`uniform token[] joints = ["Shoulder", "Shoulder/Elbow", "Shoulder/Elbow/Hand", "Hip", "Hip/Knee"]`
+
+is also valid.
+"""
         }
     )
 
     uniform token[] jointNames (
         customData = {
-            string userDocBrief = """Brief user doc."""
-            string userDoc = """Longer-form user doc."""
+            string userDocBrief = """Allows for more descriptive joint names
+to be displayed in the case that `joints` names are not clear."""
+            string userDoc = """Allows for more descriptive joint names
+to be displayed in the case that `joints` names are not clear."""
         }
     )
 
     uniform matrix4d[] bindTransforms (
         customData = {
-            string userDocBrief = """Brief user doc."""
-            string userDoc = """Longer-form user doc."""
+            string userDocBrief = """Specifies bind pose transforms in world space.
+in the ordering imposed by `joints`."""
+            string userDoc = """Specifies bind pose transforms in world space.
+in the ordering imposed by `joints`."""
         }
     )
+
     uniform matrix4d[] restTransforms (
         customData = {
-            string userDocBrief = """Brief user doc."""
-            string userDoc = """Longer-form user doc."""
+            string userDocBrief = """Specifies rest pose transforms in local space.
+in the ordering imposed by `joints`."""
+            string userDoc = """Specifies rest pose transforms in local space.
+in the ordering imposed by `joints`."""
         }
     )
 }
