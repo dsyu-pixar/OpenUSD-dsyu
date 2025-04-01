@@ -187,29 +187,120 @@ over "SkelBindingAPI" (
 
 over BlendShape "BlendShape" (
     customData = {
-        string userDocBrief = """Brief user doc."""
-        string userDoc = """Longer-form user doc."""
+        string userDocBrief = """Blend shapes specify a target shape, in 
+terms of point offsets, for a point-based primitive."""
+        string userDoc = """Blend shapes specify a target shape, in terms 
+of point offsets, for a point-based primitive.
+
+The following example shows a working blend shape. Focus 
+on the `BlendShape` prims, `iso` and `right` as well as 
+the `points` array in `Mesh`.
+
+```{code-block} usda
+
+def Mesh "Mesh" (
+    prepend apiSchemas = ["SkelBindingAPI"]
+)
+{
+    point3f[] points = [(0.5, 0, 0), (0, 0.8660254, 0), (-0.5, 0, 0)]
+    def BlendShape "iso"
+    {
+        uniform vector3f[] offsets = [(0, 0.8660254, 0)]
+        uniform int[] pointIndices = [1]
+    }
+
+    def BlendShape "right"
+    {
+        uniform vector3f[] offsets = [(-0.5, 0.1339746, 0)]
+        uniform int[] pointIndices = [1]
+    }
+
+
+    float3[] extent = [(-0.5, 0, 0), (0.5, 0.8660254, 0)]
+    int[] faceVertexCounts = [3]
+    int[] faceVertexIndices = [0, 1, 2]
+    
+    uniform token[] skel:blendShapes = ["iso", "right"]
+    rel skel:blendShapeTargets = [
+        </World/MorphingTri/Mesh/iso>,
+        </World/MorphingTri/Mesh/right>,
+    ]
+    rel skel:skeleton = </World/MorphingTri/Skel>
+}
+```
+
+Observe the following from the above example:
+- For a working blend shape example, it is necessary to utilize other parts 
+of the UsdSkel schema, such as skel:blendShapes, skel:blendShapeTargets and 
+its related prims (not shown above), and others. See Working with UsdSkel 
+for a complete example.
+- `offsets` from `iso` specifies a single offset. This offset means that 
+the final blend shape is achieved by offsetting a single point in the 
+positive-y direction by 0.8660254.
+- `pointIndices` from `iso` also specifies a single value of 1. This 
+indicates that the offset should be applied to the point at index 1 in points 
+from the parent mesh (this is the point `(0, 0.8660254, 0)`).
+- The way `offsets`, `pointIndices` and `points` are related means that these 
+indices must agree. `points` above has 3 values, so setting a value of 15 in 
+`pointIndices` does not make sense, since we would need to find the point at
+index 15 in `points`, which does not exist. If `offsets` had 3 values 
+`pointIndices` should also have 3 values; otherwise it would be unclear which 
+point an offset should be applied to.
+        
+"""
     }
 )
 {
     uniform vector3f[] offsets (
         customData = {
-            string userDocBrief = """Brief user doc."""
-            string userDoc = """Longer-form user doc."""
+            string userDocBrief = """A list of positional changes that 
+describe what is needed to achieve the desired target shape."""
+            string userDoc = """A list of positional changes that 
+describe what is needed to achieve the desired target shape.
+
+Offsets are combined with `pointIndices` and the parent mesh points 
+in order to calculate the position value for the fully applied blend shape.
+
+```{code-block} usda
+point3f[] points = [(1, 0, 0)]
+def BlendShape "example"
+{
+    uniform vector3f[] offsets = [(1, 1, -1)]
+    uniform int[] pointIndices = [0]
+}
+```
+
+From the example above the math is:
+
+`offsets[0]` (1, 1, -1) + `points[pointIndices[0]]` (1, 0, 0) = (2, 1, -1)
+
+Note: For simplicity, this example does not include `blendShapeWeights`.
+"""
         }
     )
 
     uniform vector3f[] normalOffsets (
         customData = {
-            string userDocBrief = """Brief user doc."""
-            string userDoc = """Longer-form user doc."""
+            string userDocBrief = """A list of changes that 
+describe what is needed to result in the desired normal."""
+            string userDoc = """A list of changes that 
+describe what is needed to result in the desired normal.
+
+normalOffsets are combined with `pointIndices` and the parent mesh normals 
+to calculate the normal value for the fully applied blend shape.
+"""
         }
     )
 
     uniform int[] pointIndices (
         customData = {
-            string userDocBrief = """Brief user doc."""
-            string userDoc = """Longer-form user doc."""
+            string userDocBrief = """Integer values that relate to indices in 
+the parenting Mesh's points array."""
+            string userDoc = """Integer values that relate to indices in 
+the parenting Mesh's points array.
+
+The index of the pointIndices array relates to the index of the offsets array.
+"""
         }
     )
 }
