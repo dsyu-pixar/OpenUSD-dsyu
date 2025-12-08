@@ -21,15 +21,23 @@ over "GLOBAL" (
 
 over GenerativeProcedural "GenerativeProcedural" (
      customData = {
-        string userDocBrief = """Brief user doc."""
-        string userDoc = """Longer-form user doc."""
+        string userDocBrief = """An abstract generative procedural prim that is responsible for describing the procedural."""
+        string userDoc = """An abstract generative procedural prim that is responsible for describing the procedural.
+        It does not itself have any awareness or participation in the execution of the procedural but rather serves as a means of delivering a procedural's definition and input parameters.
+        The value of its `proceduralSystem` property (either authored or provided by API schema fallback) indicates to which system the procedural definition is meaningful.
+        
+        """
     }
 ){
 
     token proceduralSystem  (
         customData = {
-            string userDocBrief = """Brief user doc."""
-            string userDoc = """Longer-form user doc."""
+            string userDocBrief = """The name or convention of the system responsible for evaluating
+        the procedural."""
+            string userDoc = """The name or convention of the system responsible for evaluating
+        the procedural.
+        A default value is `hydraGenerativeProcedural`, however it's possible to create a custom procedural system by defining a new `HdGpGenerativeProceduralResolvingSceneIndex` and lableing it with a custom `TfToken`.
+            """
         }
     )
 }
