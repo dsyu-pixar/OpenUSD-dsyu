@@ -21,8 +21,8 @@ over "GLOBAL" (
 
 over GenerativeProcedural "GenerativeProcedural" (
      customData = {
-        string userDocBrief = """An abstract generative procedural prim that is responsible for describing the procedural."""
-        string userDoc = """An abstract generative procedural prim that is responsible for describing the procedural.
+        string userDocBrief = """An abstract generative procedural prim that is responsible for describing the procedural configuration."""
+        string userDoc = """An abstract generative procedural prim that is responsible for describing the procedural configuration.
         It does not itself have any awareness or participation in the execution of the procedural but rather serves as a means of delivering a procedural's definition and input parameters.
         The value of its `proceduralSystem` property (either authored or provided by API schema fallback) indicates to which system the procedural definition is meaningful.
         

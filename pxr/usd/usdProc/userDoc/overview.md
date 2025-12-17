@@ -1,15 +1,17 @@
 # Overview
 
-UsdProc allows users to more effectively handle cases when a prim is more easily defined by a procedure rather than a static asset. In simpler terms, this API allows a user to send descriptive inputs into another system to generate a prim at runtime.
+UsdProc allows users to effectively handle cases when a prim is more easily defined by a procedure rather than a static asset. In simpler terms, this API allows a user to send descriptive inputs into another system to generate a prim at runtime.
 
 (usdProc_working_with_proc)=
 ## Working With Proc
 
 Common use-cases for utilizing UsdProc are:
 - To create many scattered objects based on a description, instead of defining all objects individually
-    - For Example: Trees, Rocks, etc
+    - For example: Trees, Rocks, etc.
 - To create structured geometry from a list of params
-    - For Example: Stairs, Roads, Buildings, etc
+    - For example: Stairs, Roads, Buildings, etc.
+
+Some tradeoffs should be considered when using `UsdProc` or procedurals in general. Procedurals offer flexibility to generate the geometry at the last minute, incorporating up-to-date attributes from the rest of the scene, but come at the cost of increasing the scene load time.
 
 (usdProc_example)=
 ### Example
@@ -82,3 +84,5 @@ Consider the above example.The focus is on `</World/RockScatter>`.
 It can be seen that this prim is *describing* how to scatter rocks across `</World/Terrain>` utilizing the features of `UsdProc`. 
 
 `UsdProc` requires a `proceduralSystem` to determine which system is responsible for generating the resulting Rock prims. Once defined, a `proceduralType` is defined so that `proceduralSystem` knows what to invoke for this prim. Finally, the remaining primvars of `rockCount`, `seed`, `sourceMesh`, `terrain`, `radius` serve as inputs that the `proceduralSystem` uses to generate the resulting prims as desired.
+
+UsdProc itself is purely a declarative schema and does not define how procedural prims are executed. Hydra provides a plugin-based mechanism for resolving UsdProc prims but the schema is not limited to Hydra. Other resolvers may also interpret and resolve UsdProc prims according to the declared `proceduralSystem`.
