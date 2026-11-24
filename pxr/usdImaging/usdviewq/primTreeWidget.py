@@ -20,9 +20,9 @@ def _GetPropertySpecInSessionLayer(usdAttribute):
 # Function for getting the background color of the item for the delegates.
 # Returns none if we only want the default paint method. 
 def _GetBackgroundColor(item, option):
-    mouseOver = option.state & QtWidgets.QStyle.State_MouseOver
-    selected = option.state & QtWidgets.QStyle.State_Selected
-    pressed = option.state & QtWidgets.QStyle.State_Sunken
+    mouseOver = option.state & QtWidgets.QStyle.StateFlag.State_MouseOver
+    selected = option.state & QtWidgets.QStyle.StateFlag.State_Selected
+    pressed = option.state & QtWidgets.QStyle.StateFlag.State_Sunken
 
     background = None
 
@@ -428,13 +428,13 @@ class PrimTreeWidget(QtWidgets.QTreeWidget):
             # We call this here before the selection data model clears
             # the selection. 
 
-            if ev.key() == QtCore.Qt.Key_Down \
-            or ev.key() == QtCore.Qt.Key_Up \
-            or ev.key() == QtCore.Qt.Key_Right \
-            or ev.key() == QtCore.Qt.Key_Left:
+            if ev.key() == QtCore.Qt.Key.Key_Down \
+            or ev.key() == QtCore.Qt.Key.Key_Up \
+            or ev.key() == QtCore.Qt.Key.Key_Right \
+            or ev.key() == QtCore.Qt.Key.Key_Left:
                 currentPrim = self._appController._dataModel.selection.getFocusPrim()
                 currentItem = self._appController._getItemAtPath(currentPrim.GetPath())
-                self.setCurrentItem(currentItem, 0, QtCore.QItemSelectionModel.NoUpdate)
+                self.setCurrentItem(currentItem, 0, QtCore.QItemSelectionModel.SelectionFlag.NoUpdate)
 
             super(PrimTreeWidget, self).keyPressEvent(ev)
 
@@ -464,9 +464,11 @@ class PrimTreeWidget(QtWidgets.QTreeWidget):
         use over calling setSelected directly on PrimViewItems."""
         with SelectionEnabler(self._selectionModel):
             for item in added:
-                item.setSelected(True)
+                if item is not None:
+                    item.setSelected(True)
             for item in removed:
-                item.setSelected(False)
+                if item is not None:
+                    item.setSelected(False)
         self._refreshAncestorsOfSelected()
         # This is a big hammer... if we instead built up a list of the
         # ModelIndices of all the changed ancestors, we could instead make
@@ -481,9 +483,11 @@ class PrimTreeWidget(QtWidgets.QTreeWidget):
 
     # Refresh the list of ancestors of selected prims
     def _refreshAncestorsOfSelected(self):
-        selectedItems = [
-            self._appController._getItemAtPath(prim.GetPath())
-            for prim in self._appController._dataModel.selection.getPrims()]
+        selectedItems = []
+        for prim in self._appController._dataModel.selection.getPrims():
+            item = self._appController._getItemAtPath(prim.GetPath())
+            if item is not None:
+                selectedItems.append(item)
 
         self._resetAncestorsOfSelected()
 

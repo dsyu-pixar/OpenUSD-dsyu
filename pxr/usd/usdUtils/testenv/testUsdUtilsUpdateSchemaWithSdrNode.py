@@ -28,13 +28,13 @@ class TestUsdUpdateSchemaWithSdrNode(unittest.TestCase):
         stage = Usd.Stage.Open(assetFile)
         self.assertTrue(stage)
         shaderDef = UsdShade.Shader.Get(stage, shaderDefPrimPath)
-        results = UsdShade.ShaderDefUtils.GetNodeDiscoveryResults(shaderDef, 
+        results = UsdShade.ShaderDefUtils.GetDiscoveryResults(shaderDef, 
                 stage.GetRootLayer().realPath)
         self.assertEqual(len(results), 1)
-        node = UsdShade.ShaderDefParserPlugin().Parse(results[0])
+        node = UsdShade.ShaderDefParserPlugin().ParseShaderNode(results[0])
         self.assertTrue(node)
         return node
-    
+
     def test_APISchemaGen(self):
         if self.ErrorHandlingTest:
             self.skipTest("Running Error Handling Test, skipping.");
@@ -84,6 +84,75 @@ class TestUsdUpdateSchemaWithSdrNode(unittest.TestCase):
         self.assertTrue(sdrNode)
         resultLayer = Sdf.Layer.CreateNew("./duplicatePropTypeMisMatch.usda")
         UsdUtils.UpdateSchemaWithSdrNode(resultLayer, sdrNode, "myRenderContext")
+
+    def test_UIHints(self):
+        # Test population of the uiHints dictionary
+        if self.ErrorHandlingTest:
+            self.skipTest("Running Error Handling Test, skipping.");
+            return
+        sdrNode = self._GetSdrNode("testUIHints.usda",
+                "/TestUIHintsAPI")
+        self.assertTrue(sdrNode)
+        resultLayer = Sdf.Layer.CreateNew("./resultUIHints.usda")
+        UsdUtils.UpdateSchemaWithSdrNode(resultLayer, sdrNode, "myRenderContext")
+
+    def test_PropertyOrder(self):
+        # Param order from the source shader should be maintained in the
+        # output schema via the `propertyOrder` metadata field
+        if self.ErrorHandlingTest:
+            self.skipTest("Running Error Handling Test, skipping.");
+            return
+        sdrNode = self._GetSdrNode("testPropertyOrder.usda",
+                "/TestPropertyOrderAPI")
+        self.assertTrue(sdrNode)
+        resultLayer = Sdf.Layer.CreateNew("./resultPropertyOrder.usda")
+        UsdUtils.UpdateSchemaWithSdrNode(resultLayer, sdrNode, "myRenderContext")
+
+    def test_PropertyOrderMultipleApplySchema(self):
+        # usdGenSchema does not allow multiple-apply schemas to specify
+        # `propertyOrder` metadata. Verify UpdateSchemaWithSdrNode doesn't try
+        # to author it in this case.
+        if self.ErrorHandlingTest:
+            self.skipTest("Running Error Handling Test, skipping.");
+            return
+        sdrNode = self._GetSdrNode("testPropertyOrderMultipleApplySchema.usda",
+                "/TestPropertyOrderMultipleApplySchemaAPI")
+        self.assertTrue(sdrNode)
+        resultLayer = Sdf.Layer.CreateNew(
+            "./resultPropertyOrderMultipleApplySchema.usda")
+        UsdUtils.UpdateSchemaWithSdrNode(resultLayer, sdrNode, "myRenderContext")
+
+    def test_InfoId(self):
+        # An info:id attrSpec is populated when the schemaBase has NodeDefAPI
+        # applied, defaulting to the node's registered identifier
+        if self.ErrorHandlingTest:
+            self.skipTest("Running Error Handling Test, skipping.");
+            return
+        sdrNode = self._GetSdrNode("testSdrNodeInfoId.usda",
+                "/TestSchemaInfoId")
+        self.assertTrue(sdrNode)
+        resultLayer = Sdf.Layer.CreateNew("./resultInfoId.usda")
+        UsdUtils.UpdateSchemaWithSdrNode(resultLayer, sdrNode, "myRenderContext")
+        infoIdAttr = resultLayer.GetAttributeAtPath("/TestSchemaInfoId.info:id")
+        self.assertTrue(infoIdAttr)
+        self.assertEqual(infoIdAttr.default, sdrNode.GetIdentifier())
+
+    def test_InfoIdOverrideIdentifier(self):
+        # An explicitly provided overrideIdentifier takes precedence over the
+        # node's own identifier, which is synthesized for nodes constructed
+        # from an explicit asset path
+        if self.ErrorHandlingTest:
+            self.skipTest("Running Error Handling Test, skipping.");
+            return
+        sdrNode = self._GetSdrNode("testSdrNodeInfoId.usda",
+                "/TestSchemaInfoId")
+        self.assertTrue(sdrNode)
+        resultLayer = Sdf.Layer.CreateNew("./resultInfoIdOverride.usda")
+        UsdUtils.UpdateSchemaWithSdrNode(resultLayer, sdrNode,
+                "myRenderContext", "myOverrideIdentifier")
+        infoIdAttr = resultLayer.GetAttributeAtPath("/TestSchemaInfoId.info:id")
+        self.assertTrue(infoIdAttr)
+        self.assertEqual(infoIdAttr.default, "myOverrideIdentifier")
 
     def test_rmanConcreteSchema(self):
         if self.ErrorHandlingTest:

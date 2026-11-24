@@ -15,7 +15,6 @@
 # Windows command script to execute "python <file>" where <file> is in
 # the same directory as the command script.
 
-from __future__ import print_function
 import sys
 
 if len(sys.argv) < 3 or len(sys.argv) > 4:
@@ -29,5 +28,8 @@ if len(sys.argv) == 3:
 else:
     with open(sys.argv[2], 'r') as s:
         with open(sys.argv[3], 'w') as d:
-            for line in s:
-                d.write(line.replace('/pxrpythonsubst', sys.argv[1]))
+            for idx, line in enumerate(s):
+                if idx == 0:
+                    d.write(line.replace('/pxrpythonsubst', sys.argv[1]))
+                else:
+                    d.write(line)

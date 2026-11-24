@@ -35,6 +35,7 @@ HdChangeTracker::HdChangeTracker()
     , _instancerInstancerDependencies()
     , _sprimSprimTargetDependencies()
     , _sprimSprimSourceDependencies()
+    , _sprimRprimTargetDependencies()
     // Note: Version numbers start at 1, with observers resetting theirs to 0.
     // This is to cause a version mismatch during first-time processing.
     , _varyingStateVersion(1)
@@ -99,25 +100,6 @@ HdChangeTracker::MarkRprimDirty(SdfPath const& id, HdDirtyBits bits)
     }
 
     if (_emulationSceneIndex) {
-
-        // There's a set of dirty bits that are used as internal signalling
-        // in hydra, and aren't related to scene data.  These, we need to
-        // pass through directly.
-        const HdDirtyBits internalDirtyBits =
-            HdChangeTracker::InitRepr |
-            HdChangeTracker::Varying |
-            HdChangeTracker::NewRepr |
-            HdChangeTracker::CustomBitsMask;
-
-        if (bits & internalDirtyBits) {
-            _MarkRprimDirty(id, bits & internalDirtyBits);
-        }
-
-         // If we're only processing internal bits, skip calling DirtyPrims.
-        if ((bits & ~internalDirtyBits) == 0) {
-            return;
-        }
-
         // We need to dispatch based on prim type.
         HdSceneIndexPrim prim = _emulationSceneIndex->GetPrim(id);
         HdDataSourceLocatorSet locators;
@@ -317,6 +299,20 @@ HdChangeTracker::RemoveSprimSprimDependency(SdfPath const& parentSprimId,
 }
 
 void
+HdChangeTracker::AddSprimRprimDependency(SdfPath const& sprimId,
+                                         SdfPath const& rprimId)
+{
+    _AddDependency(_sprimRprimTargetDependencies, sprimId, rprimId);
+}
+
+void
+HdChangeTracker::RemoveSprimRprimDependency(SdfPath const& sprimId,
+                                            SdfPath const& rprimId)
+{
+    _RemoveDependency(_sprimRprimTargetDependencies, sprimId, rprimId);
+}
+
+void
 HdChangeTracker::RemoveSprimFromSprimSprimDependencies(SdfPath const& sprimId)
 {
     if (_sprimSprimTargetDependencies.empty()) {
@@ -329,7 +325,21 @@ HdChangeTracker::RemoveSprimFromSprimSprimDependencies(SdfPath const& sprimId)
         if (_sprimSprimTargetDependencies.find(a, sprimId)) {
             // If sprim is parent, mark its children dirty before removing.
             for (const SdfPath & childPath : a->second) {
-                MarkSprimDirty(childPath, ~Clean);
+                // This was MarkSprimDirty.
+                //
+                // Replacing it by a guarded call to _MarkSprimDirty to
+                // do what MarkSprimDirty did through the _emulationSceneIndex.
+                // That is, _emulationSceneIndex->DirtyPrims resulted in a call
+                // to HdSceneIndexAdapterSceneDelegate::PrimsDirtied which
+                // checked that the prim existed before calling _MarkSprimDirty.
+                //
+                // Without guarding _MarkSprimDirty, we hit TF_VERIFY in
+                // _MarkSprimDirty during ~HdSceneIndexAdapterSceneDelegate in
+                // some tests.
+                //
+                if (_sprimState.find(childPath) != _sprimState.end()) {
+                    _MarkSprimDirty(childPath, ~Clean);
+                }
                 _RemoveDependency(
                     _sprimSprimSourceDependencies, childPath, sprimId);
             }
@@ -534,7 +544,8 @@ HdChangeTracker::_MarkInstancerDirty(SdfPath const& id, HdDirtyBits bits)
     if (bits & DirtyTransform) {
         toPropagate |= DirtyTransform;
     }
-    if (bits & DirtyInstanceIndex) {
+    // If an instancer is invis'd, we drop all instance indices.
+    if (bits & (DirtyInstanceIndex | DirtyVisibility)) {
         toPropagate |= DirtyInstanceIndex;
         ++_instanceIndicesChangeCount;
     }
@@ -640,7 +651,12 @@ HdChangeTracker::_MarkSprimDirty(SdfPath const& id, HdDirtyBits bits)
     _DependencyMap::const_accessor aIR;
     if (_sprimSprimTargetDependencies.find(aIR, id)) {
         for (SdfPath const& dep : aIR->second) {
-            MarkSprimDirty(dep, ~Clean);
+            _MarkSprimDirty(dep, ~Clean);
+        }
+    }
+    if (_sprimRprimTargetDependencies.find(aIR, id)) {
+        for (SdfPath const& dep : aIR->second) {
+            _MarkRprimDirty(dep, ~Clean);
         }
     }
 
@@ -1107,23 +1123,18 @@ HdChangeTracker::MarkCollectionDirty(TfToken const& collectionName)
     HD_TRACE_FUNCTION();
 
     _CollectionStateMap::iterator it = _collectionState.find(collectionName);
-    if (!TF_VERIFY(it != _collectionState.end(),
-                      "Collection %s not found\n", collectionName.GetText())) {
+    if (it == _collectionState.end()) {
         return;
     }
     // bump the version number
     it->second += 1;
-
-    ++_sceneStateVersion;
 }
 
 unsigned
 HdChangeTracker::GetCollectionVersion(TfToken const& collectionName) const
 {
     _CollectionStateMap::const_iterator it = _collectionState.find(collectionName);
-    if (!(it != _collectionState.end())) {
-        TF_CODING_ERROR("Change Tracker unable to find collection %s",
-                        collectionName.GetText());
+    if (it == _collectionState.end()) {
         return _rprimIndexVersion;
     }
     return it->second + _rprimIndexVersion;

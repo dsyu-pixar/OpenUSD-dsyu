@@ -5,7 +5,7 @@ Usdz File Format Specification
 .. include:: rolesAndUtils.rst
 .. include:: <isonum.txt>
 
-Copyright |copy| 2018, Pixar Animation Studios,  *version 1.3*
+Copyright |copy| 2018, Pixar Animation Studios,  *version 1.4*
 
 .. contents:: :local:
 
@@ -48,9 +48,9 @@ other formats embedded within the archive. This document provides the
 specification for such a format, for which we will assign the . **usdz**
 extension; we refer to the format as "the usdz format", as we similarly refer to
 the usda and usdc file formats; only when forming the start of a sentence or
-word in a class name do we capitalize it, such as UsdUsdzFileFormat. We refer
+word in a class name do we capitalize it, such as SdfUsdzFileFormat. We refer
 to usdz files as :bi:`packages`, and the design rests on a new Ar-level
-abstraction of a package, of which the UsdUsdzFileFormat is the first
+abstraction of a package, of which the SdfUsdzFileFormat is the first
 implementation, but we retain the architecture required to easily add others in
 the future, if needed.
 
@@ -63,11 +63,11 @@ following file types:
  +-------------+----------------------------------------+
  | Kind        | Allowed File Types                     |
  +=============+========================================+
- | USD         | **usda**, **usdc**, **usd**            |
+ | USD         | **usda**, **usdc**, **usd**, **usdz**  |
  +-------------+----------------------------------------+
  | Image       | **png**, **jpeg**, **exr**, **avif**   |
  +-------------+----------------------------------------+
- | Audio       | **M4A**, **MP3**, **WAV**              |
+ | Audio       | **m4a**, **mp3**, **wav**              |
  +-------------+----------------------------------------+
 
 The rest of the section goes into more detail about the specification.
@@ -112,6 +112,62 @@ the ability to relax this constraint in the future, but consider it unlikely.
     for doing so, USD now contains all of the core features we require to
     aggregate an arbitrary composition's worth of usd files into a single file,
     without removing any composition features from the scene.
+
+.. _spec_usdz_zip64:
+
+Large Packages (Zip64)
+----------------------
+A usdz package may use the Zip64 format extensions described in sections
+4.3.14, 4.3.15 and 4.5.3 of the `zip file format specification
+<https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT>`__ (version
+6.3.10) when a file in the package, or the package itself, exceeds the limits
+of the 32-bit zip format.
+
+A usdz package that uses Zip64 must satisfy the following constraints:
+
+    * If either the compressed or uncompressed size in a file's local file
+      header is set to 0xFFFFFFFF, the local file header must contain a Zip64
+      extended information extra field (header ID 0x0001) containing **both**
+      the uncompressed and compressed sizes, in that order. Since files in a
+      usdz package are uncompressed, these sizes are always equal, and so both
+      32-bit size fields must either be set to 0xFFFFFFFF or hold the actual
+      size. In practice, this is most common for files whose size is 4 GiB
+      (0xFFFFFFFF bytes) or larger.
+
+    * The Zip64 extended information extra field counts towards the
+      `64 byte alignment requirement <#layout>`_ for file data, like any other
+      extra field in the local file header. The Zip64 extra field is written
+      before any alignment padding in the local file header.
+
+    * For each file whose local file header begins at an offset of 4 GiB or
+      greater, the offset field in its central directory header is set to
+      0xFFFFFFFF, and the 64-bit offset is stored in a Zip64 extended
+      information extra field.
+
+    * The "version needed to extract" for each of the files above is set to 45.
+      This indicates the use of Zip64 extensions. Otherwise it is set to 10.
+
+    * If the package contains 65535 or more files, the corresponding value in
+      the end of central directory record should be set to 0xFFFF. If the
+      central directory's size or offset is 4 GiB or greater, then the the 
+      corresponding fields in the end of central directory record should be set
+      to 0xFFFFFFFF. In both cases, the actual values are written in the Zip64
+      end of central directory record.
+
+    * If any of the Zip64 extensions above are used, a Zip64 end of central
+      directory record and locator are written before the end of central
+      directory record.
+
+.. dropdown:: Rationale
+
+    Production assets can easily exceed 4 GiB, whether in a single large file,
+    or in the package as a whole. The Zip64 extensions are the standard means
+    of representing such archives and are supported by most modern zip tools.
+
+    Writers should only use the Zip64 extensions where required, so that
+    packages that fit within the limits of the 32-bit zip format remain readable
+    by readers that do not support Zip64, notably versions of USD which where
+    released before 64 bit zip support was added.
 
 Layout
 ------
@@ -169,7 +225,7 @@ Clients wishing to deliver "streamable content" `may wish to consider other layo
     to SdfLayer::FindOrOpen("package.usdz"), and therefore also the root layer
     when the package is placed on a UsdStage, or when referenced or sublayered
     as a whole.  Given that, due to alignment considerations, we will need to
-    provide packaging utilities more sophisiticated than "zip", we can always
+    provide packaging utilities more sophisticated than "zip", we can always
     allow you to specify what the Default Layer should be, as a command option.
     However, to make the packaging process as simple as possible - particularly
     focusing on the workflow for "editing" a package, in which we must unpack a
@@ -207,16 +263,14 @@ USD runtime via mmap, pointer to memory, or threadsafe access to a FILE * (i.e.
 solely pread-like access). This excludes, for example, Alembic files,
 currently. Allowable file types are currently: 
 
-    * **usda, usdc, usd** files (Apple's current usdz implementation allows 
-      only a single usdc file, but this restriction will be lifted in future 
-      OS updates)  
+    * **usda, usdc, usd, usdz** files
 
     * **png**, **jpeg** (any of the multiple common extensions for 
       jpeg), **OpenEXR** and **AV1 Image (AVIF)** files for images/textures. 
       See :ref:`Working With Image File Formats<image_file_formats>` for more 
       details on supported image file formats.
 
-    * **M4A, MP3, WAV** files for embedded audio (given in order of preferred 
+    * **m4a, mp3, wav** files for embedded audio (given in order of preferred 
       format)
 
 .. dropdown:: Rationale
@@ -263,7 +317,7 @@ metadata (see next item).
     FileFormat itself will attempt to pre-resolve any path to other files 
     within the package using a specialzed *ArPackageResolver* , because a
     generic ArResolver cannot "see inside" a package, and therefore cannot
-    resolve to files inside a package.  The behavior of the *UsdUsdzResolver*
+    resolve to files inside a package.  The behavior of the *SdfUsdzResolver*
     can be described as follows:
 
         * First attempt to anchor the path to the layer-within-the-package in
@@ -412,8 +466,17 @@ constraints. The toolset also includes:
 Changes, by Version
 ===================
 
-Version 1.3 - Current Head
+Version 1.4 - Current Head
 --------------------------
+
+From version 1.3:
+
+    * :ref:`Adds support for the Zip64 format extensions <spec_usdz_zip64>`,
+      allowing packages and files within packages to be 4 GiB or larger, and
+      packages to contain 65535 or more files.
+
+Version 1.3
+-----------
 
 From version 1.2:
 

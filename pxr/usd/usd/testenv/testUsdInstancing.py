@@ -11,7 +11,6 @@
 # output from run to run. However, the assertions made
 # by this test should always be valid.
 
-from __future__ import print_function
 
 from pxr import Usd, Sdf, Tf
 import unittest
@@ -742,12 +741,21 @@ class TestUsdInstancing(unittest.TestCase):
         ValidateExpectedInstances(s, { '/__Prototype_1' : [expectedInstance] })
         ValidateExpectedChanges(nl, [primPathToDeactivate, '/__Prototype_1'])
 
-        # Now author a significant change to the prim referenced by both
-        # instances. This should cause a new prototype to be created and the
-        # old prototype to be removed.
+        # Author a new composition arc on the prim referenced by both
+        # instances. Since the new composition arc is behind a reference
+        # arc, it is not considered part of the instancing key and does
+        # not cause a new prototype to be created.
         s.GetPrimAtPath('/Reference').GetInherits().AddInherit('/Class')
-        ValidateExpectedInstances(s, { '/__Prototype_2' : [expectedInstance] })
+        ValidateExpectedInstances(s, { '/__Prototype_1' : [expectedInstance] })
         ValidateExpectedChanges(nl, ['/Reference', expectedInstance, 
+                                     '/__Prototype_1'])
+
+        # Author a new composition arc on the remaining active instance.
+        # This should cause a new prototype to be created and the old
+        # prototype to be removed.
+        s.GetPrimAtPath(expectedInstance).GetInherits().AddInherit('/Class_2')
+        ValidateExpectedInstances(s, { '/__Prototype_2' : [expectedInstance] })
+        ValidateExpectedChanges(nl, [expectedInstance, 
                                      '/__Prototype_1', '/__Prototype_2'])
 
     def test_VariantSelections(self):
@@ -913,24 +921,25 @@ class TestUsdInstancing(unittest.TestCase):
         # the nested instance /__Prototype_1/Ref1_Child, even though
         # they ultimately have the same child prims. This is something
         # that could be examined for further optimization in the future.
-        # SubrootRef_3 also shares the same prototype as SubrootRef_1 and 
-        # SubrootRef_2 even though its subroot reference is to 
-        # /RootRef/Ref1_Child. This subroot reference provides an ancestral 
-        # reference to /Ref1/Ref1_Child that can be included in the instance key
-        # because it belongs to the direct subroot reference arc (as opposed to
-        # being strictly ancestral). This combined with /RootRef/Ref1_Child 
-        # having no specs means it can share its prototype with the other 
-        # SubrootRef prims.
+        # SubrootRef_3's subroot reference to /RootRef/Ref1_Child provides
+        # the same reference to /Ref1/Ref1_Child, but through /RootRef's
+        # reference to /Ref1, so paths under /Ref1 outside /Ref1/Ref1_Child
+        # map into SubrootRef_3's namespace but not SubrootRef_1's.  A
+        # relationship authored in ref1.usda that targets such a path would
+        # compose differently, so SubrootRef_3 uses a different prototype.
         ValidateExpectedInstances(s,
             { '/__Prototype_1': ['/RootRef'],
               '/__Prototype_2': ['/__Prototype_1/Ref1_Child'],
               '/__Prototype_3': ['/SubrootRef_1', 
-                                 '/SubrootRef_2', 
-                                 '/SubrootRef_3'] })
+                                 '/SubrootRef_2'],
+              '/__Prototype_4': ['/SubrootRef_3'] })
 
-        # Now add an over for /RootRef/Ref1_Child. This now gets included in 
-        # the instance key for SubrootRef_3 so it uses a different prototype
-        # SubrootRef 1 and 2.
+        # Add an over for /RootRef/Ref1_Child in the root layer.  This is a
+        # prohibited override on a child of the instance /RootRef, so it is
+        # ignored there.  The subroot reference from /SubrootRef_3 composes
+        # its target as if /RootRef were not instanceable, though, so the
+        # over applies to /SubrootRef_3.  Its instance key now includes the
+        # internal reference to that prim, so it gets a new prototype.
         rootLayer = s.GetRootLayer()
         Sdf.PrimSpec(rootLayer.GetPrimAtPath('/RootRef'), 'Ref1_Child', 
                      Sdf.SpecifierOver)
@@ -939,8 +948,272 @@ class TestUsdInstancing(unittest.TestCase):
               '/__Prototype_2': ['/__Prototype_1/Ref1_Child'],
               '/__Prototype_3': ['/SubrootRef_1', 
                                  '/SubrootRef_2'],
-              '/__Prototype_4': ['/SubrootRef_3'] })
+              '/__Prototype_5': ['/SubrootRef_3'] })
 
+        # Remove the instanceable flag from /RootRef.  /__Prototype_1 goes
+        # away since there are no more instances.  /SubrootRef_3 already
+        # includes the over on /RootRef/Ref1_Child, so it keeps its
+        # prototype.
+        rootLayer.GetPrimAtPath('/RootRef').instanceable = False
+        ValidateExpectedInstances(s,
+            { '/__Prototype_2': ['/RootRef/Ref1_Child'],
+              '/__Prototype_3': ['/SubrootRef_1',
+                                 '/SubrootRef_2'],
+              '/__Prototype_5': ['/SubrootRef_3'] })
+
+    def test_ArcsBeneathInstances(self):
+        """Test that an arc targeting a path beneath an instance composes
+        that path as if the instance were not instanceable."""
+        nl = NoticeListener()
+
+        s = OpenStage('arcs_beneath_instances/root.usda')
+
+        def _ChildNames(path):
+            return [c.GetName() for c in s.GetPrimAtPath(path).GetChildren()]
+
+        ValidateExpectedInstances(s,
+            { '/__Prototype_1': ['/Backref/A', '/Backref/B'],
+              '/__Prototype_2': ['/Set/Inst'] })
+
+        # /Set/Other inherits /Set/Inst/cls, so it gets the override on
+        # /Set/Inst/cls that the instance /Set/Inst ignores.
+        self.assertEqual(_ChildNames('/Set/Other'), ['extra'])
+
+        # Removing and restoring the instanceable flag on /Set/Inst does not
+        # change /Set/Other.
+        rootLayer = s.GetRootLayer()
+        rootLayer.GetPrimAtPath('/Set/Inst').instanceable = False
+        self.assertEqual(_ChildNames('/Set/Other'), ['extra'])
+
+        rootLayer.GetPrimAtPath('/Set/Inst').instanceable = True
+        ValidateExpectedInstances(s,
+            { '/__Prototype_1': ['/Backref/A', '/Backref/B'],
+              '/__Prototype_3': ['/Set/Inst'] })
+        self.assertEqual(_ChildNames('/Set/Other'), ['extra'])
+
+        # The prototype's geom references /Backref/A/cls, beneath one of the
+        # instances that share the prototype.  It gets the override on
+        # /Backref/A/cls in every instance, whichever instance is the
+        # prototype's source, so /Backref/A and /Backref/B still share it.
+        self.assertEqual(_ChildNames('/Backref/A/geom'), ['extra'])
+        self.assertEqual(_ChildNames('/Backref/B/geom'), ['extra'])
+
+        # Adding a prim under /Backref/A/cls adds it beneath geom in the
+        # prototype.
+        print("-" * 60)
+        print("Adding prim beneath /Backref/A/cls")
+        Sdf.CreatePrimInLayer(rootLayer, '/Backref/A/cls/added').specifier = \
+            Sdf.SpecifierDef
+        self.assertIn(Sdf.Path('/__Prototype_1/geom/added'),
+                      nl.resyncedPrimPaths)
+        ValidateExpectedInstances(s,
+            { '/__Prototype_1': ['/Backref/A', '/Backref/B'],
+              '/__Prototype_3': ['/Set/Inst'] })
+        self.assertEqual(_ChildNames('/Backref/A/geom'), ['extra', 'added'])
+        self.assertEqual(_ChildNames('/Backref/B/geom'), ['extra', 'added'])
+
+    def test_InstanceProxyTargets(self):
+        """Test relationship targets, attribute connections, and path
+        expressions on instance proxies of an asset instanced in several
+        sets.  Paths within the instances are mapped to each instance's own
+        namespace.  Paths outside them are not: instances in different sets
+        share a prototype, and every proxy reports the paths that the
+        prototype's source composes, which lie in the source's set."""
+        s = OpenStage('proxy_targets/root.usda')
+
+        # Every set's instances share prototypes: setA, setB, and setC
+        # reference the same asset, and setC's relocate of a prim outside the
+        # instances does not change their opinions.
+        ValidateExpectedInstances(s,
+            { '/__Prototype_1': ['/World/setA/Inst',
+                                 '/World/setA/Lib/Out/Inner',
+                                 '/__Prototype_2/Inner',
+                                 '/World/setB/Inst',
+                                 '/World/setB/Lib/Out/Inner',
+                                 '/World/setC/Inst',
+                                 '/World/setC/Lib/Out/Inner'],
+              '/__Prototype_2': ['/World/setA/Outer',
+                                 '/World/setB/Outer',
+                                 '/World/setC/Outer'] })
+
+        def _SourceSet(prototypePath):
+            return (s.GetPrimAtPath(prototypePath)._GetSourcePrimIndex()
+                    .rootNode.path.GetPrefixes()[1])
+
+        def _Target(setPath):
+            return setPath.AppendPath(
+                'Lib/moved' if setPath.name == 'setC' else 'Lib/target')
+
+        def _Validate(setNames):
+            # Each widget's properties are composed by /__Prototype_1,
+            # including those beneath Outer/Inner, a nested instance of it
+            # within /__Prototype_2, and peer's by /__Prototype_2.
+            target1 = _Target(_SourceSet('/__Prototype_1'))
+            target2 = _Target(_SourceSet('/__Prototype_2'))
+            for setName in setNames:
+                setPath = Sdf.Path('/World').AppendChild(setName)
+                for instPath, target in [('Inst', target1),
+                                         ('Lib/Out/Inner', target1),
+                                         ('Outer/Inner', target1)]:
+                    widget = s.GetPrimAtPath(
+                        setPath.AppendPath(instPath).AppendChild('widget'))
+                    self.assertTrue(widget.IsInstanceProxy())
+                    self.assertEqual(
+                        widget.GetRelationship('outside').GetTargets(),
+                        [target])
+                    self.assertEqual(
+                        widget.GetRelationship('inside').GetTargets(),
+                        [widget.GetPath()])
+                    self.assertEqual(
+                        widget.GetAttribute('c').GetConnections(),
+                        [target.AppendProperty('v')])
+                    self.assertEqual(
+                        widget.GetAttribute('e').Get(),
+                        Sdf.PathExpression('%s %s' % (
+                            target, widget.GetPath())))
+                peer = s.GetPrimAtPath(setPath.AppendPath('Outer/peer'))
+                self.assertTrue(peer.IsInstanceProxy())
+                self.assertEqual(
+                    peer.GetRelationship('outside').GetTargets(), [target2])
+                self.assertEqual(
+                    peer.GetRelationship('toInner').GetTargets(),
+                    [setPath.AppendPath('Outer/Inner/widget')])
+
+        _Validate(['setA', 'setB', 'setC'])
+
+        # Deactivating the set holding /__Prototype_1's source prim index
+        # moves the source to another set's instance.  Paths within the
+        # instances are unchanged, and paths outside them follow the new
+        # source.
+        sourceSet = _SourceSet('/__Prototype_1')
+        s.GetPrimAtPath(sourceSet).SetActive(False)
+        self.assertNotEqual(_SourceSet('/__Prototype_1'), sourceSet)
+        _Validate([n for n in ['setA', 'setB', 'setC']
+                   if n != sourceSet.name])
+
+    def test_InstanceProxyTargetsOutsideNotRemapped(self):
+        """Test that a target outside key-equal instances that each instance
+        composes at the same path is reported unchanged beneath every
+        instance, whichever instance is the prototype's source, even where
+        the instances' arcs map other paths outside them differently."""
+        # Y/Inst1 and Z/Inst1 each get a second reference, through
+        # set.usda, whose map to the root takes /Set to /World/Y or
+        # /World/Z.  The asset's target </Set/Z/foo> lies beneath that image
+        # in Z only, but it is authored through w.usda's reference to
+        # /World, so it is /World/Z/foo in both.
+        s = OpenStage('proxy_targets_outside/root.usda')
+        insts = ['/World/Y/Inst1', '/World/Z/Inst1']
+        self.assertEqual(s.GetPrimAtPath(insts[0]).GetPrototype(),
+                         s.GetPrimAtPath(insts[1]).GetPrototype())
+        for inst in insts:
+            widget = s.GetPrimAtPath(inst + '/widget')
+            self.assertTrue(widget.IsInstanceProxy())
+            self.assertEqual(widget.GetRelationship('r').GetTargets(),
+                             [Sdf.Path('/World/Z/foo')])
+
+        # A root layer class inherited beneath instances in two sets
+        # targets a path in setA.  It maps by identity in every instance,
+        # so the target is unchanged beneath setB's instance too.  (The
+        # asset's own target </Set/Lib/target> composes to the source's set
+        # beneath every instance; see test_InstanceProxyTargets.)
+        s = OpenStage('proxy_targets_root_class/root.usda')
+        insts = ['/World/setA/Inst1', '/World/setB/Inst1']
+        self.assertEqual(s.GetPrimAtPath(insts[0]).GetPrototype(),
+                         s.GetPrimAtPath(insts[1]).GetPrototype())
+        for inst in insts:
+            widget = s.GetPrimAtPath(inst + '/widget')
+            self.assertTrue(widget.IsInstanceProxy())
+            self.assertEqual(widget.GetRelationship('q').GetTargets(),
+                             [Sdf.Path('/World/setA/Lib/target')])
+
+    def test_InternalReferencesAndImpliedArcs(self):
+        """Test instancing behavior with internal references and implied
+        arcs."""
+
+        s = OpenStage('internal_refs/root.usda')
+
+        # Both /Parent/Child and /ParentRef/Child should share the same
+        # prototype even though /ParentRef/Child has an additional
+        # ancestral arc, since ancestral arcs are not considered in the
+        # instancing key.
+        ValidateExpectedInstances(s,
+            { '/__Prototype_1': ['/Parent/Child', '/ParentRef/Child'] })
+
+    def test_LocalOverridesAndImpliedArcs(self):
+        """Test that local overrides on prims beneath an instance that are
+        composed into another prim via an implied arc are ignored."""
+        s = OpenStage('implied_arcs/root.usda')
+        nl = NoticeListener()
+        
+        ValidateExpectedInstances(s,
+            { '/__Prototype_1': ['/Root/Inherits_1', '/Root/Inherits_2'] })
+
+        # The local overrides on the "class_widget" and "widget" prims beneath
+        # /Inherits_1 and /Inherits_2 should be ignored, so the opinions for
+        # the radius attribute come from across the shared reference.
+        self.assertEqual(
+            s.GetAttributeAtPath('/__Prototype_1/widget.radius').Get(), 5)
+        self.assertEqual(
+            s.GetAttributeAtPath('/__Prototype_1/class_widget.radius').Get(), 1)
+
+        # Force the ancestor "Root" prim of the instances to resync by adding
+        # a reference arc. Since this is a significant resync, "Inherits_1" and
+        # "Inherits_2" should also be resynced, but the local overrides should
+        # still be ignored and the attribute values in the prototype should be
+        # unchanged.
+        print("-" * 60)
+        print("Adding composition arc to ancestor of instances")
+        rootLayer = Sdf.Layer.Find('implied_arcs/root.usda')
+        rootLayer.GetPrimAtPath('/Root').referenceList.explicitItems.append(
+            Sdf.Reference(primPath='/LocalRef'))
+
+        ValidateExpectedChanges(nl, ['/Root', '/__Prototype_1'])
+
+        self.assertEqual(
+            s.GetAttributeAtPath('/__Prototype_1/widget.radius').Get(), 5)
+        self.assertEqual(
+            s.GetAttributeAtPath('/__Prototype_1/class_widget.radius').Get(), 1)
+
+        # Force the "Inherits_1" and "Inherits_2" instances to resync by adding 
+        # a reference arc. This will cause the instances to be assigned to a new
+        # prototype, but the local overrides should still be ignored and the
+        # attribute values in the new prototype should be unchanged.
+        print("-" * 60)
+        print("Adding composition arc to instances")
+        with Sdf.ChangeBlock():
+            for p in ['/Root/Inherits_1', '/Root/Inherits_2']:
+                rootLayer.GetPrimAtPath(p).referenceList.explicitItems.append(
+                    Sdf.Reference(primPath='/LocalRef'))
+
+        ValidateExpectedChanges(nl, 
+            ['/Root/Inherits_1', '/Root/Inherits_2',
+             '/__Prototype_1', '/__Prototype_2'])
+
+        ValidateExpectedInstances(s,
+            { '/__Prototype_2': ['/Root/Inherits_1', '/Root/Inherits_2'] })
+
+        self.assertEqual(
+            s.GetAttributeAtPath('/__Prototype_2/widget.radius').Get(), 5)
+        self.assertEqual(
+            s.GetAttributeAtPath('/__Prototype_2/class_widget.radius').Get(), 1)
+
+        # Force the child "widget" prim of the instances to resync by adding
+        # a reference arc. The local overrides on the "widget" prim should
+        # still be ignored and the attribute values in the prototype should be
+        # unchanged.
+        print("-" * 60)
+        print("Adding composition arc to child of instance")
+        refLayer = Sdf.Layer.Find('implied_arcs/ref.usda')
+        refChildPrim = refLayer.GetPrimAtPath('/Ref_Inherits/widget')
+        refChildPrim.referenceList.explicitItems.append(
+            Sdf.Reference(primPath='/LocalRef'))
+        
+        ValidateExpectedChanges(nl, ['/__Prototype_2/widget'])
+
+        self.assertEqual(
+            s.GetAttributeAtPath('/__Prototype_2/widget.radius').Get(), 5)
+        self.assertEqual(
+            s.GetAttributeAtPath('/__Prototype_2/class_widget.radius').Get(), 1)
 
     def test_PropertyChanges(self):
         """Test that changes to properties that affect prototypes cause the

@@ -7,7 +7,6 @@
 
 # pylint: disable=range-builtin-not-iterating
 
-from __future__ import print_function
 
 from pxr import Usd, UsdGeom, Vt, Sdf
 import unittest
@@ -113,6 +112,14 @@ class testUsdGeomSubset(unittest.TestCase):
     def test_SubsetRetrievalAndValidity(self):
         testFile = "Sphere.usda"
         stage = Usd.Stage.Open(testFile)
+
+        # Do a basic check to ensure "point" is a valid element type for any 
+        # UsdGeomPointBased and "segment" is valid for any UsdGeomBasisCurves.
+        geom = UsdGeom.Imageable(stage.GetPrimAtPath("/Sphere/SimpleCurves"))
+        self._ValidateFamily(geom, "point", "points", True)
+        self._ValidateFamily(geom, "segment", "segments", True)
+
+        # Test specific subset validity
         sphere = stage.GetPrimAtPath("/Sphere/pSphere1")
         geom = UsdGeom.Imageable(sphere)
         self.assertTrue(geom)
@@ -134,6 +141,10 @@ class testUsdGeomSubset(unittest.TestCase):
         self._TestSubsetRetrieval(geom, UsdGeom.Tokens.edge, "physicsAttachment")
         self._TestSubsetValidity(geom, varyingGeom, nullGeom, UsdGeom.Tokens.edge)
 
+        # Test an invalid case where the elementType is not valid for the geom
+        self._ValidateFamily(geom, "tetrahedron", "tetrahedron_invalidElementType", 
+                             False, ["Invalid geom type"])
+
         sphere = stage.GetPrimAtPath("/Sphere/TetMesh")
         geom = UsdGeom.Imageable(sphere)
         self.assertTrue(geom)
@@ -152,6 +163,10 @@ class testUsdGeomSubset(unittest.TestCase):
         self._TestSubsetRetrieval(geom, UsdGeom.Tokens.face, "materialBind")
         self._TestSubsetValidity(geom, varyingGeom, nullGeom, UsdGeom.Tokens.face)
 
+        # Test an invalid case where the elementType is not valid for the geom
+        self._ValidateFamily(geom, "segment", "segment_invalidElementType", 
+                             False, ["Invalid geom type"])
+
         sphere = stage.GetPrimAtPath("/Sphere/BasisCurves")
         geom = UsdGeom.Imageable(sphere)
         self.assertTrue(geom)
@@ -166,6 +181,10 @@ class testUsdGeomSubset(unittest.TestCase):
 
         self._TestSubsetRetrieval(geom, UsdGeom.Tokens.segment, "physicsAttachment")
         self._TestSubsetValidity(geom, varyingGeom, nullGeom, UsdGeom.Tokens.segment)
+
+        # Test an invalid case where the elementType is not valid for the geom
+        self._ValidateFamily(geom, "face", "face_invalidElementType", 
+                             False, ["Invalid geom type"])
 
 
     def test_GetUnassignedIndicesForEdges(self):
@@ -351,7 +370,7 @@ class testUsdGeomSubset(unittest.TestCase):
         # Check total count.
         allGeomSubsets = UsdGeom.Subset.GetAllGeomSubsets(
                 UsdGeom.Imageable(sphere))
-        self.assertEqual(len(allGeomSubsets), 68)
+        self.assertEqual(len(allGeomSubsets), 69)
 
         # Check that invalid negative indices are ignored when getting 
         # unassigned indices.

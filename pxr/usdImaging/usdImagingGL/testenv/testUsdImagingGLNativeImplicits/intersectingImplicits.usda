@@ -1,0 +1,352 @@
+#usda 1.0
+(
+    defaultPrim = "world"
+    upAxis = "Z"
+    startTimeCode = 1
+    endTimeCode = 3
+)
+
+def Camera "main_cam"
+{
+    float4[] clippingPlanes = []
+    float2 clippingRange = (1, 2000000)
+    float focalLength = 68.5216
+    float focusDistance = 91.025475
+    float fStop = 0
+    float horizontalAperture = 27.570835
+    float horizontalApertureOffset = 0
+    token projection = "perspective"
+    float verticalAperture = 20.955
+    float verticalApertureOffset = 0
+    matrix4d xformOp:transform = ( (0.9999904807207345, 0.004363309284746571, -9.688492862972733e-19, 0), (0, 2.220446049250313e-16, 1, 0), (0.004363309284746571, -0.9999904807207345, 2.2204249122042763e-16, 0), (14.468019210471157, -89.02460856019046, 3.000000000000021, 1) )
+    uniform token[] xformOpOrder = ["xformOp:transform"]
+}
+
+def Xform "world"
+{
+    def Xform "sphere1Xform"
+    {
+        double3 xformOp:translate = (20, 2, 3)
+        double3 xformOp:rotateXYZ = (45, 70, 60)
+        double3 xformOp:rotateXYZ.timeSamples = {
+            1: (45, 70, 60),
+            2: (55, 75, 65),
+            3: (65, 80, 70),
+        }
+        double3 xformOp:scale = (2, 6, 3)
+        uniform token[] xformOpOrder = [
+            "xformOp:translate",
+            "xformOp:rotateXYZ",
+            "xformOp:scale"
+        ]
+
+        def Sphere "sphere1" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            rel material:binding = </world/Materials/TranslucentBlue>
+            color3f[] primvars:displayColor = [(0, 0.3, 0.6)]
+
+            double radius = 2.5
+        }
+    }
+
+    def Xform "sphere2Xform"
+    {
+        double3 xformOp:translate = (-2, 2, 5)
+        double3 xformOp:rotateXYZ = (0, 0, 0)
+        double3 xformOp:rotateXYZ.timeSamples = {
+            1: (0, 0, 0),
+            2: (30, 15, 45),
+            3: (60, 30, 75),
+        }
+        double3 xformOp:scale = (0.5, 0.5, 0.5)
+        uniform token[] xformOpOrder = [
+            "xformOp:translate",
+            "xformOp:rotateXYZ",
+            "xformOp:scale"
+        ]
+
+        def Sphere "sphere2"
+        {
+            color3f[] primvars:displayColor = [(0.8, 0.2, 0.2)]
+
+            double radius = 4.0
+        }
+    }
+
+    def Xform "sphere3Xform"
+    {
+        double3 xformOp:translate = (10, 2, 3)
+        double3 xformOp:rotateXYZ = (0, 0, 0)
+        double3 xformOp:rotateXYZ.timeSamples = {
+            1: (0, 0, 0),
+            2: (20, -30, 10),
+            3: (50, -10, 40),
+        }
+        double3 xformOp:scale = (5, 2, 10)
+        uniform token[] xformOpOrder = [
+            "xformOp:translate",
+            "xformOp:rotateXYZ",
+            "xformOp:scale"
+        ]
+
+        def Sphere "sphere3" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            rel material:binding = </world/Materials/TranslucentGreen>
+            color3f[] primvars:displayColor = [(0, 0.9, 0.6)]
+
+            double radius = 1.0
+        }
+    }
+
+    def Xform "cyl1Xform"
+    {
+        double3 xformOp:translate = (23, 2, 3)
+        double3 xformOp:rotateXYZ = (45, 70, 60)
+        double3 xformOp:rotateXYZ.timeSamples = {
+            1: (45, 70, 60),
+            2: (57, 80, 70),
+            3: (70, 90, 80),
+        }
+        double3 xformOp:scale = (2, 6, 3)
+        uniform token[] xformOpOrder = [
+            "xformOp:translate",
+            "xformOp:rotateXYZ",
+            "xformOp:scale"
+        ]
+
+        def Cylinder_1 "cyl1"
+        {
+            uniform token axis = "Z"
+            double height = 5.0
+            double radiusTop = 1.2
+            double radiusBottom = 2.5
+            color3f[] primvars:displayColor = [(0.9, 0.5, 0.1)]
+        }
+    }
+
+    def Xform "cyl2Xform"
+    {
+        double3 xformOp:translate = (-0.5, 2, 5)
+        double3 xformOp:rotateXYZ = (0, 0, 0)
+        double3 xformOp:rotateXYZ.timeSamples = {
+            1: (0, 0, 0),
+            2: (0, 45, 30),
+            3: (25, 70, 55),
+        }
+        double3 xformOp:scale = (0.5, 0.5, 0.5)
+        uniform token[] xformOpOrder = [
+            "xformOp:translate",
+            "xformOp:rotateXYZ",
+            "xformOp:scale"
+        ]
+
+        def Cylinder "cyl2"
+        {
+            uniform token axis = "X"
+            double height = 12.0
+            double radius = 2.5
+            color3f[] primvars:displayColor = [(0.7, 0.9, 0.2)]
+        }
+    }
+
+    def Xform "cyl3Xform"
+    {
+        double3 xformOp:translate = (14, 2, 3)
+        double3 xformOp:rotateXYZ = (0, 0, 0)
+        double3 xformOp:rotateXYZ.timeSamples = {
+            1: (0, 0, 0),
+            2: (60, 0, 25),
+            3: (85, 20, 50),
+        }
+        double3 xformOp:scale = (5, 2, 10)
+        uniform token[] xformOpOrder = [
+            "xformOp:translate",
+            "xformOp:rotateXYZ",
+            "xformOp:scale"
+        ]
+
+        def Cone "cyl3" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            rel material:binding = </world/Materials/TranslucentPurple>
+            uniform token axis = "Y"
+            double height = 2.5
+            double radius = 1.0
+            color3f[] primvars:displayColor = [(0.6, 0.2, 0.8)]
+        }
+    }
+
+    def Xform "capsule1Xform"
+    {
+        double3 xformOp:translate = (27, 2, 3)
+        double3 xformOp:rotateXYZ = (30, 45, 0)
+        double3 xformOp:rotateXYZ.timeSamples = {
+            1: (30, 45, 0),
+            2: (42, 55, 10),
+            3: (55, 65, 20),
+        }
+        double3 xformOp:scale = (2, 4, 2)
+        uniform token[] xformOpOrder = [
+            "xformOp:translate",
+            "xformOp:rotateXYZ",
+            "xformOp:scale"
+        ]
+
+        def Capsule_1 "capsule1"
+        {
+            uniform token axis = "Z"
+            double height = 5.0
+            double radiusTop = 1.2
+            double radiusBottom = 2.5
+            color3f[] primvars:displayColor = [(0.3, 0.7, 0.9)]
+        }
+    }
+
+    def Xform "capsule2Xform"
+    {
+        double3 xformOp:translate = (5, 2, 3)
+        double3 xformOp:rotateXYZ = (0, 0, 0)
+        double3 xformOp:rotateXYZ.timeSamples = {
+            1: (0, 0, 0),
+            2: (15, 0, 30),
+            3: (40, 20, 55),
+        }
+        double3 xformOp:scale = (0.8, 0.8, 0.8)
+        uniform token[] xformOpOrder = [
+            "xformOp:translate",
+            "xformOp:rotateXYZ",
+            "xformOp:scale"
+        ]
+
+        def Capsule "capsule2" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            rel material:binding = </world/Materials/TranslucentPink>
+            uniform token axis = "X"
+            double height = 12.0
+            double radius = 2.5
+            color3f[] primvars:displayColor = [(0.9, 0.3, 0.5)]
+        }
+    }
+
+    def Xform "capsule3Xform"
+    {
+        double3 xformOp:translate = (18.5, -0.5, 9)
+        double3 xformOp:rotateXYZ = (60, 20, 30)
+        double3 xformOp:rotateXYZ.timeSamples = {
+            1: (60, 20, 30),
+            2: (70, 35, 50),
+            3: (80, 50, 70),
+        }
+        double3 xformOp:scale = (2, 1, 3)
+        uniform token[] xformOpOrder = [
+            "xformOp:translate",
+            "xformOp:rotateXYZ",
+            "xformOp:scale"
+        ]
+
+        def Capsule_1 "capsule3"
+        {
+            uniform token axis = "Z"
+            double height = 0.0
+            double radiusTop = 1.0
+            double radiusBottom = 3.0
+            color3f[] primvars:displayColor = [(0.9, 0.7, 0.0)]
+        }
+    }
+
+    def Cube "cube1"
+    {
+        double size = 5.0
+        color3f[] primvars:displayColor = [(0.1, 0.7, 0.7)]
+        double3 xformOp:translate = (15, -2, 4)
+        double3 xformOp:rotateXYZ = (0, 0, 0)
+        double3 xformOp:rotateXYZ.timeSamples = {
+            1: (0, 0, 0),
+            2: (0, 45, 0),
+            3: (20, 65, 20),
+        }
+        uniform token[] xformOpOrder = [
+            "xformOp:translate",
+            "xformOp:rotateXYZ"
+        ]
+    }
+
+    def Cube "cube2"
+    {
+        double size = 3.0
+        color3f[] primvars:displayColor = [(0.8, 0.7, 0.1)]
+        double3 xformOp:translate = (-1, 2, 5)
+        double3 xformOp:rotateXYZ = (0, 0, 0)
+        double3 xformOp:rotateXYZ.timeSamples = {
+            1: (0, 0, 0),
+            2: (30, 0, 15),
+            3: (50, 20, 35),
+        }
+        uniform token[] xformOpOrder = [
+            "xformOp:translate",
+            "xformOp:rotateXYZ"
+        ]
+    }
+
+    def Scope "Materials"
+    {
+        def Material "TranslucentBlue"
+        {
+            token outputs:surface.connect = </world/Materials/TranslucentBlue/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0.3, 0.6)
+                float inputs:opacity = 0.4
+                token outputs:surface
+            }
+        }
+
+        def Material "TranslucentPurple"
+        {
+            token outputs:surface.connect = </world/Materials/TranslucentPurple/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.6, 0.2, 0.8)
+                float inputs:opacity = 0.5
+                token outputs:surface
+            }
+        }
+
+        def Material "TranslucentPink"
+        {
+            token outputs:surface.connect = </world/Materials/TranslucentPink/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.9, 0.3, 0.5)
+                float inputs:opacity = 0.4
+                token outputs:surface
+            }
+        }
+
+        def Material "TranslucentGreen"
+        {
+            token outputs:surface.connect = </world/Materials/TranslucentGreen/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0.9, 0.6)
+                float inputs:opacity = 0.3
+                token outputs:surface
+            }
+        }
+    }
+}

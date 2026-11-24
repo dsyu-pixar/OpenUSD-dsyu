@@ -262,6 +262,7 @@ HdStGLConversions::GetGLSLTypename(HdType type)
     case HdTypeBool:
         return _glTypeNames->_bool;
 
+    case HdTypeInt16:
     case HdTypeInt32:
         return _glTypeNames->_int;
     case HdTypeInt32Vec2:
@@ -271,6 +272,8 @@ HdStGLConversions::GetGLSLTypename(HdType type)
     case HdTypeInt32Vec4:
         return _glTypeNames->ivec4;
 
+    case HdTypeUInt8:
+    case HdTypeUInt16:
     case HdTypeUInt32:
         return _glTypeNames->_uint;
     case HdTypeUInt32Vec2:
@@ -343,7 +346,7 @@ HdStGLConversions::GetGLSLIdentifier(TfToken const& identifier)
 {
     std::string const& in = identifier.GetString();
     // Avoid allocating a string and constructing a token for the general case,
-    // wherein identifers conform to the naming rules.
+    // wherein identifiers conform to the naming rules.
     if (_IsIdentiferGLSLCompatible(in)) {
         return identifier;
     }

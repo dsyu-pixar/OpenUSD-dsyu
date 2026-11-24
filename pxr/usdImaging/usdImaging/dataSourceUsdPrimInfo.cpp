@@ -7,8 +7,12 @@
 
 #include "pxr/usdImaging/usdImaging/dataSourceUsdPrimInfo.h"
 
+#include "pxr/usdImaging/usdImaging/tokens.h"
 #include "pxr/usdImaging/usdImaging/usdPrimInfoSchema.h"
 #include "pxr/imaging/hd/retainedDataSource.h"
+#include "pxr/usd/usd/attribute.h"
+#include "pxr/usd/usd/variantSets.h"
+#include "pxr/usd/usdHydra/primAPI.h"
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -58,15 +62,18 @@ _SpecifierToDataSource(const SdfSpecifier specifier)
 TfTokenVector
 UsdImagingDataSourceUsdPrimInfo::GetNames()
 {
-    TfTokenVector result = { 
+    TfTokenVector result = {
         UsdImagingUsdPrimInfoSchemaTokens->specifier,
         UsdImagingUsdPrimInfoSchemaTokens->typeName,
         UsdImagingUsdPrimInfoSchemaTokens->isLoaded,
         UsdImagingUsdPrimInfoSchemaTokens->apiSchemas,
         UsdImagingUsdPrimInfoSchemaTokens->kind,
+        UsdImagingUsdPrimInfoSchemaTokens->variantSelections,
     };
 
-    if (_usdPrim.IsInstance()) {
+    // If an instance is tagged for expansion, don't provide niPrototypePath.
+    if (_usdPrim.IsInstance()
+        && !UsdHydraPrimAPI::ShouldExpandInstancesForPrim(_usdPrim)) {
         result.push_back(UsdImagingUsdPrimInfoSchemaTokens->niPrototypePath);
     }
 
@@ -109,8 +116,26 @@ UsdImagingDataSourceUsdPrimInfo::Get(const TfToken &name)
         }
         return nullptr;
     }
+    if (name == UsdImagingUsdPrimInfoSchemaTokens->variantSelections) {
+        const std::map<std::string, std::string> sels =
+            _usdPrim.GetVariantSets().GetAllVariantSelections();
+        if (sels.empty()) {
+            return nullptr;
+        }
+        std::vector<TfToken> names;
+        std::vector<HdDataSourceBaseHandle> values;
+        names.reserve(sels.size());
+        values.reserve(sels.size());
+        for (auto const &[setName, sel] : sels) {
+            names.push_back(TfToken(setName));
+            values.push_back(TokenDataSource::New(TfToken(sel)));
+        }
+        return HdRetainedContainerDataSource::New(
+            names.size(), names.data(), values.data());
+    }
     if (name == UsdImagingUsdPrimInfoSchemaTokens->niPrototypePath) {
-        if (!_usdPrim.IsInstance()) {
+        if (!_usdPrim.IsInstance()
+            || UsdHydraPrimAPI::ShouldExpandInstancesForPrim(_usdPrim)) {
             return nullptr;
         }
         const UsdPrim prototype(_usdPrim.GetPrototype());

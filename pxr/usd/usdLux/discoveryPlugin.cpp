@@ -18,17 +18,17 @@
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-const NdrStringVec& 
+const SdrStringVec& 
 UsdLux_DiscoveryPlugin::GetSearchURIs() const
 {
-    static const NdrStringVec empty;
+    static const SdrStringVec empty;
     return empty;
 }
 
-NdrNodeDiscoveryResultVec
-UsdLux_DiscoveryPlugin::DiscoverNodes(const Context &context)
+SdrShaderNodeDiscoveryResultVec
+UsdLux_DiscoveryPlugin::DiscoverShaderNodes(const Context &context)
 {
-    NdrNodeDiscoveryResultVec result;
+    SdrShaderNodeDiscoveryResultVec result;
 
     // We want to discover nodes for all concrete schema types that derive from 
     // UsdLuxBoundableLightBase and UsdLuxNonboundableLightBase. We'll filter
@@ -82,11 +82,11 @@ UsdLux_DiscoveryPlugin::DiscoverNodes(const Context &context)
         // schema registry prim definitions.
         result.emplace_back(
                 typeName,
-                NdrVersion().GetAsDefault(),
+                SdrVersion().GetAsDefault(),
                 typeName,
-                /*family*/ TfToken(),
+                /*function*/ TfToken(),
                 UsdLux_LightDefParserPlugin::_GetDiscoveryType(),
-                UsdLux_LightDefParserPlugin::_GetSourceType(),
+                UsdLux_LightDefParserPlugin::_GetShadingSystem(),
                 /*uri=*/ "",
                 /*resolvedUri=*/ "");
     }
@@ -94,6 +94,6 @@ UsdLux_DiscoveryPlugin::DiscoverNodes(const Context &context)
     return result;
 }
 
-NDR_REGISTER_DISCOVERY_PLUGIN(UsdLux_DiscoveryPlugin);
+SDR_REGISTER_DISCOVERY_PLUGIN(UsdLux_DiscoveryPlugin);
 
 PXR_NAMESPACE_CLOSE_SCOPE

@@ -119,10 +119,15 @@ public:
     /// false otherwise. \sa SdfIsDefiningSpecifier.
     bool IsDefined() const { return _flags[Usd_PrimDefinedFlag]; }
 
-    /// Return true if this prim has a specifier of type SdfSpecifierDef
-    /// or SdfSpecifierClass.
+    /// Return true if this prim has the specifier SdfSpecifierDef or
+    /// SdfSpecifierClass.
     bool HasDefiningSpecifier() const {
         return _flags[Usd_PrimHasDefiningSpecifierFlag]; 
+    }
+
+    /// Return true if this prim has the specifier SdfSpecifierClass.
+    bool HasClassSpecifier() const {
+        return _flags[Usd_PrimHasClassSpecifierFlag];
     }
 
     /// Return true if this prim has one or more payload composition arcs.
@@ -311,8 +316,12 @@ private:
         prim->_refCount.fetch_add(1, std::memory_order_relaxed);
     }
     friend void TfDelegatedCountDecrement(const Usd_PrimData *prim) noexcept {
-        if (prim->_refCount.fetch_sub(1, std::memory_order_release) == 1)
+        if (prim->_refCount.fetch_sub(1, std::memory_order_release) == 1) {
+            // Synchronize with the release decrements of all other owners so
+            // their prior accesses to *ptr happen-before its destruction.
+            std::atomic_thread_fence(std::memory_order_acquire);
             delete prim;
+        }
     }
 
     USD_API

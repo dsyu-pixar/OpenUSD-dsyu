@@ -5,7 +5,6 @@
 # Licensed under the terms set forth in the LICENSE.txt file available at
 # https://openusd.org/license.
 
-from __future__ import print_function
 
 from pxr import Gf, Sdf, Sdr, Tf, Usd, UsdGeom, UsdLux, UsdShade, Plug
 import unittest, math
@@ -156,11 +155,14 @@ class TestUsdLuxLight(unittest.TestCase):
         self.assertFalse(filterOutput.CanConnect(lightGraphOutput))
         self.assertFalse(filterOutput.CanConnect(filterGraphOutput))
 
-        # Light filters inputs diverge from the default behavior and should be 
-        # connectable across its own scope (encapsulation is not required)
-        self.assertTrue(filterInput.CanConnect(filterOutput))
+        # Light filters follow encapsulation rules, so should not be connectable
+        # across its own scope. (encapsulation is required) and
+        # cannot connect its own input to its own output
+        self.assertFalse(filterInput.CanConnect(filterOutput))
         self.assertTrue(filterInput.CanConnect(filterGraphOutput))
-        self.assertTrue(filterInput.CanConnect(lightGraphOutput))
+        # cannot connect its own input to another light's output which is
+        # outside its own encapsulated scope
+        self.assertFalse(filterInput.CanConnect(lightGraphOutput))
 
         # The shaping API can add more connectable attributes to the light 
         # and implements the same connectable interface functions. We test 
@@ -503,24 +505,24 @@ class TestUsdLuxLight(unittest.TestCase):
 
             # Every concrete light type and some API schemas (with appropriate
             # shaderId as sdr Identifier) in usdLux domain will have an 
-            # SdrShaderNode with source type 'USD' registered for it under its 
-            # USD schema type name. 
-            node = Sdr.Registry().GetNodeByIdentifier(sdrIdentifier, ['USD'])
+            # SdrShaderNode with shading system 'USD' registered for it
+            # under its USD schema type name. 
+            node = Sdr.Registry().GetShaderNodeByIdentifier(
+                sdrIdentifier, ['USD'])
             self.assertTrue(node is not None)
             self.assertIn(sdrIdentifier, expectedLightNodes)
 
-            # Names, identifier, and role for the node all match the USD schema
+            # Names, identifier for the node all match the USD schema
             # type name
             self.assertEqual(node.GetIdentifier(), sdrIdentifier)
             self.assertEqual(node.GetName(), sdrIdentifier)
             self.assertEqual(node.GetImplementationName(), sdrIdentifier)
-            self.assertEqual(node.GetRole(), sdrIdentifier)
             self.assertTrue(node.GetInfoString().startswith(sdrIdentifier))
 
             # The context is always 'light' for lights. 
             # Source type is 'USD'
             self.assertEqual(node.GetContext(), 'light')
-            self.assertEqual(node.GetSourceType(), 'USD')
+            self.assertEqual(node.GetShadingSystem(), 'USD')
 
             # Help string is generated and encoded in the node's metadata (no
             # need to verify the specific wording).
@@ -532,12 +534,11 @@ class TestUsdLuxLight(unittest.TestCase):
             self.assertFalse(node.GetResolvedDefinitionURI())
             self.assertFalse(node.GetResolvedImplementationURI())
 
-            # Other classifications are left empty.
-            self.assertFalse(node.GetCategory())
-            self.assertFalse(node.GetDepartments())
-            self.assertFalse(node.GetFamily())
+            self.assertNotIn('category', node.GetMetadata())
+            self.assertNotIn('departments', node.GetMetadata())
+            self.assertFalse(node.GetFunction())
             self.assertFalse(node.GetLabel())
-            self.assertFalse(node.GetVersion())
+            self.assertFalse(node.GetShaderVersion())
             self.assertFalse(node.GetAllVstructNames())
             self.assertEqual(node.GetPages(), [''])
 
@@ -597,16 +598,16 @@ class TestUsdLuxLight(unittest.TestCase):
                 expectedLightInputNames + expectedLightNodes[sdrIdentifier]
             # Verify node has exactly the expected inputs.
             self.assertEqual(sorted(expectedInputNames),
-                             sorted(node.GetInputNames()))
+                             sorted(node.GetShaderInputNames()))
             # Verify each node input matches a prim input.
             for inputName in expectedInputNames:
-                nodeInput = node.GetInput(inputName)
+                nodeInput = node.GetShaderInput(inputName)
                 primInput = light.GetInput(inputName)
                 self.assertFalse(nodeInput.IsOutput())
                 _CompareLightPropToNodeProp(nodeInput, primInput)
 
             # None of the UsdLux base lights have outputs
-            self.assertEqual(node.GetOutputNames(), [])
+            self.assertEqual(node.GetShaderOutputNames(), [])
             self.assertEqual(light.GetOutputs(onlyAuthored=False), [])
 
             # The reverse is tested just above, but for all asset identifier

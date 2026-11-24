@@ -12,12 +12,26 @@
 #include "pxr/base/tf/registryManager.h"
 #include "pxr/base/tf/token.h"
 #include "pxr/usdValidation/usdValidation/error.h"
+#include "pxr/usdValidation/usdValidation/notice.h"
 #include "pxr/usdValidation/usdValidation/registry.h"
 #include "pxr/usdValidation/usdValidation/timeRange.h"
 #include "pxr/usdValidation/usdValidation/validator.h"
 #include "pxr/usdValidation/usdValidation/validatorTokens.h"
 
+#include <set>
+
 PXR_NAMESPACE_USING_DIRECTIVE
+
+// Returns the names in \p metadata, and checks that none is repeated.
+static std::set<TfToken>
+_GetUniqueValidatorNames(const UsdValidationValidatorMetadataVector &metadata)
+{
+    std::set<TfToken> names;
+    for (const UsdValidationValidatorMetadata &m : metadata) {
+        TF_AXIOM(names.insert(m.name).second);
+    }
+    return names;
+}
 
 TF_REGISTRY_FUNCTION(UsdValidationRegistry)
 {
@@ -91,6 +105,9 @@ TF_REGISTRY_FUNCTION(UsdValidationRegistry)
         TF_AXIOM(!m.IsClean());
     }
     {
+        // The suite's metadata provides schemaTypes, so it is skipped when
+        // parsing the plugInfo, and registering it fails as its metadata is
+        // missing.
         const TfToken suiteName("testValidationPlugin:FailedValidatorSuite");
         const std::vector<const UsdValidationValidator *> containedValidators
             = registry.GetOrLoadValidatorsByName(
@@ -101,10 +118,12 @@ TF_REGISTRY_FUNCTION(UsdValidationRegistry)
         TF_AXIOM(!m.IsClean());
     }
     {
+        // One of the contained validators is invalid.
         const TfToken suiteName("testValidationPlugin:FailedValidatorSuite2");
         const std::vector<const UsdValidationValidator *> containedValidators
-            = registry.GetOrLoadValidatorsByName(
-                { TfToken("testValidationPlugin:TestValidator2") });
+            = { registry.GetOrLoadValidatorByName(
+                    TfToken("testValidationPlugin:TestValidator2")),
+                nullptr };
         TfErrorMark m;
         registry.RegisterPluginValidatorSuite(suiteName, containedValidators);
         TF_AXIOM(!m.IsClean());
@@ -156,14 +175,15 @@ TestUsdValidationRegistry()
         UsdValidationValidatorMetadataVector metadata
             = registry.GetValidatorMetadataForSchemaType(
                 TfToken("SomePrimType"));
-        TF_AXIOM(metadata.size() == 4);
+        // FailedValidatorSuite is not included, as a suite which provides
+        // schemaTypes is skipped when parsing the plugInfo.
+        TF_AXIOM(metadata.size() == 3);
         TfTokenVector expectedValue(
             { TfToken("testValidationPlugin:FailedValidator"),
-              TfToken("testValidationPlugin:FailedValidatorSuite"),
               TfToken("testValidationPlugin:TestValidator2"),
               TfToken("testValidationPlugin:TestValidator3") });
         TF_AXIOM(TfTokenVector({ metadata[0].name, metadata[1].name,
-                                 metadata[2].name, metadata[3].name })
+                                 metadata[2].name })
                  == expectedValue);
     }
     {
@@ -177,6 +197,45 @@ TestUsdValidationRegistry()
                  == expectedValue);
         TF_AXIOM(!metadata[0].isSuite);
         TF_AXIOM(!metadata[1].isSuite);
+    }
+    {
+        // TestValidator2 has both SomePrimType and SomeAPISchema, but is
+        // returned once.
+        TF_AXIOM(_GetUniqueValidatorNames(
+                     registry.GetValidatorMetadataForSchemaTypes(
+                         { TfToken("SomePrimType"), TfToken("SomeAPISchema") }))
+                 == std::set<TfToken>(
+                     { TfToken("testValidationPlugin:FailedValidator"),
+                       TfToken("testValidationPlugin:TestValidator2"),
+                       TfToken("testValidationPlugin:TestValidator3") }));
+    }
+    {
+        // Querying the same keyword twice, or keywords shared by the same
+        // validators, returns each validator once.
+        const std::set<TfToken> includedInAll = _GetUniqueValidatorNames(
+            registry.GetValidatorMetadataForKeyword(TfToken("IncludedInAll")));
+        TF_AXIOM(!includedInAll.empty());
+        TF_AXIOM(_GetUniqueValidatorNames(
+                     registry.GetValidatorMetadataForKeywords(
+                         { TfToken("IncludedInAll"),
+                           TfToken("IncludedInAll") }))
+                 == includedInAll);
+        TF_AXIOM(_GetUniqueValidatorNames(
+                     registry.GetValidatorMetadataForKeywords(
+                         { TfToken("IncludedInAll"), TfToken("SomeKeyword1") }))
+                 == includedInAll);
+    }
+    {
+        // Querying the same plugin twice returns each validator once.
+        const std::set<TfToken> pluginValidators = _GetUniqueValidatorNames(
+            registry.GetValidatorMetadataForPlugin(
+                TfToken("testValidationPlugin")));
+        TF_AXIOM(!pluginValidators.empty());
+        TF_AXIOM(_GetUniqueValidatorNames(
+                     registry.GetValidatorMetadataForPlugins(
+                         { TfToken("testValidationPlugin"),
+                           TfToken("testValidationPlugin") }))
+                 == pluginValidators);
     }
     {
         const UsdValidationValidatorSuite *suiteValidator
@@ -225,13 +284,113 @@ TestUsdValidationRegistry()
         TF_AXIOM(!validator);
     }
     {
-        // Try to retrieve a failed validator suite (stageTask for a contained
-        // validator but suite provides schemaTypes
-        const UsdValidationValidatorSuite *suite
-            = registry.GetOrLoadValidatorSuiteByName(
-                TfToken("testValidationPlugin:FailedValidatorSuite"));
-        TF_AXIOM(!suite);
+        // Try to retrieve failed validator suites (suite provides schemaTypes,
+        // and suite with an invalid contained validator)
+        TF_AXIOM(!registry.GetOrLoadValidatorSuiteByName(
+            TfToken("testValidationPlugin:FailedValidatorSuite")));
+        UsdValidationValidatorMetadata metadata;
+        TF_AXIOM(!registry.GetValidatorMetadata(
+            TfToken("testValidationPlugin:FailedValidatorSuite"), &metadata));
+        TF_AXIOM(!registry.GetOrLoadValidatorSuiteByName(
+            TfToken("testValidationPlugin:FailedValidatorSuite2")));
     }
+    {
+        // A suite registered with schemaTypes metadata is not registered.
+        UsdValidationValidatorMetadata metadata;
+        metadata.name = TfToken("SuiteWithSchemaTypes");
+        metadata.doc = "Won't get registered, as a suite cannot provide "
+                       "schemaTypes";
+        metadata.schemaTypes = { TfToken("SomePrimType") };
+        metadata.isSuite = true;
+        TfErrorMark m;
+        registry.RegisterValidatorSuite(
+            metadata,
+            registry.GetOrLoadValidatorsByName(
+                { TfToken("testValidationPlugin:TestValidator2") }));
+        TF_AXIOM(!m.IsClean());
+        TF_AXIOM(!registry.HasValidatorSuite(metadata.name));
+    }
+    {
+        // A suite registered with an invalid contained validator is not
+        // registered.
+        UsdValidationValidatorMetadata metadata;
+        metadata.name = TfToken("SuiteWithInvalidValidator");
+        metadata.doc = "Won't get registered, as a contained validator is "
+                       "invalid";
+        metadata.isSuite = true;
+        TfErrorMark m;
+        registry.RegisterValidatorSuite(metadata, { nullptr });
+        TF_AXIOM(!m.IsClean());
+        TF_AXIOM(!registry.HasValidatorSuite(metadata.name));
+    }
+}
+
+void TestUsdValidationRegisterValidatorDynamicallyAndListener()
+{
+    // listen to new validators being registered, OnValidatorRegistered will
+    // check the name of the validator being registered.
+    struct TestListener : public TfWeakBase
+    {
+        void OnValidatorRegistered(
+            const UsdValidationNotice::DidRegisterValidator &notice) {
+            const UsdValidationValidator *const validator
+                = notice.GetValidator();
+            TF_AXIOM(validator);
+            const UsdValidationValidatorMetadata &metadata =
+                validator->GetMetadata();
+            TF_AXIOM(
+                metadata.name == TfToken("dynamicallyRegisteredValidator"));
+            receivedNoticeCount++;
+        }
+        void OnValidatorSuiteRegistered(
+            const UsdValidationNotice::DidRegisterValidatorSuite &notice) {
+            const UsdValidationValidatorSuite *const suite
+                = notice.GetValidatorSuite();
+            TF_AXIOM(suite);
+            const UsdValidationValidatorMetadata &metadata = 
+                suite->GetMetadata();
+            TF_AXIOM(
+                metadata.name == TfToken("dynamicallyRegisteredValidatorSuite"));
+            receivedNoticeCount++;
+        }
+
+        size_t receivedNoticeCount = 0;
+    };
+
+    TestListener listener;
+
+    TfNotice::Register(
+        TfCreateWeakPtr(&listener), 
+        &TestListener::OnValidatorRegistered);
+    TfNotice::Register(
+        TfCreateWeakPtr(&listener), 
+        &TestListener::OnValidatorSuiteRegistered);
+
+    UsdValidationRegistry &registry = UsdValidationRegistry::GetInstance();
+
+    {
+        UsdValidationValidatorMetadata metadata;
+        metadata.name = TfToken("dynamicallyRegisteredValidator");
+        metadata.doc = "dynamic validator: notice should be sent and received.";
+        registry.RegisterValidator(
+            metadata, [](
+                const UsdStagePtr &/*stage*/,
+                const UsdValidationTimeRange &/*timeRange*/) {
+                return UsdValidationErrorVector {};
+            });
+    }
+    TF_AXIOM(listener.receivedNoticeCount == 1);
+
+    {
+        UsdValidationValidatorMetadata metadata;
+        metadata.name = TfToken("dynamicallyRegisteredValidatorSuite");
+        metadata.isSuite = true;
+        metadata.doc = 
+            "dynamic validator suite: notice should be sent and received.";
+        registry.RegisterValidatorSuite(
+            metadata, {});
+    }
+    TF_AXIOM(listener.receivedNoticeCount == 2);
 }
 
 int
@@ -242,6 +401,7 @@ main()
     TF_AXIOM(!PlugRegistry::GetInstance().RegisterPlugins(testDir).empty());
 
     TestUsdValidationRegistry();
+    TestUsdValidationRegisterValidatorDynamicallyAndListener();
 
     printf("OK\n");
 }

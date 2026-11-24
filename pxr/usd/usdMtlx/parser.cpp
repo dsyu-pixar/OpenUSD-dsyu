@@ -7,10 +7,10 @@
 #include "pxr/pxr.h"
 #include "pxr/usd/usdMtlx/utils.h"
 #include "pxr/usd/usdMtlx/tokens.h"
-#include "pxr/usd/ndr/debugCodes.h"
-#include "pxr/usd/ndr/node.h"
-#include "pxr/usd/ndr/nodeDiscoveryResult.h"
-#include "pxr/usd/ndr/parserPlugin.h"
+#include "pxr/usd/sdr/debugCodes.h"
+#include "pxr/usd/sdr/shaderNode.h"
+#include "pxr/usd/sdr/shaderNodeDiscoveryResult.h"
+#include "pxr/usd/sdr/parserPlugin.h"
 #include "pxr/usd/sdf/types.h"
 #include "pxr/usd/sdr/shaderNode.h"
 #include "pxr/usd/sdr/shaderProperty.h"
@@ -32,17 +32,19 @@ namespace {
 TF_DEFINE_PRIVATE_TOKENS(
     _tokens,
 
-    ((discoveryType, "mtlx"))
-    ((sourceType, ""))
+    (mtlx)
 
+    (category)
     (defaultgeomprop)
     (defaultinput)
     (doc)
     ((enum_, "enum"))
     (enumvalues)
+    (mtlxNodeType)
     (nodecategory)
     (nodegroup)
     (target)
+    ((sdrTarget, "__SDR__target"))
     (uifolder)
     (uimax)
     (uimin)
@@ -77,7 +79,7 @@ static const std::string _GetPrimaryUvSetName()
 // holds the arguments.
 struct ShaderBuilder {
 public:
-    ShaderBuilder(const NdrNodeDiscoveryResult& discoveryResult)
+    ShaderBuilder(const SdrShaderNodeDiscoveryResult& discoveryResult)
         : discoveryResult(discoveryResult)
         , valid(true) 
         , metadata(discoveryResult.metadata) { }
@@ -86,21 +88,20 @@ public:
     explicit operator bool() const { return valid; }
     bool operator !() const        { return !valid; }
 
-    NdrNodeUniquePtr Build()
+    SdrShaderNodeUniquePtr Build()
     {
         TRACE_FUNCTION();
 
         if (!*this) {
-            return NdrParserPlugin::GetInvalidNode(discoveryResult);
+            return SdrParserPlugin::GetInvalidShaderNode(discoveryResult);
         }
 
-        return NdrNodeUniquePtr(
+        return SdrShaderNodeUniquePtr(
                 new SdrShaderNode(discoveryResult.identifier,
                                   discoveryResult.version,
                                   discoveryResult.name,
-                                  discoveryResult.family,
-                                  context,
-                                  discoveryResult.sourceType,
+                                  discoveryResult.function,
+                                  discoveryResult.shadingSystem,
                                   definitionURI,
                                   implementationURI,
                                   std::move(properties),
@@ -118,18 +119,17 @@ public:
     }
 
     void AddProperty(const mx::ConstTypedElementPtr& element,
-                     bool isOutput, NdrStringVec *primvars, 
+                     bool isOutput, SdrStringVec *primvars, 
                      bool addedTexcoordPrimvar=false);
 
 public:
-    const NdrNodeDiscoveryResult& discoveryResult;
+    const SdrShaderNodeDiscoveryResult& discoveryResult;
     bool valid;
 
     std::string definitionURI;
     std::string implementationURI;
-    TfToken context;
-    NdrPropertyUniquePtrVec properties;
-    NdrTokenMap metadata;
+    SdrShaderPropertyUniquePtrVec properties;
+    SdrTokenMap metadata;
 
 private:
     std::map<std::string, std::string> _propertyNameRemapping;
@@ -138,7 +138,7 @@ private:
 static
 void
 ParseMetadata(
-    NdrTokenMap& metadata,
+    SdrTokenMap& metadata,
     const TfToken& key,
     const mx::ConstElementPtr& element,
     const std::string& attribute)
@@ -154,7 +154,7 @@ ParseMetadata(
 static
 void
 ParseMetadata(
-    NdrTokenMap& metadata,
+    SdrTokenMap& metadata,
     const TfToken& key,
     const mx::ConstElementPtr& element)
 {
@@ -169,7 +169,7 @@ ParseMetadata(
 static
 void
 ParseOptions(
-    NdrOptionVec& options,
+    SdrOptionVec& options,
     const mx::ConstElementPtr& element
 )
 {
@@ -224,14 +224,14 @@ ParseOptions(
 void
 ShaderBuilder::AddProperty(
     const mx::ConstTypedElementPtr& element,
-    bool isOutput, NdrStringVec *primvars, bool addedTexcoordPrimvar)
+    bool isOutput, SdrStringVec *primvars, bool addedTexcoordPrimvar)
 {
     TRACE_FUNCTION();
 
     TfToken type;
-    NdrTokenMap metadata;
-    NdrTokenMap hints;
-    NdrOptionVec options;
+    SdrTokenMap metadata;
+    SdrTokenMap hints;
+    SdrOptionVec options;
     VtValue defaultValue;
 
     const auto& mtlxType = element->getType();
@@ -288,7 +288,7 @@ ShaderBuilder::AddProperty(
     if (!isOutput) {
         const auto& target = element->getAttribute(_tokens->target);
         if (!target.empty()) {
-            metadata.emplace(SdrPropertyMetadata->Target, target);
+            metadata.emplace(_tokens->sdrTarget, target);
         }
     }
 
@@ -455,20 +455,25 @@ ParseElement(ShaderBuilder* builder, const mx::ConstNodeDefPtr& nodeDef)
 
     // Build the basic shader node info. We are filling in implementationURI
     // as a placeholder - it should get set to a more acccurate value by caller.
-    builder->context           = context;
     builder->definitionURI     = UsdMtlxGetSourceURI(nodeDef);
     builder->implementationURI = builder->definitionURI;
 
     // Metadata
+    builder->metadata[SdrNodeMetadata->Context] = context;
     builder->metadata[SdrNodeMetadata->Label] = nodeDef->getNodeString();
-    builder->metadata[SdrNodeMetadata->Category] = nodeDef->getType();
+
+    // NOTE: Category will be removed in an upcoming release in favor of mtlx
+    // custom metadata "mtlxNodeType"
+    builder->metadata[_tokens->category] = nodeDef->getType();
+    builder->metadata[_tokens->mtlxNodeType] = nodeDef->getType();
+
     ParseMetadata(builder, SdrNodeMetadata->Help, nodeDef, _tokens->doc);
-    ParseMetadata(builder, SdrNodeMetadata->Target, nodeDef, _tokens->target);
+    ParseMetadata(builder, _tokens->sdrTarget, nodeDef, _tokens->target);
     ParseMetadata(builder, SdrNodeMetadata->Role, nodeDef, _tokens->nodegroup);
 
     // XXX -- version
 
-    NdrStringVec primvars;
+    SdrStringVec primvars;
 
     // If the nodeDef name starts with ND_geompropvalue, it's a primvar reader
     // node and we want to add $geomprop to the list of referenced primvars.
@@ -543,26 +548,29 @@ ParseElement(ShaderBuilder* builder, const mx::ConstNodeDefPtr& nodeDef)
         builder->AddProperty(mtlxOutput, true, nullptr);
     }
 
-    builder->metadata[SdrNodeMetadata->Primvars] =
-        TfStringJoin(primvars.begin(), primvars.end(), "|");
+    const std::string primvarsStr = TfStringJoin(primvars.begin(), 
+                                                 primvars.end(), "|");
+    if (!primvarsStr.empty()) {
+        builder->metadata[SdrNodeMetadata->Primvars] = primvarsStr;
+    }
 }
 
 } // anonymous namespace
 
 /// Parses nodes in MaterialX files.
-class UsdMtlxParserPlugin : public NdrParserPlugin {
+class UsdMtlxParserPlugin : public SdrParserPlugin {
 public:
     UsdMtlxParserPlugin() = default;
     ~UsdMtlxParserPlugin() override = default;
 
-    NdrNodeUniquePtr Parse(
-        const NdrNodeDiscoveryResult& discoveryResult) override;
-    const NdrTokenVec& GetDiscoveryTypes() const override;
-    const TfToken& GetSourceType() const override;
+    SdrShaderNodeUniquePtr ParseShaderNode(
+        const SdrShaderNodeDiscoveryResult& discoveryResult) override;
+    const SdrTokenVec& GetDiscoveryTypes() const override;
+    const TfToken& GetShadingSystem() const override;
 };
 
-NdrNodeUniquePtr
-UsdMtlxParserPlugin::Parse(const NdrNodeDiscoveryResult& discoveryResult)
+SdrShaderNodeUniquePtr
+UsdMtlxParserPlugin::ParseShaderNode(const SdrShaderNodeDiscoveryResult& discoveryResult)
 {
     TRACE_FUNCTION();
 
@@ -573,53 +581,70 @@ UsdMtlxParserPlugin::Parse(const NdrNodeDiscoveryResult& discoveryResult)
             UsdMtlxGetDocument(discoveryResult.resolvedUri == "mtlx"
                             ? "" : discoveryResult.resolvedUri);
         if (!TF_VERIFY(document)) {
-            return GetInvalidNode(discoveryResult);
+            return GetInvalidShaderNode(discoveryResult);
         }
     } else if (!discoveryResult.sourceCode.empty()) {
         document = UsdMtlxGetDocumentFromString(discoveryResult.sourceCode);
         if (!document) {
             TF_WARN("Invalid mtlx source code.");
-            return GetInvalidNode(discoveryResult);
+            return GetInvalidShaderNode(discoveryResult);
         }
     } else {
-        TF_WARN("Invalid NdrNodeDiscoveryResult for identifier '%s': both "
+        TF_WARN("Invalid SdrShaderNodeDiscoveryResult for identifier '%s': both "
             "resolvedUri and sourceCode fields are empty.", 
             discoveryResult.identifier.GetText());
-        return GetInvalidNode(discoveryResult);
+        return GetInvalidShaderNode(discoveryResult);
     }
 
+    SdrShaderNodeDiscoveryResult newDiscovery = discoveryResult;
     auto nodeDef = document->getNodeDef(discoveryResult.identifier);
-    if (!nodeDef) {
+    if (!nodeDef && discoveryResult.subIdentifier.IsEmpty()) {
         TF_WARN("Invalid MaterialX NodeDef; unknown node name ' %s '",
             discoveryResult.identifier.GetText());
-        return GetInvalidNode(discoveryResult);
+        return GetInvalidShaderNode(discoveryResult);
     }
 
-    ShaderBuilder builder(discoveryResult);
+    // If a custom node was defined locally it would have specified the nodeDef 
+    // name as the subIdentifier.
+    if (!discoveryResult.subIdentifier.IsEmpty()) {
+        nodeDef = document->getNodeDef(discoveryResult.subIdentifier);
+        if (!nodeDef) {
+            TF_WARN("Invalid MaterialX NodeDef; unknown node name ' %s '",
+                discoveryResult.subIdentifier.GetText());
+            return GetInvalidShaderNode(discoveryResult);
+        }
+        // Pass the nodeDef name (subIdentifier) through the metadata
+        SdrTokenMap metadataMap;
+        metadataMap[SdrNodeMetadata->ImplementationName] =
+            discoveryResult.subIdentifier;
+        newDiscovery.metadata = metadataMap;
+    }
+
+    ShaderBuilder builder(newDiscovery);
     ParseElement(&builder, nodeDef);
 
     return builder.Build();
 }
 
-const NdrTokenVec&
+const SdrTokenVec&
 UsdMtlxParserPlugin::GetDiscoveryTypes() const
 {
     TRACE_FUNCTION();
 
-    static const NdrTokenVec discoveryTypes = {
-        _tokens->discoveryType
+    static const SdrTokenVec discoveryTypes = {
+        _tokens->mtlx
     };
     return discoveryTypes;
 }
 
 const TfToken&
-UsdMtlxParserPlugin::GetSourceType() const
+UsdMtlxParserPlugin::GetShadingSystem() const
 {
     TRACE_FUNCTION();
 
-    return _tokens->sourceType;
+    return _tokens->mtlx;
 }
 
-NDR_REGISTER_PARSER_PLUGIN(UsdMtlxParserPlugin)
+SDR_REGISTER_PARSER_PLUGIN(UsdMtlxParserPlugin)
 
 PXR_NAMESPACE_CLOSE_SCOPE

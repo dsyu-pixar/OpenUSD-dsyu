@@ -12,6 +12,7 @@
    :caption: Learn
 
    intro
+   intro_to_openexec
    Terms and Concepts <glossary>
    Tutorials <tut_usd_tutorials>
    dl_downloads
@@ -23,10 +24,13 @@
    :maxdepth: 1
 
    Collections and Patterns <user_guides/collections_and_patterns>
+   Color <user_guides/color_user_guide>
    Namespace Editing <user_guides/namespace_editing>
    Rendering with USD <user_guides/render_user_guide>
-   USD Variable Expressions <user_guides/variable_expressions>
+   Primvars <user_guides/primvars>
    Schema Domains <user_guides/schemas/index>
+   Time and Animated Values <user_guides/time_and_animated_values.rst>
+   Variable Expressions <user_guides/variable_expressions>
 
 .. toctree::
    :hidden:
@@ -48,6 +52,7 @@
 
    Source Code @ GitHub <https://github.com/PixarAnimationStudios/OpenUSD>
    OpenUSD Forum <https://forum.openusd.org>
+   Slack Channels <slack_channels>
    Contributing <contributing_to_usd>
    Contributors <contributors>
    Release Schedule <release_schedule>

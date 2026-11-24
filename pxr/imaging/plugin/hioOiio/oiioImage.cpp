@@ -33,7 +33,7 @@ ARCH_PRAGMA_POP
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-OIIO_NAMESPACE_USING
+using namespace OIIO;
 
 // _ioProxySupportedExtensions is a list of hardcoded file extensions that
 // support ioProxy. Although OIIO has an api call for checking whether or
@@ -465,6 +465,12 @@ HioOIIO_ExtractCustomMetadata(
 bool
 HioOIIO_Image::GetMetadata(TfToken const & key, VtValue * value) const
 {
+    // Expose tile dimensions under "tiles" to match EXR convention.
+    if (key == "tiles" && _imagespec.tile_width > 0 && _imagespec.tile_height > 0) {
+        *value = VtValue(GfVec2i(_imagespec.tile_width, _imagespec.tile_height));
+        return true;
+    }
+
     VtValue result = _FindAttribute(_imagespec, key.GetString());
     if (!result.IsEmpty()) {
         *value = result;
@@ -617,9 +623,11 @@ HioOIIO_Image::_OpenForReading(std::string const & filename, int subimage,
         return false;
     }
 
-    if (!imageInput->seek_subimage(subimage, mip, _imagespec)) {
+    if (!imageInput->seek_subimage(subimage, mip)) {
         return false;
     }
+
+    _imagespec = imageInput->spec();
 
     return true;
 }
@@ -687,8 +695,7 @@ HioOIIO_Image::ReadCropped(int const cropTop,
     }
 
     //// seek subimage
-    ImageSpec spec = imageInput->spec();
-    if (!imageInput->seek_subimage(_subimage, _miplevel, spec)){
+    if (!imageInput->seek_subimage(_subimage, _miplevel)){
         imageInput->close();
         TF_CODING_ERROR("Unable to seek subimage");
         return false;
@@ -699,14 +706,16 @@ HioOIIO_Image::ReadCropped(int const cropTop,
     // may overflow INT_MAX, which can be less than SIZE_MAX.
     size_t strideLength = imageInput->spec().width *
                           imageInput->spec().pixel_bytes();
-    size_t readStride = (storage.flipped) ?
-                        (-strideLength) : (strideLength);
     size_t size = imageInput->spec().height * strideLength;
 
     std::unique_ptr<uint8_t[]>pixelData(new uint8_t[size]);
     unsigned char *pixels = pixelData.get();
     void *start = (storage.flipped)?
                   (pixels + size - strideLength) : (pixels);
+    stride_t ystride = strideLength;
+    if (storage.flipped) {
+        ystride = -ystride;
+    }
 
     // Read Image into pixels, flipping upon load so that
     // origin is at lower left corner
@@ -724,7 +733,7 @@ HioOIIO_Image::ReadCropped(int const cropTop,
         format,
         start,
         AutoStride,
-        readStride,
+        ystride,
         AutoStride);
     if (!res)
     {
@@ -810,7 +819,7 @@ HioOIIO_Image::Write(StorageSpec const & storage,
     }
 
     // Read from storage
-    ImageBuf src(_filename, spec, storage.data);
+    ImageBuf src(spec, storage.data);
     ImageBuf *image = &src;
 
     // Flip top-to-bottom

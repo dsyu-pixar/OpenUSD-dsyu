@@ -8,6 +8,8 @@
 #include "pxr/imaging/hdSt/renderDelegate.h"
 
 #include "pxr/imaging/hdSt/basisCurves.h"
+#include "pxr/imaging/hdSt/capsule.h"
+#include "pxr/imaging/hdSt/conicalFrustum.h"
 #include "pxr/imaging/hdSt/drawItemsCache.h"
 #include "pxr/imaging/hdSt/drawTarget.h"
 #include "pxr/imaging/hdSt/extComputation.h"
@@ -23,8 +25,9 @@
 #include "pxr/imaging/hdSt/renderPass.h"
 #include "pxr/imaging/hdSt/renderPassState.h"
 #include "pxr/imaging/hdSt/renderParam.h"
-#include "pxr/imaging/hdSt/tokens.h"
 #include "pxr/imaging/hdSt/resourceRegistry.h"
+#include "pxr/imaging/hdSt/sphere.h"
+#include "pxr/imaging/hdSt/tokens.h"
 #include "pxr/imaging/hdSt/volume.h"
 
 #include "pxr/imaging/hd/aov.h"
@@ -33,12 +36,13 @@
 #include "pxr/imaging/hd/extComputation.h"
 #include "pxr/imaging/hd/imageShader.h"
 #include "pxr/imaging/hd/perfLog.h"
+#include "pxr/imaging/hd/renderDelegateInfo.h"
+#include "pxr/imaging/hd/rendererCreateArgsSchema.h"
 #include "pxr/imaging/hd/tokens.h"
 
 #include "pxr/imaging/hgi/hgi.h"
 #include "pxr/imaging/hgi/tokens.h"
 
-#include "pxr/imaging/glf/diagnostic.h"
 #include "pxr/imaging/hio/glslfx.h"
 
 #include "pxr/base/tf/envSetting.h"
@@ -54,13 +58,39 @@ TF_DEFINE_ENV_SETTING(HD_ENABLE_GPU_TINY_PRIM_CULLING, false,
 TF_DEFINE_ENV_SETTING(HDST_MAX_LIGHTS, 16,
                       "Maximum number of lights to render with");
 
-const TfTokenVector HdStRenderDelegate::SUPPORTED_RPRIM_TYPES =
+TF_DEFINE_ENV_SETTING(HDST_DOME_LIGHT_CUBEMAP_TARGET_MEMORY_MB, 0,
+                      "Maximum memory target in MB for the cubemap computed "
+                      "from the latlong texture for the dome light.");
+
+TF_DEFINE_ENV_SETTING(HDST_ENABLE_NATIVE_IMPLICITS, false,
+    "Enable native rendering of all implicit surface primitives supported "
+    "by Storm (e.g., spheres, cones) instead of converting them to meshes "
+    "via the implicit surface scene index.");
+
+namespace {
+const TfTokenVector _SupportedRprimTypes()
 {
-    HdPrimTypeTokens->mesh,
-    HdPrimTypeTokens->basisCurves,
-    HdPrimTypeTokens->points,
-    HdPrimTypeTokens->volume
-};
+    TfTokenVector supportedTypes = {
+        HdPrimTypeTokens->mesh,
+        HdPrimTypeTokens->basisCurves,
+        HdPrimTypeTokens->points,
+        HdPrimTypeTokens->volume
+    };
+
+    if (HdStRenderDelegate::IsEnabledNativeImplicitsRenderingSupport()) {
+        supportedTypes.emplace_back(HdPrimTypeTokens->sphere);
+        supportedTypes.emplace_back(HdPrimTypeTokens->cone);
+        supportedTypes.emplace_back(HdPrimTypeTokens->cylinder);
+        supportedTypes.emplace_back(HdPrimTypeTokens->capsule);
+    }
+
+    return supportedTypes;
+}
+}
+
+const TfTokenVector
+HdStRenderDelegate::SUPPORTED_RPRIM_TYPES = _SupportedRprimTypes();
+
 
 const TfTokenVector HdStRenderDelegate::SUPPORTED_SPRIM_TYPES =
 {
@@ -95,14 +125,15 @@ namespace {
 // An entry is kept alive until the last shared_ptr to a resource
 // registry is dropped.
 //
-class _HgiToResourceRegistryMap final
+class _HgiToResourceRegistryMap final :
+    public std::enable_shared_from_this<_HgiToResourceRegistryMap>
 {
 public:
     // Map is a singleton.
     static _HgiToResourceRegistryMap &GetInstance()
     {
-        static _HgiToResourceRegistryMap instance;
-        return instance;
+        static auto instance = std::make_shared<_HgiToResourceRegistryMap>();
+        return *instance;
     }
 
     // Look-up resource registry by Hgi instance, create resource
@@ -112,45 +143,54 @@ public:
         std::lock_guard<std::mutex> guard(_mutex);
 
         // Previous entry exists, use it.
-        auto it = _map.find(hgi);
-        if (it != _map.end()) {
-            HdStResourceRegistryWeakPtr const &registry = it->second;
-            return HdStResourceRegistrySharedPtr(registry);
+        HdStResourceRegistryWeakPtr &registry = _map[hgi];
+        if (HdStResourceRegistrySharedPtr const result = registry.lock()) {
+            return result;
         }
 
         // Create resource registry, custom deleter to remove corresponding
         // entry from map.
-        HdStResourceRegistrySharedPtr const result(
+        HdStResourceRegistrySharedPtr result{
             new HdStResourceRegistry(hgi),
-            [this](HdStResourceRegistry *registry) {
-                this->_Destroy(registry); });
+            [maybeSelf = weak_from_this()](
+                HdStResourceRegistry * const registry) {
+                // If a resource registry has a static lifetime object as its
+                // root owner, then we can encounter a static lifetime ordering
+                // issue, since this registry map also has a static lifetime.
+                // It's possible that due to the unspecified ordering of static
+                // destruction, this map is destroyed before a registry, in
+                // which case calling _Unregister() would be undefined
+                // behaviour. To prevent this we use a weak ownership, and skip
+                // the call when the map is dead because it no longer matters.
+                if (const auto self = maybeSelf.lock()) {
+                    self->_Unregister(registry);
+                }
+                delete registry;
+            }
+        };
 
         // Insert into map.
-        _map.insert({hgi, result});
+        registry = result;
 
         // Also register with HdPerfLog.
-        //
-        HdPerfLog::GetInstance().AddResourceRegistry(result.get());
+        HD_PERF_ADD_RESOURCE_REGISTRY(result.get());
 
         return result;
     }
 
 private:
-    void _Destroy(HdStResourceRegistry * const registry)
+    void _Unregister(HdStResourceRegistry * const registry)
     {
         TRACE_FUNCTION();
 
         std::lock_guard<std::mutex> guard(_mutex);
 
-        HdPerfLog::GetInstance().RemoveResourceRegistry(registry);
-        
+        HD_PERF_REMOVE_RESOURCE_REGISTRY(registry);
+
         _map.erase(registry->GetHgi());
-        delete registry;
     }
 
     using _Map = std::unordered_map<Hgi*, HdStResourceRegistryWeakPtr>;
-
-    _HgiToResourceRegistryMap() = default;
 
     std::mutex _mutex;
     _Map _map;
@@ -169,8 +209,19 @@ HdStRenderDelegate::HdStRenderDelegate(HdRenderSettingsMap const& settingsMap)
     , _renderParam(std::make_unique<HdStRenderParam>())
     , _drawItemsCache(std::make_unique<HdSt_DrawItemsCache>())
 {
-    // Initialize the settings and settings descriptors.
-    _settingDescriptors = {
+    // Initialize the settings.
+    _PopulateDefaultSettings(
+        GetRenderSettingDescriptorsForPlugin());
+}
+
+const HdRenderSettingDescriptorList &
+HdStRenderDelegate::GetRenderSettingDescriptorsForPlugin()
+{
+    static const HdRenderSettingDescriptorList descriptors{
+        HdRenderSettingDescriptor{
+            "Default transparency mode for displayOpacity",
+            HdStRenderSettingsTokens->defaultTransparencyMode,
+            VtValue(HdStDefaultTransparencyModeTokens->screenDoor) },
         HdRenderSettingDescriptor{
             "Enable Tiny Prim Culling",
             HdStRenderSettingsTokens->enableTinyPrimCulling,
@@ -192,15 +243,28 @@ HdStRenderDelegate::HdStRenderDelegate(HdRenderSettingsMap const& settingsMap)
             "Maximum number of lights",
             HdStRenderSettingsTokens->maxLights,
             VtValue(int(TfGetEnvSetting(HDST_MAX_LIGHTS))) },
+        HdRenderSettingDescriptor{
+            "Dome light camera visibility",
+            HdRenderSettingsTokens->domeLightCameraVisibility,
+            VtValue(true) },
+        HdRenderSettingDescriptor{
+            "Maximum memory target, in MB, of calculated cubemap texture for "
+            "dome light",
+            HdStRenderSettingsTokens->domeLightCubemapTargetMemory,
+            VtValue(static_cast<unsigned int>(
+                TfGetEnvSetting(HDST_DOME_LIGHT_CUBEMAP_TARGET_MEMORY_MB))) },
+        HdRenderSettingDescriptor{
+            "Enable exposure compensation",
+            HdRenderSettingsTokens->enableExposureCompensation,
+            VtValue(true) }
     };
-
-    _PopulateDefaultSettings(_settingDescriptors);
+    return descriptors;
 }
 
 HdRenderSettingDescriptorList
 HdStRenderDelegate::GetRenderSettingDescriptors() const
 {
-    return _settingDescriptors;
+    return GetRenderSettingDescriptorsForPlugin();
 }
 
 VtDictionary 
@@ -221,6 +285,12 @@ HdStRenderDelegate::GetRenderStats() const
     }
 
     return ra;
+}
+
+bool
+HdStRenderDelegate::RequiresStormTasks() const
+{
+    return true;
 }
 
 HdStRenderDelegate::~HdStRenderDelegate() = default;
@@ -312,13 +382,13 @@ HdStRenderDelegate::GetDefaultAovDescriptor(TfToken const& name) const
     if (name == HdAovTokens->color) {
         return HdAovDescriptor(
                 HdFormatFloat16Vec4, colorDepthMSAA, VtValue(GfVec4f(0)));
+    } else if (HdAovHasDepthStencilSemantic(name)) {
+        return HdAovDescriptor(
+            HdFormatFloat32UInt8, colorDepthMSAA,
+            VtValue(HdDepthStencilType(1.0f, 0)));
     } else if (HdAovHasDepthSemantic(name)) {
         return HdAovDescriptor(
                 HdFormatFloat32, colorDepthMSAA, VtValue(1.0f));
-    } else if (HdAovHasDepthStencilSemantic(name)) {
-        return HdAovDescriptor(
-                HdFormatFloat32UInt8, colorDepthMSAA,
-                VtValue(HdDepthStencilType(1.0f, 0)));
     } else if (_AovHasIdSemantic(name)) {
         return HdAovDescriptor(
                 HdFormatInt32, colorDepthMSAA, VtValue(-1));
@@ -368,6 +438,14 @@ HdStRenderDelegate::CreateRprim(TfToken const& typeId,
         return new HdStPoints(rprimId);
     } else  if (typeId == HdPrimTypeTokens->volume) {
         return new HdStVolume(rprimId);
+    } else  if (typeId == HdPrimTypeTokens->sphere) {
+        return new HdStSphere(rprimId);
+    } else  if (typeId == HdPrimTypeTokens->cone) {
+        return new HdStConicalFrustum</*IsCone=*/true>(rprimId);
+    } else  if (typeId == HdPrimTypeTokens->cylinder) {
+        return new HdStConicalFrustum</*IsCone=*/false>(rprimId);
+    } else  if (typeId == HdPrimTypeTokens->capsule) {
+        return new HdStCapsule(rprimId);
     } else {
         TF_CODING_ERROR("Unknown Rprim Type %s", typeId.GetText());
     }
@@ -480,6 +558,18 @@ HdStRenderDelegate::DestroyBprim(HdBprim *bPrim)
     delete bPrim;
 }
 
+void
+HdStRenderDelegate::BeginExecute()
+{
+    GetHgi()->StartFrame();
+}
+
+void
+HdStRenderDelegate::EndExecute()
+{
+    GetHgi()->EndFrame();
+}
+
 HdSprim *
 HdStRenderDelegate::_CreateFallbackMaterialPrim()
 {
@@ -499,8 +589,7 @@ void
 HdStRenderDelegate::CommitResources(HdChangeTracker *tracker)
 {
     TF_UNUSED(tracker);
-    GLF_GROUP_FUNCTION();
-    
+
     _ApplyTextureSettings();
 
     // --------------------------------------------------------------------- //
@@ -528,36 +617,86 @@ HdStRenderDelegate::CommitResources(HdChangeTracker *tracker)
     _drawItemsCache->GarbageCollect();
 }
 
-bool
-HdStRenderDelegate::IsSupported()
+static
+bool _GetGpuEnabled(const HdRendererCreateArgsSchema &args)
 {
-    return Hgi::IsSupported();
+    HdBoolDataSourceHandle const ds = args.GetGpuEnabled();
+    if (!ds) {
+        return true;
+    }
+    return ds->GetTypedValue(0.0f);
+}
+
+static
+Hgi * _GetHgi(const HdRendererCreateArgsSchema &args)
+{
+    auto ds =
+        HdTypedSampledDataSource<Hgi*>::Cast(
+            args.GetDrivers().Get(HdRendererCreateArgsSchemaTokens->hgi));
+    if (!ds) {
+        return nullptr;
+    }
+    return ds->GetTypedValue(0.0f);
+}
+
+static
+const char * _NullOrReasonWhyNotSupported(
+    const HdRendererCreateArgsSchema &rendererCreateArgs)
+{
+    if (!_GetGpuEnabled(rendererCreateArgs)) {
+        return "GPU not enabled";
+    }
+    if (Hgi * const hgi = _GetHgi(rendererCreateArgs)) {
+        if (hgi->IsBackendSupported()) {
+            return nullptr;
+        } else {
+            return "Given Hgi backend not supported";
+        }
+    } else {
+        // If invalid Hgi instance is provided, check support for platform default
+        // Hgi.
+        if (Hgi::IsSupported()) {
+            return nullptr;
+        } else {
+            return "Platform default Hgi not supported";
+        }
+    }
+}
+
+bool
+HdStRenderDelegate::IsSupported(
+    const HdRendererCreateArgsSchema &rendererCreateArgs,
+    std::string * const reasonWhyNot)
+{
+    if (const char * const result =
+                _NullOrReasonWhyNotSupported(rendererCreateArgs)) {
+        TF_DEBUG(HD_RENDERER_PLUGIN).Msg(
+            "Storm renderer not supported: %s.\n", result);
+        if (reasonWhyNot) {
+            *reasonWhyNot = result;
+        }
+        return false;
+    } else {
+        return true;
+    }
 }
 
 TfTokenVector
 HdStRenderDelegate::GetShaderSourceTypes() const
 {
-#ifdef PXR_MATERIALX_SUPPORT_ENABLED
-    return {HioGlslfxTokens->glslfx, _tokens->mtlx};
-#else
-    return {HioGlslfxTokens->glslfx};
-#endif
+    return GetRenderDelegateInfo().shaderSourceTypes;
 }
 
 TfTokenVector
 HdStRenderDelegate::GetMaterialRenderContexts() const
 {
-#ifdef PXR_MATERIALX_SUPPORT_ENABLED
-    return {HioGlslfxTokens->glslfx, _tokens->mtlx};
-#else
-    return {HioGlslfxTokens->glslfx};
-#endif
+    return GetRenderDelegateInfo().materialRenderContexts;
 }
 
 bool
 HdStRenderDelegate::IsPrimvarFilteringNeeded() const
 {
-    return true;
+    return GetRenderDelegateInfo().isPrimvarFilteringNeeded;
 }
 
 HdStDrawItemsCachePtr
@@ -583,6 +722,40 @@ HdStRenderDelegate::_ApplyTextureSettings()
 
     _resourceRegistry->SetMemoryRequestForTextureType(
         HdStTextureType::Field, 1048576 * memInMb);
+}
+
+static
+HdRenderDelegateInfo
+_RenderDelegateInfo()
+{
+    HdRenderDelegateInfo info;
+
+    info.materialBindingPurpose = HdTokens->preview;
+    info.materialRenderContexts = {
+        HioGlslfxTokens->glslfx
+#ifdef PXR_MATERIALX_SUPPORT_ENABLED
+        , _tokens->mtlx
+#endif
+    };
+
+    info.isPrimvarFilteringNeeded = true;
+    info.shaderSourceTypes = info.materialRenderContexts;
+    info.isCoordSysSupported = false;
+
+    return info;
+}
+
+const HdRenderDelegateInfo &
+HdStRenderDelegate::GetRenderDelegateInfo()
+{
+    static const HdRenderDelegateInfo info = _RenderDelegateInfo();
+    return info;
+}
+
+bool
+HdStRenderDelegate::IsEnabledNativeImplicitsRenderingSupport()
+{
+    return TfGetEnvSetting(HDST_ENABLE_NATIVE_IMPLICITS);
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE

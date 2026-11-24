@@ -40,6 +40,7 @@ pxr_library(hgi
         blitCmdsOps.h
         enums.h
         handle.h
+        version.h
 )
 
 if (${PXR_HEADLESS_TEST_MODE})
@@ -52,16 +53,13 @@ if (APPLE)
     return()
 endif()
 
-if (WIN32)
-    message(STATUS "Skipping ${PXR_PACKAGE} tests because they are currently unsupported on Windows")
-    return()
+if (${PXR_BUILD_GPU_SUPPORT})
+    pxr_build_test(testHgiCommand
+        LIBRARIES
+            hgi
+            garch
+            tf
+        CPPFILES
+            testenv/testHgiCommand.cpp
+    )
 endif()
-
-pxr_build_test(testHgiCommand
-    LIBRARIES
-        hgi
-        garch
-        tf
-    CPPFILES
-        testenv/testHgiCommand.cpp
-)

@@ -12,94 +12,9 @@ class TestSdfRelocates(unittest.TestCase):
 
     # Create a new layer with a single root prim /Root
     def _CreateTestLayer(self) :
-        layer = Sdf.Layer.CreateAnonymous("test")
+        layer = Sdf.Layer.CreateAnonymous(".usda")
         prim = Sdf.PrimSpec(layer, 'Root', Sdf.SpecifierDef, 'Scope')
         return layer    
-
-    # Test editing relocates on a real prim. A prim's relocates property is
-    # a proxy object that simulates a python dictionary and causes direct edits
-    # on the layer when it is edited.
-    def test_PrimRelocates(self):
-        # Use relative paths to the /Root prim.
-        inputRelocates = { 
-             "source2" : "target2", 
-             "source1" : "target1", 
-             "source3" : "target3"}
-
-        # Relocates are written as prim metadata when the layer is written.
-        expectedWriteLayerContents = '''#sdf 1.4.32
-
-def Scope "Root" (
-    relocates = {
-        <source1>: <target1>, 
-        <source2>: <target2>, 
-        <source3>: <target3>
-    }
-)
-{
-}
-
-'''
-
-        # Test editing relocates on the /Root prim
-        layer = self._CreateTestLayer()
-        prim = layer.GetPrimAtPath("/Root")
-
-        # Prim starts with no relocates
-        self.assertEqual(len(prim.relocates), 0)
-        self.assertEqual(dict(prim.relocates), {})
-
-        # Set relocates
-        prim.relocates = inputRelocates
-        self.assertEqual(len(prim.relocates), 3)
-        self.assertEqual(dict(prim.relocates), 
-            {Sdf.Path('/Root/source1'): Sdf.Path('/Root/target1'), 
-            Sdf.Path('/Root/source2'): Sdf.Path('/Root/target2'), 
-            Sdf.Path('/Root/source3'): Sdf.Path('/Root/target3')})
-
-        # Delete relocate
-        del prim.relocates["/Root/source2"]
-        self.assertEqual(len(prim.relocates), 2)
-        self.assertFalse(("/Root/source2", "/Root/target2") in prim.relocates.items())
-        self.assertEqual(dict(prim.relocates), 
-            {Sdf.Path('/Root/source1'): Sdf.Path('/Root/target1'), 
-            Sdf.Path('/Root/source3'): Sdf.Path('/Root/target3')})
-
-        # Set a single new relocate
-        prim.relocates["/Root/source4"] = '/Root/target4'
-        self.assertEqual(len(prim.relocates), 3)
-        self.assertTrue(("/Root/source4", "/Root/target4") in prim.relocates.items())
-        self.assertEqual(dict(prim.relocates), 
-            {Sdf.Path('/Root/source1'): Sdf.Path('/Root/target1'), 
-            Sdf.Path('/Root/source3'): Sdf.Path('/Root/target3'),
-            Sdf.Path('/Root/source4'): Sdf.Path('/Root/target4')})
-
-        # Overwrite an existing relocate
-        prim.relocates["/Root/source1"] = '/Root/targetFoo'
-        self.assertEqual(len(prim.relocates), 3)
-        self.assertFalse(("/Root/source1", "/Root/target1") in prim.relocates.items())
-        self.assertTrue(("/Root/source1", "/Root/targetFoo") in prim.relocates.items())
-        self.assertEqual(dict(prim.relocates), 
-            {Sdf.Path('/Root/source1'): Sdf.Path('/Root/targetFoo'), 
-            Sdf.Path('/Root/source3'): Sdf.Path('/Root/target3'),
-            Sdf.Path('/Root/source4'): Sdf.Path('/Root/target4')})
-
-        # Clear all relocates
-        prim.relocates.clear()
-        self.assertEqual(len(prim.relocates), 0)
-        self.assertEqual(dict(prim.relocates), {})
-
-        # Set relocates using OrderedDict
-        from collections import OrderedDict
-        prim.relocates = OrderedDict(inputRelocates)
-        self.assertEqual(len(prim.relocates), 3)
-        self.assertEqual(dict(prim.relocates), 
-            {Sdf.Path('/Root/source1'): Sdf.Path('/Root/target1'), 
-            Sdf.Path('/Root/source2'): Sdf.Path('/Root/target2'), 
-            Sdf.Path('/Root/source3'): Sdf.Path('/Root/target3')})
-
-        # Write layer
-        self.assertEqual(layer.ExportToString(), expectedWriteLayerContents)
 
     # Test editing relocates in layer metadata. The relocates property on layer
     # is NOT a proxy object and is just a simple read/write property. Any edits
@@ -111,7 +26,7 @@ def Scope "Root" (
         # Test editing relocates directly on the layer
         layer = self._CreateTestLayer()
 
-        # Prim starts with no relocates
+        # Layer starts with no relocates
         self.assertEqual(layer.relocates, [])
         self.assertFalse(layer.HasRelocates())
 
@@ -131,7 +46,7 @@ def Scope "Root" (
 
         # Write layer; relocates are written as layer metadata when the layer 
         # is written.
-        self.assertEqual(layer.ExportToString(), '''#sdf 1.4.32
+        self.assertEqual(layer.ExportToString(), '''#usda 1.0
 (
     relocates = {
         </Root/source2>: </Root/target2>, 
@@ -214,17 +129,13 @@ def Scope "Root"
         self.assertEqual(layer.relocates,
             [(Sdf.Path("/Root/source1"), Sdf.Path("/Root/target1")), 
              (Sdf.Path("/Root/source2"), Sdf.Path("/Root/target2"))])
-        
-        # Verify that the relocates property on the pseudoroot is invalid as the
-        # proxy map only applies to real prims.
-        self.assertFalse(pseudoRoot.relocates)
 
     # Test that an explicitly authored empty layer relocates gets written out as
     # empty data in the layer
     def test_EmptyRelocatesRoundtrip(self):
         # Create and new layer with an explicit empty relocates in the layer 
         # metadata.
-        layerContents = '''#sdf 1.4.32
+        layerContents = '''#usda 1.0
 (
     relocates = {
     }
@@ -235,7 +146,7 @@ def Scope "Root"
 }
 
 '''
-        layer = Sdf.Layer.CreateAnonymous("test")
+        layer = Sdf.Layer.CreateAnonymous(".usda")
         layer.ImportFromString(layerContents)
 
         # The pseudoroot will have a layer relocates field and the returned
@@ -259,7 +170,7 @@ def Scope "Root"
         # Writing the layer will no longer write the relocates as the field is
         # no longer present.
         self.assertEqual(layer.ExportToString(), 
-'''#sdf 1.4.32
+'''#usda 1.0
 
 def Scope "Root"
 {

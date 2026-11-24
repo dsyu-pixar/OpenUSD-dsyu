@@ -382,10 +382,16 @@ public:
     /// Returns whether this prim spec will be hidden in browsers.
     ///
     /// The default value for hidden is false.
+    ///
+    /// \deprecated
+    /// See UsdUIObjectHints.
     SDF_API
     bool GetHidden() const;
 
     /// Sets whether this prim spec will be hidden in browsers.
+    ///
+    /// \deprecated
+    /// See UsdUIObjectHints.
     SDF_API
     void SetHidden( bool value );
 
@@ -406,6 +412,33 @@ public:
     /// Remove the kind opinion from this prim spec if there is one.
     SDF_API
     void ClearKind();
+
+    /// \name ClipSets
+    /// @{
+
+    /// Returns a proxy for the prim's value clip sets.
+    ///
+    /// Clip sets for this prim may be modified through the proxy.
+    SDF_API
+    SdfNameEditorProxy GetClipSetsList() const;
+
+    /// Returns true if this prim has value clip sets set.
+    SDF_API
+    bool HasClipSets() const;
+
+    /// Returns the value clips for this prim.
+    ///
+    /// The default value for value clips is an empty dictionary.
+    SDF_API
+    SdfDictionaryProxy GetClips() const;
+
+    /// Sets the value clips for this prim spec.
+    ///
+    /// If \p value is empty, then this removes the setting
+    /// for the given value clips \p name.
+    void SetClips(const std::string& name, const VtValue& value);
+
+    /// @}
 
     /// Returns the symmetry function for this prim.
     ///
@@ -684,39 +717,6 @@ public:
     /// the variant selection to empty.
     SDF_API
     void BlockVariantSelection(const std::string& variantSetName);
-
-    /// @}
-    /// \name Relocates
-    /// @{
-
-    /// Get an editing proxy for the map of namespace relocations
-    /// specified on this prim.
-    ///
-    /// The map of namespace relocation paths is editable in-place via
-    /// this editing proxy.  Individual source-target pairs can be added,
-    /// removed, or altered using common map operations.
-    ///
-    /// The map is organized as target \c SdfPath indexed by source \c SdfPath.
-    /// Key and value paths are stored as absolute regardless of how they're
-    /// added.
-    SDF_API
-    SdfRelocatesMapProxy GetRelocates() const;
-    
-    /// Set the entire map of namespace relocations specified on this prim.
-    /// Use the editing proxy for modifying single paths in the map.
-    SDF_API
-    void SetRelocates(const SdfRelocatesMap& newMap);
-
-    /// Returns true if this prim has any relocates opinion, including
-    /// that there should be no relocates (i.e. an empty map).  An empty
-    /// map (no relocates) does not mean the same thing as a missing map
-    /// (no opinion).
-    SDF_API
-    bool HasRelocates() const;
-    
-    /// Clears the relocates opinion for this prim.
-    SDF_API
-    void ClearRelocates();
 
     /// @}
 

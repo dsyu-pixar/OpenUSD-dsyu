@@ -109,12 +109,12 @@ bool
 {% for attrName in cls.attrOrder %}
 {% set attr = cls.attrs[attrName] %}
         UsdSchemaRegistry::GetMultipleApplyNameTemplateBaseName(
-            {{ tokensPrefix }}Tokens->{{ attr.name }}),
+            {{ tokensPrefix }}Tokens->{{ attr.tokenId }}),
 {% endfor %}
 {% for relName in cls.relOrder %}
 {% set rel = cls.rels[relName] %}
         UsdSchemaRegistry::GetMultipleApplyNameTemplateBaseName(
-            {{ tokensPrefix }}Tokens->{{ rel.name }}),
+            {{ tokensPrefix }}Tokens->{{ rel.tokenId }}),
 {% endfor %}
     };
 
@@ -245,9 +245,9 @@ UsdAttribute
     return GetPrim().GetAttribute(
         _GetNamespacedPropertyName(
             GetName(),
-            {{ tokensPrefix }}Tokens->{{ attr.name }}));
+            {{ tokensPrefix }}Tokens->{{ attr.tokenId }}));
 {% else %}
-    return GetPrim().GetAttribute({{ tokensPrefix }}Tokens->{{ attr.name }});
+    return GetPrim().GetAttribute({{ tokensPrefix }}Tokens->{{ attr.tokenId }});
 {% endif %}
 }
 {% endif %}
@@ -259,9 +259,9 @@ UsdAttribute
     return UsdSchemaBase::_CreateAttr(
                        _GetNamespacedPropertyName(
                             GetName(),
-                           {{ tokensPrefix }}Tokens->{{ attr.name }}),
+                           {{ tokensPrefix }}Tokens->{{ attr.tokenId }}),
 {% else %}
-    return UsdSchemaBase::_CreateAttr({{ tokensPrefix }}Tokens->{{ attr.name }},
+    return UsdSchemaBase::_CreateAttr({{ tokensPrefix }}Tokens->{{ attr.tokenId }},
 {% endif %}
                        {{ attr.usdType }},
                        /* custom = */ {{ "true" if attr.custom else "false" }},
@@ -284,9 +284,9 @@ UsdRelationship
     return GetPrim().GetRelationship(
         _GetNamespacedPropertyName(
             GetName(),
-            {{ tokensPrefix }}Tokens->{{ rel.name }}));
+            {{ tokensPrefix }}Tokens->{{ rel.tokenId }}));
 {% else %}
-    return GetPrim().GetRelationship({{ tokensPrefix }}Tokens->{{ rel.name }});
+    return GetPrim().GetRelationship({{ tokensPrefix }}Tokens->{{ rel.tokenId }});
 {% endif %}
 }
 {% endif %}
@@ -298,9 +298,9 @@ UsdRelationship
     return GetPrim().CreateRelationship(
                        _GetNamespacedPropertyName(
                            GetName(),
-                           {{ tokensPrefix }}Tokens->{{ rel.name }}),
+                           {{ tokensPrefix }}Tokens->{{ rel.tokenId }}),
 {% else %}
-    return GetPrim().CreateRelationship({{ tokensPrefix }}Tokens->{{rel.name}},
+    return GetPrim().CreateRelationship({{ tokensPrefix }}Tokens->{{rel.tokenId}},
 {% endif %}
                        /* custom = */ {{ "true" if rel.custom else "false" }});
 }
@@ -330,7 +330,7 @@ const TfTokenVector&
 {% for attrName in cls.attrOrder %}
 {% set attr = cls.attrs[attrName] %}
 {% if attr.apiName != '' %}
-        {{ tokensPrefix }}Tokens->{{ attr.name }},
+        {{ tokensPrefix }}Tokens->{{ attr.tokenId }},
 {% endif %}
 {% endfor %}
     };
@@ -370,6 +370,57 @@ TfTokenVector
 }
 
 {% endif %}
+{% for schema in appliedSchemas %}
+{% set schemaCls = classes[schema]%}
+{{ schemaCls.cppClassName }}
+{{ cls.cppClassName }}::{{ schema }}() const
+{
+    return {{ schemaCls.cppClassName }}(GetPrim());
+}
+
+{% for attrName in schemaCls.attrOrder %}
+{% set attr = schemaCls.attrs[attrName] %}
+{# Only emit Create/Get API and doxygen if apiName is not empty string. #}
+{% if attr.apiName != '' %}
+{% if attr.apiGet != "custom" %}
+UsdAttribute
+{{ cls.cppClassName }}::Get{{ Proper(attr.apiName) }}Attr() const
+{
+    return {{ schema }}().Get{{ Proper(attr.apiName) }}Attr();
+}
+{% endif %}
+
+UsdAttribute
+{{ cls.cppClassName }}::Create{{ Proper(attr.apiName) }}Attr(
+    VtValue const &defaultValue, bool writeSparsely) const
+{
+    return {{ schema }}().Create{{ Proper(attr.apiName) }}Attr(
+        defaultValue, writeSparsely);
+}
+
+{% endif %}
+{% endfor %}
+{% for relName in schemaCls.relOrder %}
+{% set rel = schemaCls.rels[relName] %}
+{# Only emit Create/Get API and doxygen if apiName is not empty string. #}
+{% if rel.apiName != '' %}
+{% if rel.apiGet != "custom" %}
+UsdRelationship
+{{ cls.cppClassName }}::Get{{ Proper(rel.apiName) }}Rel() const
+{
+    return {{ schema }}().Get{{ Proper(rel.apiName) }}Rel();
+}
+{% endif %}
+
+UsdRelationship
+{{ cls.cppClassName }}::Create{{ Proper(rel.apiName) }}Rel() const
+{
+    return {{ schema }}().Create{{ Proper(rel.apiName) }}Rel();
+}
+
+{% endif %}
+{% endfor %}
+{% endfor %}
 {% if useExportAPI %}
 {{ namespaceClose }}
 

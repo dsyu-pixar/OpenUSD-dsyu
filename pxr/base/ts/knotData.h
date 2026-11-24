@@ -55,7 +55,7 @@ PXR_NAMESPACE_OPEN_SCOPE
 //   Ts_Get[Typed]SplineData
 //   Knot -> proxy
 //   Knot -> _TypedData -> direct access
-//   TsDispatchToValueTypeTemplate
+//   TsDispatchToStorageValueTypeTemplate
 
 
 // Non-template base class for knot data.
@@ -66,7 +66,7 @@ public:
     // Typically used by Create(), but can be invoked directly for clients that
     // don't care about the value dimension, and instantiate this struct without
     // subclassing.
-    Ts_KnotData();
+    TS_API Ts_KnotData();
 
     // Creates an appropriately subtyped instance on the heap.
     static Ts_KnotData* Create(TfType valueType);
@@ -123,10 +123,14 @@ public:
     TsInterpMode nextInterp : 3;
 
     // The spline type this knot belongs to, or is intended for.
-    TsCurveType curveType : 2;
+    TsCurveType curveType : 2;  // deprecated
 
     // Whether this knot is dual-valued (value discontinuity at the knot).
     bool dualValued : 1;
+
+    // The pre- and post-tangent algorithms.
+    TsTangentAlgorithm preTanAlgorithm : 4;
+    TsTangentAlgorithm postTanAlgorithm : 4;
 };
 
 
@@ -151,6 +155,26 @@ public:
     T GetPostTanSlope() const;
     T GetPostTanHeight() const;
 
+
+    // Compute algorithmic tangents for this Ts_KnotData based on the provided
+    // prev and next Ts_KnotData. See TsKnot::UpdateTangents for documentation.
+    TS_API
+    bool UpdateTangents(const Ts_TypedKnotData<T>* prevData,
+                        const Ts_TypedKnotData<T>* nextData,
+                        const TsCurveType curveType);
+
+protected:
+    TS_API
+    bool _UpdateTangent(const Ts_TypedKnotData<T>* prevData,
+                        const Ts_TypedKnotData<T>* nextData,
+                        TsCurveType curveType,
+                        bool updatePre);
+
+    TS_API
+    bool _UpdateTangentAutoEase(const Ts_TypedKnotData<T>* prevData,
+                                const Ts_TypedKnotData<T>* nextData,
+                                bool updatePre);
+
 public:
     // Value at this knot.
     T value;
@@ -166,11 +190,6 @@ public:
     // height divided by time width.
     T postTanSlope;
 };
-
-// For double-typed values, on x86-64, this struct should fit in a cache line.
-// Exceeding this size may impact performance.
-static_assert(sizeof(Ts_TypedKnotData<double>) <= 64);
-
 
 // Virtual interface to TypedKnotData.
 //
@@ -201,6 +220,11 @@ public:
     virtual void GetPreTanSlope(VtValue *slopeOut) const = 0;
     virtual void SetPostTanSlope(VtValue slope) = 0;
     virtual void GetPostTanSlope(VtValue *slopeOut) const = 0;
+
+    virtual bool UpdateTangents(const Ts_KnotDataProxy* prevProxy,
+                                const Ts_KnotDataProxy* nextProxy,
+                                const TsCurveType curveType) = 0;
+    TfType valueType;
 };
 
 
@@ -216,6 +240,8 @@ public:
     Ts_KnotData* CloneData() const override;
     void DeleteData() override;
 
+    // Note that T is the storage type and the TfType returned by
+    // GetValueType is the true type.
     TfType GetValueType() const override;
     bool IsDataEqualTo(const Ts_KnotData &other) const override;
 
@@ -228,6 +254,10 @@ public:
     void GetPreTanSlope(VtValue *slopeOut) const override;
     void SetPostTanSlope(VtValue slope) override;
     void GetPostTanSlope(VtValue *slopeOut) const override;
+
+    bool UpdateTangents(const Ts_KnotDataProxy* prevProxy,
+                        const Ts_KnotDataProxy* nextProxy,
+                        const TsCurveType curveType) override;
 
 private:
     Ts_TypedKnotData<T> *_data;
@@ -262,12 +292,19 @@ bool Ts_TypedKnotData<T>::operator==(
     COMP(postTanWidth);
     COMP(dualValued);
     COMP(nextInterp);
-    COMP(curveType);
+    // CurveType for knots has been deprecated and we no longer consider its
+    // value when testing for equality.
+    // COMP(curveType);
 
     COMP(value);
-    COMP(preValue);
+    if (dualValued) {
+        COMP(preValue);
+    }
     COMP(preTanSlope);
     COMP(postTanSlope);
+
+    COMP(preTanAlgorithm);
+    COMP(postTanAlgorithm);
 
     return true;
 }
@@ -329,7 +366,7 @@ void Ts_TypedKnotDataProxy<T>::DeleteData()
 template <typename T>
 TfType Ts_TypedKnotDataProxy<T>::GetValueType() const
 {
-    return Ts_GetType<T>();
+    return valueType;
 }
 
 template <typename T>
@@ -396,6 +433,26 @@ void Ts_TypedKnotDataProxy<T>::GetPostTanSlope(
     VtValue* const slopeOut) const
 {
     *slopeOut = VtValue(_data->GetPostTanSlope());
+}
+
+template <typename T>
+bool Ts_TypedKnotDataProxy<T>::UpdateTangents(
+    const Ts_KnotDataProxy* prevProxy,
+    const Ts_KnotDataProxy* nextProxy,
+    const TsCurveType curveType)
+{
+    const Ts_TypedKnotDataProxy<T>* prevTypedProxy =
+        dynamic_cast<const Ts_TypedKnotDataProxy<T>*>(prevProxy);
+    const Ts_TypedKnotData<T>* prevData = (prevTypedProxy
+                                           ? prevTypedProxy->_data
+                                           : nullptr);
+    const Ts_TypedKnotDataProxy<T>* nextTypedProxy =
+        dynamic_cast<const Ts_TypedKnotDataProxy<T>*>(nextProxy);
+    const Ts_TypedKnotData<T>* nextData = (nextTypedProxy
+                                           ? nextTypedProxy->_data
+                                           : nullptr);
+
+    return _data->UpdateTangents(prevData, nextData, curveType);
 }
 
 

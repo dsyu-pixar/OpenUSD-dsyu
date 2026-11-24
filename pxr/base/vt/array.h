@@ -207,8 +207,11 @@ protected:
 /// determine where unintended copy-on-write detaches come from.  When set,
 /// VtArray will log a stack trace for every copy-on-write detach that occurs.
 ///
+ARCH_PRAGMA_PUSH
+ARCH_PRAGMA_NON_EXPORTED_BASE_CLASS
 template<typename ELEM>
 class VtArray : public Vt_ArrayBase {
+ARCH_PRAGMA_POP
   public:
 
     /// Type this array holds.
@@ -256,9 +259,8 @@ class VtArray : public Vt_ArrayBase {
     /// VtArray(size_t n, value_type const &value = value_type())
     template <typename LegacyInputIterator>
     VtArray(LegacyInputIterator first, LegacyInputIterator last,
-            typename std::enable_if<
-                !std::is_integral<LegacyInputIterator>::value, 
-                void>::type* = nullptr)
+            std::enable_if_t<
+                !std::is_integral_v<LegacyInputIterator>> * = nullptr)
         : VtArray() {
         assign(first, last); 
     }
@@ -638,9 +640,165 @@ class VtArray : public Vt_ArrayBase {
             // Detach to empty.
             _DecRef();
         }
-        _shapeData.totalSize = 0;
+        _shapeData.clear();
     }
 
+    /// Insert a copy of a single element at \p pos into the array.  Return an
+    /// iterator pointing to the inserted element.
+    iterator insert(const_iterator pos, value_type const &value) {
+        // If value is an element of the array, we make a copy and move-insert
+        // it.  std::less (and friends) and the standard's guarantee of a strict
+        // pointer total order ensures this works.
+        const const_pointer valuePtr = std::addressof(value);
+        if (std::less_equal<const_pointer>{}(cdata(), valuePtr) &&
+            std::less<const_pointer>{}(valuePtr, cdata() + size())) {
+            value_type tmp { value };
+            return insert(pos,
+                          std::make_move_iterator(std::addressof(tmp)),
+                          std::make_move_iterator(std::addressof(tmp) + 1));
+        }
+        return insert(pos, valuePtr, valuePtr + 1);
+    }
+
+    /// Insert by moving a single element at \p pos into the array.  Return an
+    /// iterator pointing to the move-inserted element.
+    iterator insert(const_iterator pos, value_type &&value) {
+        // If value is an element of the array, we move it to a temp spot and
+        // move-insert that.  std::less (and friends) and the standard's
+        // guarantee of a strict pointer total order ensures this works.
+        const const_pointer valuePtr = std::addressof(value);
+        if (std::less_equal<const_pointer>{}(cdata(), valuePtr) &&
+            std::less<const_pointer>{}(valuePtr, cdata() + size())) {
+            value_type tmp { std::move(value) };
+            return insert(pos,
+                          std::make_move_iterator(std::addressof(tmp)),
+                          std::make_move_iterator(std::addressof(tmp) + 1));
+        }
+        return insert(pos,
+                      std::make_move_iterator(valuePtr),
+                      std::make_move_iterator(valuePtr + 1));
+    }
+
+    /// Insert \p count copies of \p fill starting at \p pos in the array.
+    /// Return an iterator pointing to the first inserted element, or \p pos if
+    /// no elements are inserted.
+    iterator insert(const_iterator pos, size_t count, value_type const &fill) {
+        // If fill is an element of the array, we copy it to a temporary and
+        // insert that.  std::less (and friends) and the standard's guarantee of
+        // a strict pointer total order ensures this works.
+        const const_pointer fillPtr = std::addressof(fill);
+        if (std::less_equal<const_pointer>{}(cdata(), fillPtr) &&
+            std::less<const_pointer>{}(fillPtr, cdata() + size())) {
+            value_type tmp { fill };
+            return insert(pos, count, [&tmp](pointer b, pointer e) {
+                std::uninitialized_fill(b, e, tmp);
+            });
+        }
+        return insert(pos, count, [&fill](pointer b, pointer e) {
+            std::uninitialized_fill(b, e, fill);
+        });
+    }
+
+    /// Insert the contents of \p ilist into the array at \p pos.  Return an
+    /// iterator pointing to the first inserted element, or \p pos if no
+    /// elements are inserted.
+    iterator insert(const_iterator pos, std::initializer_list<ELEM> ilist) {
+        return insert(pos, ilist.begin(), ilist.end());
+    }
+
+    /// Insert the elements from the range [first, last) into the array at \p
+    /// pos.  Return an iterator pointing to the first inserted element, or \p
+    /// pos if no elements are inserted.  The behavior is undefined if [first,
+    /// last) intersects [cbegin(), cend()).
+    template <class LegacyInputIterator>
+    std::enable_if_t<
+        !std::is_integral_v<LegacyInputIterator>, iterator>
+    insert(
+        const_iterator pos,
+        LegacyInputIterator first, LegacyInputIterator last) {
+        return insert(pos, std::distance(first, last),
+                      [&first, &last](pointer b, pointer e) {
+                          std::uninitialized_copy(first, last, b);
+                      });
+    }
+
+    /// Insert \p count elements into the array starting at \p pos, calling \p
+    /// fillElems(first, last) to construct the inserted elements in
+    /// uninitialized memory.  Note that since \p fillElems is passed pointers
+    /// to uninitialized memory, the elements must be constructed using
+    /// something like placement-new.  Return an iterator pointing to the first
+    /// inserted element, or \p pos if no elements are inserted.
+    template <class FillElemsFn>
+    std::enable_if_t<
+        !std::is_integral_v<std::decay_t<FillElemsFn>>,
+        iterator>
+    insert(const_iterator pos, size_t count, FillElemsFn &&fillElems) {
+        if (count == 0) {
+            return begin() + std::distance(cbegin(), pos);
+        }
+        if (empty()) {
+            resize(count, std::forward<FillElemsFn>(fillElems));
+            return begin();
+        }
+        // This array is not empty, and we will insert at least one element.
+        const size_t newSize = size() + count;
+        if (_IsUnique()) {
+            if (newSize <= capacity()) {
+                // We can avoid reallocation.
+                iterator ncpos = begin() + std::distance(cbegin(), pos);
+                iterator iend = end();
+                if (pos != cend()) {
+                    // The 'count' tail elements must be uninitialized_move'd
+                    // over.  The remainder must be move_backward'd.
+                    std::uninitialized_copy(
+                        std::make_move_iterator(iend-count),
+                        std::make_move_iterator(iend), iend);
+                    std::move_backward(ncpos, iend-count, iend);
+                }
+                // Fill new elements.
+                value_type *p = std::addressof(*ncpos);
+                std::forward<FillElemsFn>(fillElems)(p, p + count);
+                // Set new size.
+                _shapeData.totalSize = newSize;
+                return ncpos;
+            }
+            else {
+                // We need to allocate, but can move items.
+                value_type* newData = _AllocateNew(newSize);
+                size_t posOffset = std::distance(cbegin(), pos);
+                std::uninitialized_copy(
+                    std::make_move_iterator(begin()),
+                    std::make_move_iterator(begin() + posOffset), newData);
+                std::uninitialized_copy(
+                    std::make_move_iterator(begin() + posOffset),
+                    std::make_move_iterator(end()),
+                    newData + posOffset + count);
+                // Drop the old data and fill the new elements.
+                _DecRef();
+                _data = newData;
+                _shapeData.totalSize = newSize;
+                std::forward<FillElemsFn>(fillElems)(
+                    newData + posOffset, newData + posOffset + count);
+                return begin() + posOffset;
+            }
+        }
+        else {
+            // Allocate new space and copy.
+            value_type* newData = _AllocateNew(newSize);
+            size_t posOffset = std::distance(cbegin(), pos);
+            std::uninitialized_copy(cbegin(), pos, newData);
+            std::uninitialized_copy(pos, cend(), newData + posOffset + count);
+            // Drop the old data and fill the new elements.
+            _DecRef();
+            _data = newData;
+            _shapeData.totalSize = newSize;
+            std::forward<FillElemsFn>(fillElems)(
+                newData + posOffset, newData + posOffset + count);
+            return begin() + posOffset;
+        }
+        // unreachable.
+    }
+    
     /// Removes a single element at \p pos from the array
     /// 
     /// To match the behavior of std::vector, returns an iterator
@@ -674,21 +832,22 @@ class VtArray : public Vt_ArrayBase {
     ///
     /// \sa erase(const_iterator)
     iterator erase(const_iterator first, const_iterator last) {
-        if (first == last){
+        if (first == last) {
             return std::next(begin(), std::distance(cbegin(), last));
         }
-        if ((first == cbegin()) && (last == cend())){
+        if ((first == cbegin()) && (last == cend())) {
             clear();
             return end();
         }
         // Given the previous two conditions, we know that we are removing
         // at least one element and the result array will contain at least one
         // element.
-        value_type* removeStart = std::next(_data, std::distance(cbegin(), first));
+        value_type* removeStart =
+            std::next(_data, std::distance(cbegin(), first));
         value_type* removeEnd = std::next(_data, std::distance(cbegin(), last));
         value_type* endIt = std::next(_data, size());
         size_t newSize = size() - std::distance(first, last);
-        if (_IsUnique()){
+        if (_IsUnique()) {
             // If the array is unique, we can simply move the tail elements
             // and free to the end of the array.
             value_type* deleteIt = std::move(removeEnd, endIt, removeStart);
@@ -697,7 +856,7 @@ class VtArray : public Vt_ArrayBase {
             }
             _shapeData.totalSize = newSize;
             return iterator(removeStart);
-        } else{
+        } else {
             // If the array is not unique, we want to avoid copying the
             // elements in the range we are erasing. We allocate a
             // new buffer and copy the head and tail ranges, omitting
@@ -802,6 +961,17 @@ class VtArray : public Vt_ArrayBase {
         return !(*this == other);
     }
 
+    /// Ensure that this array does not share its underlying data with any other 
+    /// instance by making a copy if necessary.  Return true if a copy was made 
+    /// and iterators & references were invalidated, false otherwise.  Call this 
+    /// function when a possibly shared VtArray instance will definitely be 
+    /// modified.  Since this function makes an explicit detaching copy, it does
+    /// not log stack traces when 'VT_LOG_STACK_TRACE_ON_ARRAY_DETACH_COPY' is 
+    /// enabled.  See the class documentation for more information.
+    bool MakeUnique() {
+        return _DetachIfNotUnique(/*invokeHook=*/false);
+    }
+
   public:
     // XXX -- Public so VtValue::_ArrayHelper<T,U>::GetShapeData() has access.
     Vt_ShapeData const *_GetShapeData() const {
@@ -823,7 +993,8 @@ class VtArray : public Vt_ArrayBase {
         mutable const_pointer _p;
     };
 
-    /// Outputs a comma-separated list of the values in the array.
+    /// Outputs a comma-separated list of the values in the array surrounded by
+    /// square brackets [].  Each element is streamed by VtStreamOut().
     friend std::ostream &operator <<(std::ostream &out, const VtArray &self) {
         VtArray::_Streamer streamer(self.cdata());
         VtStreamOutArray(out, self._GetShapeData(), streamer);
@@ -835,14 +1006,18 @@ class VtArray : public Vt_ArrayBase {
         lhs.swap(rhs);
     }
 
-    void _DetachIfNotUnique() {
-        if (_IsUnique())
-            return;
+    bool _DetachIfNotUnique(bool invokeHook=true) {
+        if (_IsUnique()) {
+            return false;
+        }
         // Copy to local.
-        _DetachCopyHook(__ARCH_PRETTY_FUNCTION__);
+        if (invokeHook) {
+            _DetachCopyHook(__ARCH_PRETTY_FUNCTION__);
+        }
         auto *newData = _AllocateCopy(_data, size(), size());
         _DecRef();
         _data = newData;
+        return true;
     }
 
     inline bool _IsUnique() const {
@@ -916,6 +1091,11 @@ class VtArray : public Vt_ArrayBase {
     value_type *_data;
 };
 
+// VtArray can transform if the underlying element type can.
+template <class ELEM>
+struct VtValueTypeCanTransform<VtArray<ELEM>> :
+    VtValueTypeCanTransform<ELEM> {};
+
 // Declare basic array instantiations as extern templates.  They are explicitly
 // instantiated in array.cpp.
 #define VT_ARRAY_EXTERN_TMPL(unused, elem) \
@@ -940,13 +1120,41 @@ hash_value(VtArray<ELEM> const &array) {
 template <typename T>
 struct VtIsArray< VtArray <T> > : public std::true_type {};
 
-template <class T>
-struct Vt_ArrayOpHelp {
-    static T Add(T l, T r) { return l + r; }
-    static T Sub(T l, T r) { return l - r; }
-    static T Mul(T l, T r) { return l * r; }
-    static T Div(T l, T r) { return l / r; }
-    static T Mod(T l, T r) { return l % r; }
+// Per-operation functor structs.  The template operator() uses a trailing
+// return type (-> decltype(l op r)) so that the result type is deduced *and*
+// an ill-formed element op (e.g. GfTimeCode * GfTimeCode) is a substitution
+// failure in the immediate context -- this is what makes Vt_IsValidArrayBinOp
+// a real SFINAE gate rather than a hard error.  The bool overloads preserve
+// existing Hyrum's-Law behavior for bool arrays.
+struct Vt_AddOp {
+    template <class L, class R>
+    auto operator()(L const &l, R const &r) const -> decltype(l + r)
+        { return l + r; }
+    bool operator()(bool l, bool r) const { return l | r; }
+};
+struct Vt_SubOp {
+    template <class L, class R>
+    auto operator()(L const &l, R const &r) const -> decltype(l - r)
+        { return l - r; }
+    bool operator()(bool l, bool r) const { return l ^ r; }
+};
+struct Vt_MulOp {
+    template <class L, class R>
+    auto operator()(L const &l, R const &r) const -> decltype(l * r)
+        { return l * r; }
+    bool operator()(bool l, bool r) const { return l & r; }
+};
+struct Vt_DivOp {
+    template <class L, class R>
+    auto operator()(L const &l, R const &r) const -> decltype(l / r)
+        { return l / r; }
+    bool operator()(bool l, bool r) const { return l; }
+};
+struct Vt_ModOp {
+    template <class L, class R>
+    auto operator()(L const &l, R const &r) const -> decltype(l % r)
+        { return l % r; }
+    bool operator()(bool, bool) const { return false; }
 };
 
 template <class T>
@@ -960,15 +1168,6 @@ struct Vt_ArrayOpHelpScalar {
 // These operations on bool-arrays are highly questionable, but this preserves
 // existing behavior in the name of Hyrum's Law.
 template <>
-struct Vt_ArrayOpHelp<bool> {
-    static bool Add(bool l, bool r) { return l | r; }
-    static bool Sub(bool l, bool r) { return l ^ r; }
-    static bool Mul(bool l, bool r) { return l & r; }
-    static bool Div(bool l, bool r) { return l; }
-    static bool Mod(bool l, bool r) { return false; }
-};
-
-template <>
 struct Vt_ArrayOpHelpScalar<bool> {
     static bool Mul(bool l, double r) { return l && (r != 0.0); }
     static bool Mul(double l, bool r) { return (l != 0.0) && r; }
@@ -976,35 +1175,106 @@ struct Vt_ArrayOpHelpScalar<bool> {
     static bool Div(double l, bool r) { return !r || (l != 0.0); }
 };
 
-#define VTOPERATOR_CPPARRAY(op, opName)                                        \
-    template <class T>                                                         \
-    VtArray<T>                                                                 \
-    operator op (VtArray<T> const &lhs, VtArray<T> const &rhs)                 \
+// Trait restricting heterogeneous array-array operand pairs.  Homogeneous
+// (L == R) is always allowed, preserving all existing behavior.  For
+// heterogeneous operands, only pairs from the GfTimeCode/GfDuration family
+// are permitted -- this prevents accidental silent cross-numeric promotion
+// (e.g. VtArray<int> + VtArray<float>).
+template <class T> struct Vt_IsTimeType : std::false_type {};
+template <> struct Vt_IsTimeType<GfTimeCode> : std::true_type {};
+template <> struct Vt_IsTimeType<GfDuration> : std::true_type {};
+
+template <class L, class R>
+struct Vt_ArrayBinOpPairAllowed
+    : std::bool_constant<std::is_same_v<L, R> ||
+          (Vt_IsTimeType<L>::value && Vt_IsTimeType<R>::value)> {};
+
+// Deduce the result element type produced by Fn(L, R).
+template <class Fn, class L, class R>
+using Vt_ArrayBinOpDeducedT =
+    decltype(std::declval<Fn>()(std::declval<L const &>(),
+                                std::declval<R const &>()));
+
+// For homogeneous L == R on non-time types, return L exactly (prevents
+// char/short integer-promotion when the element op promotes to int).
+// For the time family, always use the deduced type even when L == R, because
+// GfTimeCode - GfTimeCode -> GfDuration (not GfTimeCode).
+template <class Fn, class L, class R>
+using Vt_ArrayBinOpResult =
+    std::conditional_t<
+        std::is_same_v<L, R> && !Vt_IsTimeType<L>::value,
+        L,
+        Vt_ArrayBinOpDeducedT<Fn, L, R>>;
+
+// SFINAE gate: the operator exists iff (a) the element op is well-formed and
+// (b) the operand pair is allowed.  std::void_t substitution failure on (a)
+// removes operators for ill-formed element ops (e.g. TimeCode * TimeCode).
+template <class Fn, class L, class R, class = void>
+struct Vt_IsValidArrayBinOp : std::false_type {};
+template <class Fn, class L, class R>
+struct Vt_IsValidArrayBinOp<Fn, L, R,
+        std::void_t<Vt_ArrayBinOpDeducedT<Fn, L, R>>>
+    : Vt_ArrayBinOpPairAllowed<L, R> {};
+
+// Same gate for scalar (array op scalar) pairs.
+template <class ArrElem, class Scalar>
+struct Vt_ArrayScalarOpPairAllowed
+    : std::bool_constant<std::is_same_v<ArrElem, Scalar> ||
+          (Vt_IsTimeType<ArrElem>::value && Vt_IsTimeType<Scalar>::value)> {};
+
+// Result element type for scalar ops.  For homogeneous non-time types, use
+// ArrElem exactly (prevents char promotion to int).  For the time family,
+// always use the deduced type so that e.g. VtArray<GfTimeCode> - GfTimeCode
+// correctly returns VtArray<GfDuration>.
+template <class DeducedT, class ArrElem, class Scalar>
+using Vt_ArrayScalarBinOpResult =
+    std::conditional_t<
+        std::is_same_v<ArrElem, Scalar> && !Vt_IsTimeType<ArrElem>::value,
+        ArrElem,
+        DeducedT>;
+
+// Two-type array-array operator.  The result element type is deduced from the
+// functor's return type.  For homogeneous L==R the result element is L (no
+// integer promotion), for heterogeneous time-family pairs it is the deduced
+// type (e.g. GfTimeCode - GfTimeCode -> GfDuration).  Ill-formed element ops
+// (e.g. TimeCode * TimeCode) are SFINAE-removed rather than hard-erroring.
+#define VTOPERATOR_CPPARRAY(op, Functor)                                       \
+    template <class L, class R>                                                \
+    auto                                                                       \
+    operator op (VtArray<L> const &lhs, VtArray<R> const &rhs)                 \
+        -> std::enable_if_t<                                                   \
+               Vt_IsValidArrayBinOp<Functor, L, R>::value,                     \
+               VtArray<Vt_ArrayBinOpResult<Functor, L, R>>>                    \
     {                                                                          \
-        using Op = Vt_ArrayOpHelp<T>;                                          \
+        using RetElem = Vt_ArrayBinOpResult<Functor, L, R>;                    \
+        Functor fn;                                                            \
         /* accept empty vecs */                                                \
         if (!lhs.empty() && !rhs.empty() && lhs.size() != rhs.size()) {        \
             TF_CODING_ERROR("Non-conforming inputs for operator %s", #op);     \
-            return VtArray<T>();                                               \
+            return VtArray<RetElem>();                                         \
         }                                                                      \
         /* promote empty vecs to vecs of zeros */                              \
-        const bool leftEmpty = lhs.size() == 0, rightEmpty = rhs.size() == 0;  \
-        VtArray<T> ret(leftEmpty ? rhs.size() : lhs.size());                   \
-        T zero = VtZero<T>();                                                  \
+        const bool leftEmpty  = lhs.size() == 0;                               \
+        const bool rightEmpty = rhs.size() == 0;                               \
+        VtArray<RetElem> ret(leftEmpty ? rhs.size() : lhs.size());             \
+        L lz = VtZero<L>(); R rz = VtZero<R>();                                \
         if (leftEmpty) {                                                       \
             std::transform(                                                    \
                 rhs.begin(), rhs.end(), ret.begin(),                           \
-                [zero](T const &r) { return Op:: opName (zero, r); });         \
+                [&fn, lz](R const &r) {                                        \
+                    return static_cast<RetElem>(fn(lz, r)); });                \
         }                                                                      \
         else if (rightEmpty) {                                                 \
             std::transform(                                                    \
                 lhs.begin(), lhs.end(), ret.begin(),                           \
-                [zero](T const &l) { return Op:: opName (l, zero); });         \
+                [&fn, rz](L const &l) {                                        \
+                    return static_cast<RetElem>(fn(l, rz)); });                \
         }                                                                      \
         else {                                                                 \
             std::transform(                                                    \
                 lhs.begin(), lhs.end(), rhs.begin(), ret.begin(),              \
-                [](T const &l, T const &r) { return Op:: opName (l, r); });    \
+                [&fn](L const &l, R const &r) {                                \
+                    return static_cast<RetElem>(fn(l, r)); });                 \
         }                                                                      \
         return ret;                                                            \
     }
@@ -1014,12 +1284,15 @@ ARCH_PRAGMA_FORCING_TO_BOOL
 ARCH_PRAGMA_UNSAFE_USE_OF_BOOL
 ARCH_PRAGMA_UNARY_MINUS_ON_UNSIGNED
 
-VTOPERATOR_CPPARRAY(+, Add);
-VTOPERATOR_CPPARRAY(-, Sub);
-VTOPERATOR_CPPARRAY(*, Mul);
-VTOPERATOR_CPPARRAY(/, Div);
-VTOPERATOR_CPPARRAY(%, Mod);
-    
+VTOPERATOR_CPPARRAY(+, Vt_AddOp)
+VTOPERATOR_CPPARRAY(-, Vt_SubOp)
+VTOPERATOR_CPPARRAY(*, Vt_MulOp)
+VTOPERATOR_CPPARRAY(/, Vt_DivOp)
+VTOPERATOR_CPPARRAY(%, Vt_ModOp)
+
+// Do not use decltype for the result of unary minus. Types smaller than int are
+// promoted to int by arithmetic operations but we want to return the same type
+// as the input array.
 template <class T>
 VtArray<T>
 operator-(VtArray<T> const &a) {
@@ -1031,29 +1304,49 @@ operator-(VtArray<T> const &a) {
 
 ARCH_PRAGMA_POP
 
-// Operations on scalars and arrays
-// These are free functions defined in Array.h
-#define VTOPERATOR_CPPSCALAR(op,opName)                                 \
-    template<typename T>                                                \
-    VtArray<T> operator op (T const &scalar, VtArray<T> const &arr) {   \
-        using Op = Vt_ArrayOpHelp<T>;                                   \
-        VtArray<T> ret(arr.size());                                     \
-        std::transform(arr.begin(), arr.end(), ret.begin(),             \
-                       [&scalar](T const &aObj) {                       \
-                           return Op:: opName (scalar, aObj);           \
-                       });                                              \
-        return ret;                                                     \
-    }                                                                   \
-    template<typename T>                                                \
-    VtArray<T> operator op (VtArray<T> const &arr, T const &scalar) {   \
-        using Op = Vt_ArrayOpHelp<T>;                                   \
-        VtArray<T> ret(arr.size());                                     \
-        std::transform(arr.begin(), arr.end(), ret.begin(),             \
-                       [&scalar](T const &aObj) {                       \
-                           return Op:: opName (aObj, scalar);           \
-                       });                                              \
-        return ret;                                                     \
-    } 
+// Operations on scalars and arrays.
+// The two-type version (ArrT, ScalarT) supports heterogeneous pairs in the
+// GfTimeCode/GfDuration family (e.g. VtArray<GfTimeCode> + GfDuration).
+// For homogeneous ArrT==ScalarT the result stays ArrT (no integer promotion).
+// The pair gate excludes double from Vt_IsTimeType, so arr*2.0 continues to
+// resolve exclusively through the VTOPERATOR_CPPSCALAR_DOUBLE path below.
+#define VTOPERATOR_CPPSCALAR(op, Functor)                                     \
+    template <class ArrT, class ScalarT>                                      \
+    auto operator op (ScalarT const &scalar, VtArray<ArrT> const &arr)        \
+        -> std::enable_if_t<                                                  \
+               Vt_ArrayScalarOpPairAllowed<ArrT, ScalarT>::value,             \
+               VtArray<Vt_ArrayScalarBinOpResult<                             \
+                   Vt_ArrayBinOpDeducedT<Functor, ScalarT, ArrT>,             \
+                   ArrT, ScalarT>>>                                           \
+    {                                                                         \
+        Functor fn;                                                           \
+        using RetElem = Vt_ArrayScalarBinOpResult<                            \
+            Vt_ArrayBinOpDeducedT<Functor, ScalarT, ArrT>, ArrT, ScalarT>;    \
+        VtArray<RetElem> ret(arr.size());                                     \
+        std::transform(arr.begin(), arr.end(), ret.begin(),                   \
+                       [&scalar, &fn](ArrT const &aObj) {                     \
+                           return static_cast<RetElem>(fn(scalar, aObj));     \
+                       });                                                    \
+        return ret;                                                           \
+    }                                                                         \
+    template <class ArrT, class ScalarT>                                      \
+    auto operator op (VtArray<ArrT> const &arr, ScalarT const &scalar)        \
+        -> std::enable_if_t<                                                  \
+               Vt_ArrayScalarOpPairAllowed<ArrT, ScalarT>::value,             \
+               VtArray<Vt_ArrayScalarBinOpResult<                             \
+                   Vt_ArrayBinOpDeducedT<Functor, ArrT, ScalarT>,             \
+                   ArrT, ScalarT>>>                                           \
+    {                                                                         \
+        Functor fn;                                                           \
+        using RetElem = Vt_ArrayScalarBinOpResult<                            \
+            Vt_ArrayBinOpDeducedT<Functor, ArrT, ScalarT>, ArrT, ScalarT>;    \
+        VtArray<RetElem> ret(arr.size());                                     \
+        std::transform(arr.begin(), arr.end(), ret.begin(),                   \
+                       [&scalar, &fn](ArrT const &aObj) {                     \
+                           return static_cast<RetElem>(fn(aObj, scalar));     \
+                       });                                                    \
+        return ret;                                                           \
+    }
 
 // define special-case operators on arrays and doubles - except if the array
 // holds doubles, in which case we already defined the operator (with
@@ -1087,13 +1380,13 @@ ARCH_PRAGMA_PUSH
 ARCH_PRAGMA_FORCING_TO_BOOL
 ARCH_PRAGMA_UNSAFE_USE_OF_BOOL
 ARCH_PRAGMA_UNARY_MINUS_ON_UNSIGNED
-VTOPERATOR_CPPSCALAR(+, Add)
-VTOPERATOR_CPPSCALAR(-, Sub)
-VTOPERATOR_CPPSCALAR(*, Mul)
+VTOPERATOR_CPPSCALAR(+, Vt_AddOp)
+VTOPERATOR_CPPSCALAR(-, Vt_SubOp)
+VTOPERATOR_CPPSCALAR(*, Vt_MulOp)
 VTOPERATOR_CPPSCALAR_DOUBLE(*, Mul)
-VTOPERATOR_CPPSCALAR(/, Div)
+VTOPERATOR_CPPSCALAR(/, Vt_DivOp)
 VTOPERATOR_CPPSCALAR_DOUBLE(/, Div)
-VTOPERATOR_CPPSCALAR(%, Mod)
+VTOPERATOR_CPPSCALAR(%, Vt_ModOp)
 ARCH_PRAGMA_POP
 
 PXR_NAMESPACE_CLOSE_SCOPE

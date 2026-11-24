@@ -100,7 +100,13 @@ PcpCache::PcpCache(
         _layerStackIdentifier, _fileFormatTarget, _usd)),
     _primDependencies(new Pcp_Dependencies())
 {
-    // Do nothing
+    _primIndexInputs
+        .Cache(this)
+        .VariantFallbacks(&_variantFallbackMap)
+        .IncludedPayloads(&_includedPayloads)
+        .Cull(TfGetEnvSetting(PCP_CULLING))
+        .USD(_usd)
+        .FileFormatTarget(_fileFormatTarget);
 }
 
 PcpCache::~PcpCache()
@@ -365,15 +371,10 @@ PcpCache::IsLayerMuted(const SdfLayerHandle& anchorLayer,
         anchorLayer, layerId, canonicalMutedLayerId);
 }
 
-PcpPrimIndexInputs 
-PcpCache::GetPrimIndexInputs()
+const PcpPrimIndexInputs &
+PcpCache::GetPrimIndexInputs() const
 {
-    return PcpPrimIndexInputs()
-        .Cache(this)
-        .VariantFallbacks(&_variantFallbackMap)
-        .IncludedPayloads(&_includedPayloads)
-        .Cull(TfGetEnvSetting(PCP_CULLING))
-        .FileFormatTarget(_fileFormatTarget);
+    return _primIndexInputs;
 }
 
 PcpLayerStackRefPtr
@@ -670,7 +671,13 @@ PcpCache::FindSiteDependencies(
             } else if (indexPath.IsAbsoluteRootOrPrimPath()) {
                 return bool(FindPrimIndex(indexPath));
             } else if (indexPath.IsPropertyPath()) {
-                return bool(FindPropertyIndex(indexPath));
+                if (_usd) {
+                    // In usd mode, the cache does not store property indexes, 
+                    // so return whether the parent prim is in the cache.
+                    return bool(FindPrimIndex(indexPath.GetParentPath()));
+                } else {
+                    return bool(FindPropertyIndex(indexPath));
+                }                               
             } else {
                 return false;
             }
@@ -1031,14 +1038,13 @@ PcpCache::Apply(const PcpCacheChanges& changes, PcpLifeboat* lifeboat)
         }
 
         // Blow property stacks and update spec dependencies on prims.
-        auto updateSpecStacks = [this, &lifeboat, &changes](const SdfPath& path) {
+        auto updateSpecStacks = [this, &lifeboat](const SdfPath& path) {
             if (path.IsAbsoluteRootOrPrimPath()) {
                 // We've possibly changed the prim spec stack.  Note that
                 // we may have blown the prim index so check that it exists.
                 if (PcpPrimIndex* primIndex = _GetPrimIndex(path)) {
                     Pcp_RescanForSpecs(primIndex, IsUsd(),
-                                       /* updateHasSpecs */ true,
-                                       &changes);
+                                       /* updateHasSpecs */ true);
 
                     // If there are no specs left then we can discard the
                     // prim index.
@@ -1080,8 +1086,7 @@ PcpCache::Apply(const PcpCacheChanges& changes, PcpLifeboat* lifeboat)
             for (auto i = range.first; i != range.second; ++i) {
                 if (PcpPrimIndex* primIndex = _GetPrimIndex(i->first)) {
                     Pcp_RescanForSpecs(primIndex, IsUsd(),
-                                       /* updateHasSpecs */ true,
-                                       &changes);
+                                       /* updateHasSpecs */ true);
                 }
             }
         }
@@ -1368,26 +1373,21 @@ struct PcpCache::_ParallelIndexer
                               const PcpLayerStackPtr &layerStack)
         : _cache(cache)
         , _layerStack(layerStack)
-        , _resolver(ArGetResolver()) {
-        _isPublishing = false;
+        , _resolver(ArGetResolver())
+        , _isPublishing(false)
+    {
     }
 
     void Prepare(_UntypedIndexingChildrenPredicate childrenPred,
                  PcpPrimIndexInputs baseInputs,
                  PcpErrorVector *allErrors,
-                 const ArResolverScopedCache* parentCache,
-                 const char *mallocTag1,
-                 const char *mallocTag2) {
+                 const ArResolverScopedCache* parentCache) {
         _childrenPredicate = childrenPred;
         _baseInputs = baseInputs;
-        // Set the includedPayloadsMutex in _baseInputs.
         _baseInputs.IncludedPayloadsMutex(&_includedPayloadsMutex);
         _allErrors = allErrors;
         _parentCache = parentCache;
-        _mallocTag1 = mallocTag1;
-        _mallocTag2 = mallocTag2;
 
-        // Clear the roots to compute.
         _toCompute.clear();
     }
 
@@ -1434,7 +1434,6 @@ struct PcpCache::_ParallelIndexer
     // indexes and publishes them to the cache.
     void _ComputeIndex(const PcpPrimIndex *parentIndex,
                        SdfPath path, bool checkCache) {
-        TfAutoMallocTag2  tag(_mallocTag1, _mallocTag2);
         ArResolverScopedCache taskCache(_parentCache);
 
         // Check to see if we already have an index for this guy.  If we do,
@@ -1596,7 +1595,6 @@ struct PcpCache::_ParallelIndexer
             std::move(outputItem.second.expressionVariablesDependency));
         return mutableIndex;
     }
-                     
 
     void _PublishOutputs() {
         TRACE_FUNCTION();
@@ -1606,7 +1604,7 @@ struct PcpCache::_ParallelIndexer
             _PublishOneOutput(std::move(outputItem), /*allowInvalid=*/false);
         }
     }
-    
+
     // Fixed inputs.
     PcpCache * const _cache;
     const PcpLayerStackPtr _layerStack;
@@ -1623,8 +1621,6 @@ struct PcpCache::_ParallelIndexer
     PcpErrorVector *_allErrors;
     tbb::spin_mutex _allErrorsMutex;
     const ArResolverScopedCache* _parentCache;
-    char const *_mallocTag1;
-    char const *_mallocTag2;
     vector<pair<const PcpPrimIndex *, SdfPath> > _toCompute;
     tbb::concurrent_queue<
         std::pair<_PrimIndexCache::NodeHandle, PcpPrimIndexOutputs>
@@ -1637,21 +1633,13 @@ PcpCache::_ComputePrimIndexesInParallel(
     const SdfPathVector &roots,
     PcpErrorVector *allErrors,
     _UntypedIndexingChildrenPredicate childrenPred,
-    _UntypedIndexingPayloadPredicate payloadPred,
-    const char *mallocTag1,
-    const char *mallocTag2)
+    _UntypedIndexingPayloadPredicate payloadPred)
 {
-    if (!IsUsd()) {
-        TF_CODING_ERROR("Computing prim indexes in parallel only supported "
-                        "for USD caches.");
-        return;
-    }
-
     TF_PY_ALLOW_THREADS_IN_SCOPE();
 
-    ArResolverScopedCache parentCache;
-    TfAutoMallocTag2 tag(mallocTag1, mallocTag2);
+    TRACE_FUNCTION();
 
+    ArResolverScopedCache parentCache;
     if (!_layerStack)
         ComputeLayerStack(GetLayerStackIdentifier(), allErrors);
 
@@ -1669,13 +1657,11 @@ PcpCache::_ComputePrimIndexesInParallel(
     // Once all the indexes are computed, add them to the cache and add their
     // dependencies to the dependencies structures.
 
-    PcpPrimIndexInputs inputs = GetPrimIndexInputs()
-        .USD(_usd)
-        .IncludePayloadPredicate(payloadPred)
-        ;
+    PcpPrimIndexInputs inputs = GetPrimIndexInputs();
+    inputs.IncludePayloadPredicate(payloadPred);
 
-    indexer->Prepare(childrenPred, inputs, allErrors, &parentCache,
-                     mallocTag1, mallocTag2);
+    indexer->Prepare(childrenPred, inputs, allErrors, &parentCache);
+                     
     
     for (const auto& rootPath : roots) {
         // Obtain the parent index, if this is not the absolute root.  Note that
@@ -1694,7 +1680,7 @@ PcpCache::_ComputePrimIndexesInParallel(
 const PcpPrimIndex &
 PcpCache::ComputePrimIndex(const SdfPath & path, PcpErrorVector *allErrors) {
     return _ComputePrimIndexWithCompatibleInputs(
-        path, GetPrimIndexInputs().USD(_usd), allErrors);
+        path, GetPrimIndexInputs(), allErrors);
 }
 
 const PcpPrimIndex &

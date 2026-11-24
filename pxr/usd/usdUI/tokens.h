@@ -41,14 +41,50 @@ PXR_NAMESPACE_OPEN_SCOPE
 /// Use UsdUITokens like so:
 ///
 /// \code
-///     gprim.GetMyTokenValuedAttr().Set(UsdUITokens->closed);
+///     gprim.GetMyTokenValuedAttr().Set(UsdUITokens->accessibility);
 /// \endcode
 struct UsdUITokensType {
     USDUI_API UsdUITokensType();
+    /// \brief "accessibility"
+    /// 
+    /// Property namespace prefix for the UsdUIAccessibilityAPI schema.
+    const TfToken accessibility;
+    /// \brief "accessibility:__INSTANCE_NAME__:description"
+    /// 
+    /// UsdUIAccessibilityAPI
+    const TfToken accessibility_MultipleApplyTemplate_Description;
+    /// \brief "accessibility:__INSTANCE_NAME__:label"
+    /// 
+    /// UsdUIAccessibilityAPI
+    const TfToken accessibility_MultipleApplyTemplate_Label;
+    /// \brief "accessibility:__INSTANCE_NAME__:priority"
+    /// 
+    /// UsdUIAccessibilityAPI
+    const TfToken accessibility_MultipleApplyTemplate_Priority;
     /// \brief "closed"
     /// 
     /// Possible value for UsdUINodeGraphNodeAPI::GetExpansionStateAttr()
     const TfToken closed;
+    /// \brief "default"
+    /// 
+    /// Name of the anonymous instance name for the schema
+    const TfToken default_;
+    /// \brief "description"
+    /// 
+    /// Name of the description attribute
+    const TfToken description;
+    /// \brief "high"
+    /// 
+    /// Possible value for UsdUIAccessibilityAPI::GetPriorityAttr()
+    const TfToken high;
+    /// \brief "label"
+    /// 
+    /// Name of the label attribute
+    const TfToken label;
+    /// \brief "low"
+    /// 
+    /// Possible value for UsdUIAccessibilityAPI::GetPriorityAttr()
+    const TfToken low;
     /// \brief "minimized"
     /// 
     /// Possible value for UsdUINodeGraphNodeAPI::GetExpansionStateAttr()
@@ -57,6 +93,14 @@ struct UsdUITokensType {
     /// 
     /// Possible value for UsdUINodeGraphNodeAPI::GetExpansionStateAttr()
     const TfToken open;
+    /// \brief "priority"
+    /// 
+    /// Name of the priority attribute
+    const TfToken priority;
+    /// \brief "standard"
+    /// 
+    /// Fallback value for UsdUIAccessibilityAPI::GetPriorityAttr()
+    const TfToken standard;
     /// \brief "ui:description"
     /// 
     /// UsdUIBackdrop
@@ -97,17 +141,21 @@ struct UsdUITokensType {
     /// 
     /// UsdUINodeGraphNodeAPI
     const TfToken uiNodegraphNodeStackingOrder;
+    /// \brief "AccessibilityAPI"
+    /// 
+    /// Schema identifier and family for UsdUIAccessibilityAPI
+    const TfToken AccessibilityAPI;
     /// \brief "Backdrop"
     /// 
-    /// Schema identifer and family for UsdUIBackdrop
+    /// Schema identifier and family for UsdUIBackdrop
     const TfToken Backdrop;
     /// \brief "NodeGraphNodeAPI"
     /// 
-    /// Schema identifer and family for UsdUINodeGraphNodeAPI
+    /// Schema identifier and family for UsdUINodeGraphNodeAPI
     const TfToken NodeGraphNodeAPI;
     /// \brief "SceneGraphPrimAPI"
     /// 
-    /// Schema identifer and family for UsdUISceneGraphPrimAPI
+    /// Schema identifier and family for UsdUISceneGraphPrimAPI
     const TfToken SceneGraphPrimAPI;
     /// A vector of all of the tokens listed above.
     const std::vector<TfToken> allTokens;

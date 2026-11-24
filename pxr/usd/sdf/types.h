@@ -23,6 +23,7 @@
 #include "pxr/base/arch/demangle.h"
 #include "pxr/base/arch/inttypes.h"
 #include "pxr/base/arch/pragmas.h"
+#include "pxr/base/gf/duration.h"
 #include "pxr/base/gf/half.h"
 #include "pxr/base/gf/matrix2d.h"
 #include "pxr/base/gf/matrix3d.h"
@@ -30,6 +31,7 @@
 #include "pxr/base/gf/quatd.h"
 #include "pxr/base/gf/quatf.h"
 #include "pxr/base/gf/quath.h"
+#include "pxr/base/gf/timeCode.h"
 #include "pxr/base/gf/vec2d.h"
 #include "pxr/base/gf/vec2f.h"
 #include "pxr/base/gf/vec2h.h"
@@ -48,8 +50,11 @@
 #include "pxr/base/tf/token.h"
 #include "pxr/base/tf/type.h"
 #include "pxr/base/vt/array.h"
+#include "pxr/base/vt/arrayEdit.h"
 #include "pxr/base/vt/dictionary.h"
+#include "pxr/base/vt/traits.h"
 #include "pxr/base/vt/value.h"
+#include "pxr/base/vt/valueTransform.h"
 
 #include <iosfwd>
 #include <list>
@@ -275,6 +280,17 @@ typedef std::vector<SdfRelocate> SdfRelocates;
 
 /// A map from sample times to sample values.
 typedef std::map<double, VtValue> SdfTimeSampleMap;
+VT_VALUE_TYPE_CAN_TRANSFORM(SdfTimeSampleMap);
+VT_VALUE_TYPE_CAN_COMPOSE(SdfTimeSampleMap);
+
+/// Compose a stronger SdfTimeSampleMap over a weaker one.  This produces a
+/// result different from `strong` when it contains values that
+/// VtValueCanComposeOver() values in weaker.  See SdfComposeTimeSampleSeries()
+/// for details.
+SDF_API
+SdfTimeSampleMap
+SdfComposeTimeSampleMaps(SdfTimeSampleMap const &strong,
+                         SdfTimeSampleMap const &weak);
 
 /// Gets the show default unit for the given /a typeName.
 SDF_API TfEnum SdfDefaultUnit( TfToken const &typeName );
@@ -332,7 +348,8 @@ SDF_API TfToken SdfGetRoleNameForValueTypeName(TfToken const &typeName);
     ((Half,           half,           GfHalf,            () )) \
     ((Float,          float,          float,             () )) \
     ((Double,         double,         double,            () )) \
-    ((TimeCode,       timecode,       SdfTimeCode,       () )) \
+    ((TimeCode,       timecode,       GfTimeCode,        () )) \
+    ((Duration,       duration,       GfDuration,        () )) \
     ((String,         string,         std::string,       () )) \
     ((Token,          token,          TfToken,           () )) \
     ((Asset,          asset,          SdfAssetPath,      () )) \
@@ -364,6 +381,7 @@ SDF_API TfToken SdfGetRoleNameForValueTypeName(TfToken const &typeName);
 // Accessors for individual elements in the value types tuples.
 #define SDF_VALUE_CPP_TYPE(tup) TF_PP_TUPLE_ELEM(2, tup)
 #define SDF_VALUE_CPP_ARRAY_TYPE(tup) VtArray<TF_PP_TUPLE_ELEM(2, tup)>
+#define SDF_VALUE_CPP_ARRAY_EDIT_TYPE(tup) VtArrayEdit<TF_PP_TUPLE_ELEM(2, tup)>
 
 template <class T>
 struct SdfValueTypeTraits {
@@ -384,6 +402,10 @@ struct SdfValueTypeTraits<SDF_VALUE_CPP_TYPE(elem)> {                       \
 };                                                                          \
 template <>                                                                 \
 struct SdfValueTypeTraits<SDF_VALUE_CPP_ARRAY_TYPE(elem)> {                 \
+    static const bool IsValueType = true;                                   \
+};                                                                          \
+template <>                                                                 \
+struct SdfValueTypeTraits<SDF_VALUE_CPP_ARRAY_EDIT_TYPE(elem)> {            \
     static const bool IsValueType = true;                                   \
 };
 
@@ -516,7 +538,8 @@ class Sdf_ValueTypeNamesType {
 public:
     SdfValueTypeName Bool;
     SdfValueTypeName UChar, Int, UInt, Int64, UInt64;
-    SdfValueTypeName Half, Float, Double, TimeCode;
+    SdfValueTypeName Half, Float, Double;
+    SdfValueTypeName TimeCode, Duration;
     SdfValueTypeName String, Token, Asset;
     SdfValueTypeName Int2,     Int3,     Int4;
     SdfValueTypeName Half2,    Half3,    Half4;
@@ -538,7 +561,8 @@ public:
 
     SdfValueTypeName BoolArray;
     SdfValueTypeName UCharArray, IntArray, UIntArray, Int64Array, UInt64Array;
-    SdfValueTypeName HalfArray, FloatArray, DoubleArray, TimeCodeArray;
+    SdfValueTypeName HalfArray, FloatArray, DoubleArray;
+    SdfValueTypeName TimeCodeArray, DurationArray;
     SdfValueTypeName StringArray, TokenArray, AssetArray;
     SdfValueTypeName Int2Array,     Int3Array,     Int4Array;
     SdfValueTypeName Half2Array,    Half3Array,    Half4Array;
@@ -598,6 +622,21 @@ private:
 
 // Write out the string representation of a block.
 SDF_API std::ostream& operator<<(std::ostream&, SdfValueBlock const&); 
+
+/// \class SdfAnimationBlock
+/// A special value type that can be used to explicitly author an
+/// opinion for an attribute's default value that represents having no animation
+/// value and is used to block spline or time samples value on a weaker layer.
+struct SdfAnimationBlock {
+    bool operator==(const SdfAnimationBlock& block) const { return true; }
+    bool operator!=(const SdfAnimationBlock& block) const { return false; }
+
+private:
+    friend inline size_t hash_value(const SdfAnimationBlock &block) { return 0; }
+};
+
+// Write out the string representation of an animation block.
+SDF_API std::ostream& operator<<(std::ostream&, SdfAnimationBlock const&);
 
 // A class that represents a human-readable value.  This is used for the special
 // purpose of producing layers that serialize field values in alternate ways; to

@@ -27,9 +27,9 @@ _GetInitPaths()
 {
     static SdfPathVector theInitPaths = []() {
         SdfPathVector paths;
-        
+
         char primName[] = "/_/_/_/_";
-        
+
         for (size_t firstLevel = 0; firstLevel < numFirstLevel; ++firstLevel) {
             primName[1] = firstLevelChar[firstLevel];
             for (char secondLevel = 'A'; secondLevel <= 'Z'; ++secondLevel) {
@@ -44,12 +44,12 @@ _GetInitPaths()
             }
         }
         // Shuffle paths randomly.
-        const size_t seed = 5109223000;
+        const std::mt19937::result_type seed = static_cast<std::mt19937::result_type>(9223000);
         std::mt19937 randomGen(seed);
         std::shuffle(paths.begin(), paths.end(), randomGen);
 
         printf("Using %zu initial paths\n", paths.size());
-        
+
         return paths;
     }();
 
@@ -146,7 +146,7 @@ MultiRemoveInsertTest(Metrics &metrics)
         }
         ids.GetIds(); // force sort.
     });
-    
+
     metrics.emplace_back("add_del_multiple", ArchTicksToNanoseconds(ticks));
 }
 
@@ -180,7 +180,7 @@ SubtreeRemoveInsertTest(Metrics &metrics)
     Hd_SortedIds ids = _GetPopulatedIds();
 
     std::vector<int64_t> timings;
-    
+
     for (SdfPathVector const &subtreePaths: subtreePathVecs) {
         timings.push_back(
             ArchMeasureExecutionTime([&ids, &subtreePaths]() {
@@ -232,7 +232,7 @@ PartialSubtreeRemoveInsertTest(Metrics &metrics)
     Hd_SortedIds ids = _GetPopulatedIds();
 
     std::vector<int64_t> timings;
-    
+
     for (SdfPathVector const &subtreePaths: subtreePathVecs) {
         timings.push_back(
             ArchMeasureExecutionTime([&ids, &subtreePaths]() {
@@ -263,7 +263,7 @@ ScatteredRemoveInsertTest(Metrics &metrics, unsigned divisor,
         SdfPathVector ret;
         const SdfPathVector &initPaths = _GetInitPaths();
         // Take random indexes that cover 10% of the total.
-        std::mt19937 gen(5109223000);
+        std::mt19937 gen(9223000);
         std::uniform_int_distribution<> distrib(0, initPaths.size()-1);
         for (size_t i = 0; i != initPaths.size() / divisor; ++i) {
             ret.push_back(initPaths[distrib(gen)]);
@@ -300,7 +300,7 @@ SpreadRemoveInsertTest(Metrics &metrics, size_t numElts)
         size_t idx = (ids.GetIds().size() * (x+1)) / (numElts+1);
         paths.push_back(ids.GetIds()[idx]);
     }
-        
+
     int64_t ticks = ArchMeasureExecutionTime([&ids, &paths]() {
         for (SdfPath const &path: paths) {
             ids.Remove(path);
@@ -354,10 +354,53 @@ SubtreeRenameTest(Metrics &metrics,
         ArchTicksToNanoseconds(ticks));
 }
 
+// Same edits as SubtreeRenameTest, but issued as one batch of removes followed
+// by one batch of inserts.  The ratio of the two isolates the cost of handling
+// interleaved removes and inserts.
+static
+void
+SubtreeBatchedRenameTest(Metrics &metrics,
+                         SdfPath const &oldPrefix,
+                         SdfPath const &newPrefix)
+{
+    SdfPathVector oldPaths, newPaths;
+    for (SdfPath const &path: _GetInitPaths()) {
+        if (path.HasPrefix(oldPrefix)) {
+            oldPaths.push_back(path);
+            newPaths.push_back(path.ReplacePrefix(oldPrefix, newPrefix));
+        }
+    }
+
+    Hd_SortedIds ids = _GetPopulatedIds();
+
+    int64_t ticks =
+        ArchMeasureExecutionTime([&ids, &oldPaths, &newPaths]() {
+            for (SdfPath const &path: oldPaths) {
+                ids.Remove(path);
+            }
+            for (SdfPath const &path: newPaths) {
+                ids.Insert(path);
+            }
+            ids.GetIds(); // force sort.
+            for (SdfPath const &path: newPaths) {
+                ids.Remove(path);
+            }
+            for (SdfPath const &path: oldPaths) {
+                ids.Insert(path);
+            }
+            ids.GetIds(); // force sort.
+        });
+
+    metrics.emplace_back(
+        "rename_batched_" + _PathToLabel(oldPrefix) +
+        "_to_" + _PathToLabel(newPrefix),
+        ArchTicksToNanoseconds(ticks));
+}
+
 int main()
 {
     Metrics metrics;
-    
+
     PopulateTest(metrics);
     SingleRemoveInsertTest(metrics);
     MultiRemoveInsertTest(metrics);
@@ -380,15 +423,22 @@ int main()
     SubtreeRenameTest(metrics, SdfPath("/A/B/C"), SdfPath("/A/B/_C"));
     SubtreeRenameTest(metrics, SdfPath("/A/B"), SdfPath("/A/_B"));
     SubtreeRenameTest(metrics, SdfPath("/Z/Z"), SdfPath("/A/B/_Z"));
-    
+    SubtreeRenameTest(metrics, SdfPath("/A"), SdfPath("/_A"));
+    SubtreeRenameTest(metrics, SdfPath("/Y"), SdfPath("/A/_Y"));
+    SubtreeBatchedRenameTest(metrics, SdfPath("/A/B/C"), SdfPath("/A/B/_C"));
+    SubtreeBatchedRenameTest(metrics, SdfPath("/A/B"), SdfPath("/A/_B"));
+    SubtreeBatchedRenameTest(metrics, SdfPath("/Z/Z"), SdfPath("/A/B/_Z"));
+    SubtreeBatchedRenameTest(metrics, SdfPath("/A"), SdfPath("/_A"));
+    SubtreeBatchedRenameTest(metrics, SdfPath("/Y"), SdfPath("/A/_Y"));
+
     FILE *statsFile = fopen("perfstats.raw", "w");
     for (const auto &[metricName, ns]: metrics) {
         fprintf(statsFile,
-                "{'profile':'%s','metric':'time','value':%zd,'samples':1}\n",
+                "{'profile':'%s','metric':'time','value':%+" PRId64 ",'samples':1}\n",
                 metricName.c_str(), ns);
-        printf("%s : %zd ns\n", metricName.c_str(), ns);
+        printf("%s : %+" PRId64 " ns\n", metricName.c_str(), ns);
     }
     fclose(statsFile);
-    
+
     printf("OK\n");
 }

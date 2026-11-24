@@ -5,7 +5,6 @@
 # Licensed under the terms set forth in the LICENSE.txt file available at
 # https://openusd.org/license.
 #
-from __future__ import division
 
 import sys
 import unittest
@@ -21,7 +20,7 @@ class TestGfFrustum(unittest.TestCase):
         # code coverage wonderfulness.
         f = Gf.Frustum()
         # force instantiation of the frustum planes
-        f.Intersects(Gf.Vec3d())
+        f.ComputePlanes()
         f2 = Gf.Frustum(f)
 
     def test_Operators(self):
@@ -33,8 +32,8 @@ class TestGfFrustum(unittest.TestCase):
         f1 = Gf.Frustum()
         f2 = Gf.Frustum()
         # force plane instantiation.
-        f1.Intersects(Gf.Vec3d())
-        f2.Intersects(Gf.Vec3d())
+        f1.ComputePlanes()
+        f2.ComputePlanes()
         self.assertEqual(f1, f2)
 
     def test_Position(self):
@@ -69,12 +68,12 @@ class TestGfFrustum(unittest.TestCase):
     def test_Projection(self):
         f = Gf.Frustum()
         f.SetPerspective( 10, True, 20, 30, 40 )
-        self.assertEqual(f.GetPerspective(True), (10, 20, 30, 40))
-        self.assertEqual(f.GetFOV(True), 10)
+        self.assertTrue(Gf.IsClose(f.GetPerspective(True), (10, 20, 30, 40), 1e-6))
+        self.assertAlmostEqual(f.GetFOV(True), 10)
         f.SetPerspective( 10, False, 20, 30, 40 )
-        self.assertEqual(f.GetPerspective(False), (10, 20, 30, 40))
-        self.assertEqual(f.GetFOV(False), 10)
-        self.assertEqual(f.GetFOV(), 10)
+        self.assertTrue(Gf.IsClose(f.GetPerspective(False), (10, 20, 30, 40), 1e-6))
+        self.assertAlmostEqual(f.GetFOV(False), 10)
+        self.assertAlmostEqual(f.GetFOV(), 10)
         f = Gf.Frustum()
         f.projectionType = f.Orthographic
         self.assertIsNone(f.GetPerspective(True))
@@ -204,6 +203,18 @@ class TestGfFrustum(unittest.TestCase):
         self.assertEqual(corners[5], Gf.Vec3d(3, -2, -10))
         self.assertEqual(corners[6], Gf.Vec3d(-3, 2, -10))
         self.assertEqual(corners[7], Gf.Vec3d(3, 2, -10))
+
+    def test_ComputeCorners(self):
+        f = Gf.Frustum()
+        f.projectionType = f.Orthographic
+        f.Transform(Gf.Matrix4d(Gf.Vec4d(3,2,1,1)))
+        planes = f.ComputePlanes()
+        self.assertEqual(planes[0], Gf.Plane(Gf.Vec3d( 1,  0,  0),  -3))
+        self.assertEqual(planes[1], Gf.Plane(Gf.Vec3d(-1,  0,  0),  -3))
+        self.assertEqual(planes[2], Gf.Plane(Gf.Vec3d( 0,  1,  0),  -2))
+        self.assertEqual(planes[3], Gf.Plane(Gf.Vec3d( 0, -1,  0),  -2))
+        self.assertEqual(planes[4], Gf.Plane(Gf.Vec3d( 0,  0, -1),   1))
+        self.assertEqual(planes[5], Gf.Plane(Gf.Vec3d( 0,  0,  1), -10))
 
     def test_ComputeNarrowedFrustum(self):
         f = Gf.Frustum()

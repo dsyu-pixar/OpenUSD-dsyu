@@ -5,7 +5,6 @@
 # Licensed under the terms set forth in the LICENSE.txt file available at
 # https://openusd.org/license.
 
-from __future__ import print_function
 
 from pxr import Tf, Sdf, Usd, UsdGeom, UsdShade
 import unittest
@@ -223,8 +222,8 @@ class TestUsdShadeShaders(unittest.TestCase):
         classPale.SetSdrMetadata(baseSdrMetadata)
 
         self.assertEqual(pale.GetSdrMetadata(), baseSdrMetadata)
-        paleSdrMetadata = {Sdr.NodeMetadata.Departments : "anim|layout",
-                              Sdr.NodeMetadata.Category : "preview"}
+        paleSdrMetadata = {"departments" : "anim|layout",
+                           "category" : "preview"}
         for i,j in paleSdrMetadata.items():
             pale.SetSdrMetadataByKey(i, j)
 

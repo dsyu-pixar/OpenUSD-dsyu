@@ -34,8 +34,8 @@ default (items in **bold** are reported on this page):
 * **Total time to start and quit** :program:`usdview`
 * Time to traverse the prims in the stage
 
-We run 10 iterations for each asset, and capture the minimum and maximum times
-for that set of iterations. We also calculate the mean time across the 10
+We run 100 iterations for each asset, and capture the minimum and maximum times
+for that set of iterations. We also calculate the mean time across the 100
 iterations.
 
 For each asset, we first warm the filesystem cache by loading the
@@ -65,10 +65,11 @@ currently used.
 Linux
 =====
 
-* **OS**: CentOS Linux 7
-* **CPU**: 23 cores of Intel(R) Xeon(R) Platinum 8268 CPU @ 2.90GHz
-* **RAM**: 117GB
-* **GPU**: NVIDIA TU102GL (Quadro RTX 6000/8000)
+* **OS**: AlmaLinux 9
+* **CPU**: AMD EPYC 9654 96-Core Processor
+* **CPU Utilization**: 47 Core(s), 47 Logical Processor(s) (no hyperthreading)
+* **RAM**: 145GB
+* **GPU**: NVIDIA L40S-24Q
 
 macOS
 =====
@@ -81,8 +82,9 @@ macOS
 Windows
 =======
 
-* **OS**: Microsoft Windows 10 Enterprise
-* **CPU**: AMD EPYC 7763 64-Core Processor, 2450 Mhz, 31 Core(s), 31 Logical Processor(s)
+* **OS**: Microsoft Windows 11 Enterprise
+* **CPU**: AMD EPYC 7763 64-Core Processor, 2450 Mhz
+* **CPU Utilization**: 31 Core(s), 31 Logical Processor(s) (no hyperthreading)
 * **RAM**: 128GB
 * **GPU**: NVIDIA RTXA6000-24Q
 
@@ -92,7 +94,9 @@ USD Build
 For each of the operating systems and hardware platforms listed previously, we
 build USD with the same build configuration. We use a stock invocation of 
 ``build_usd.py`` with the default options (release build, Python components,
-imaging and USD imaging components, usdview, etc).
+imaging and USD imaging components, usdview, etc). Note that this build uses
+the default system memory allocator, and does not use an alternate allocator 
+(as described in :ref:`maxperf_optimized_allocator`).
 
 *******
 Metrics
@@ -105,12 +109,25 @@ Performance Graphs Per Platform
 
 The following graphs show the time (in seconds) to open and close 
 :program:`usdview` for each asset. Graphs are provided for Linux, macOS, and
-Windows platforms (as described in :ref:`perf_environments`).
+Windows platforms (as described in :ref:`perf_environments`). Performance
+data from the four most recent releases is reported on a rolling basis.
 
 .. note::
+    In 26.11, the performance test environment's Python version was upgraded to
+    3.11. Prior tests were performed with Python 3.9.
 
-    There are known issues with obtaining the create_first_image metric on 
-    macOS. We will update published metrics when this issue is resolved.
+    As of 26.11, a regression on MacOS was observed in "shut_down_hydra" on
+    the Moore Lane and Alab assets with no obvious causes, which we're
+    currently investigating with the help of Apple.
+
+    As of 26.08, a regression on Windows was observed in "bring up the ui" on
+    all assets. We welcome assistance in investigating both this regression
+    and existing additional performance overhead on Windows vs other OSes.
+
+    Interpret the metrics on this page with caution. Variation may arise from
+    a variety of sources, including run-to-run inconsistency in how the GL
+    driver schedules its flushes against our requests. Investigation on these
+    is ongoing.
 
 .. image:: performance/linux.svg
     :width: 500
@@ -138,7 +155,7 @@ run; the primary intention is not necessarily to exercise specific renderers.
 
 The shader ball asset can be `downloaded here <https://github.com/usd-wg/assets/tree/main/full_assets/StandardShaderBall>`__.
 
-.. datatemplate:yaml:: performance/24.11_linux_shaderball.yaml
+.. datatemplate:yaml:: performance/26.11_linux_shaderball.yaml
    :template: perf_metric_shaderball_template.tmpl
 
 Kitchen Set
@@ -151,7 +168,7 @@ This asset provides a complex kitchen scene.
 
 The Kitchen Set asset can be `downloaded here <https://openusd.org/release/dl_kitchen_set.html>`__.
 
-.. datatemplate:yaml:: performance/24.11_linux_kitchenset.yaml
+.. datatemplate:yaml:: performance/26.11_linux_kitchenset.yaml
    :template: perf_metric_kitchenset_template.tmpl
 
 ALab
@@ -169,9 +186,9 @@ The metrics have been measured with the base asset merged with the additional
 .. image:: https://animallogic.com/wp-content/uploads/2022/08/LoopySequence02.gif
     :width: 500
 
-The ALab asset can be `downloaded here <https://animallogic.com/alab/>`__.
+The ALab asset can be `downloaded here <https://animallogic.com/technology/alab/>`__.
 
-.. datatemplate:yaml:: performance/24.11_linux_alab.yaml
+.. datatemplate:yaml:: performance/26.11_linux_alab.yaml
    :template: perf_metric_alab_template.tmpl
 
 Moore Lane
@@ -195,7 +212,7 @@ The metrics have been measured using the contained
 
 The Moore Lane asset can be `downloaded here <https://dpel.aswf.io/4004-moore-lane/>`__.
 
-.. datatemplate:yaml:: performance/24.11_linux_moorelane.yaml
+.. datatemplate:yaml:: performance/26.11_linux_moorelane.yaml
    :template: perf_metric_moorelane_template.tmpl
 
 ***********************************
@@ -208,7 +225,7 @@ also be run to validate local runtime environments and hardware configurations.
 
 Performance metrics are generating using the :program:`usdmeasureperformance.py`
 script found in ``pxr/extras/performance``. See the 
-`usdmeasureperformance tool docs <toolset>`_ for more 
+:ref:`usdmeasureperformance tool docs <toolset:usdmeasureperformance>` for more 
 information on the different parameters available.
 
 :program:`usdmeasureperformance.py` uses :program:`usdview` and 
@@ -220,7 +237,7 @@ are used (for each asset):
 
 .. code-block:: 
 
-    python usdmeasureperformance.py <asset.usda> -i 10 -a min -o <metrics output filename.yaml>
+    python usdmeasureperformance.py <asset.usda> -i 100 -a min -o <metrics output filename.yaml>
 
 Optionally, `--tracedir <dir>` will output trace information to `dir` that may aid in
 performance debugging.

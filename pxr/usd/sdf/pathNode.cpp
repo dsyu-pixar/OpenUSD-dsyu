@@ -9,6 +9,7 @@
 #include "pxr/usd/sdf/path.h"
 #include "pxr/usd/sdf/tokens.h"
 #include "pxr/usd/sdf/instantiatePool.h"
+#include "pxr/base/arch/align.h"
 #include "pxr/base/tf/bitUtils.h"
 #include "pxr/base/tf/diagnostic.h"
 #include "pxr/base/tf/hash.h"
@@ -23,6 +24,7 @@
 #include <tbb/concurrent_hash_map.h>
 #include <tbb/spin_mutex.h>
 
+#include <algorithm>
 #include <atomic>
 #include <memory>
 #include <utility>
@@ -33,13 +35,24 @@ using std::vector;
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-SDF_INSTANTIATE_POOL(Sdf_PathPrimTag, Sdf_SizeofPrimPathNode, /*regionBits=*/8);
-SDF_INSTANTIATE_POOL(Sdf_PathPropTag, Sdf_SizeofPropPathNode, /*regionBits=*/8);
+SDF_INSTANTIATE_POOL(
+    Sdf_PathPrimTag, Sdf_MaxSizeofPrimPathNode, /*regionBits=*/8);
+SDF_INSTANTIATE_POOL(
+    Sdf_PathPropTag, Sdf_MaxSizeofPropPathNode, /*regionBits=*/8);
 
 // Size of path nodes is important, so we want the compiler to tell us if it
 // changes.
-static_assert(sizeof(Sdf_PrimPathNode) == 3 * sizeof(void *), "");
-static_assert(sizeof(Sdf_PrimPropertyPathNode) == 3 * sizeof(void *), "");
+static_assert(Sdf_MaxSizeofPrimPathNode == std::max({
+    sizeof(Sdf_PrimPathNode),
+    sizeof(Sdf_PrimVariantSelectionNode)}), "");
+
+static_assert(Sdf_MaxSizeofPropPathNode == std::max({
+    sizeof(Sdf_PrimPropertyPathNode),
+    sizeof(Sdf_TargetPathNode),
+    sizeof(Sdf_RelationalAttributePathNode),
+    sizeof(Sdf_MapperPathNode),
+    sizeof(Sdf_MapperArgPathNode),
+    sizeof(Sdf_ExpressionPathNode)}), "");
 
 struct Sdf_PathNodePrivateAccess
 {
@@ -177,6 +190,38 @@ inline void TfHashAppend(HashState &h, _ParentAndRef<void> const &pat)
 }
 
 static constexpr unsigned NumNodeMaps = 128;
+static constexpr unsigned NumNodeMapsBits = 7;
+static_assert(NumNodeMaps == 1u << NumNodeMapsBits);
+
+// Hash functor for the sharded node maps below.
+//
+// GetMapAndMutexFor() selects a shard using the low NumNodeMapsBits bits of
+// TfHash's code.  The robin_map's power_of_two_growth_policy also selects a
+// bucket using low bits.  Every key in a given shard therefore holds the same
+// value in those bits, so once a shard grows past NumNodeMaps buckets only
+// 1/NumNodeMaps of them can ever be an ideal bucket.  Entries cluster around
+// those, and probe sequences grow to roughly NumNodeMaps * load_factor
+// regardless of table size.
+//
+// To avoid this we rotate the code right by NumNodeMapsBits to hand the
+// robin_map a disjoint window of bits, restoring a high quality hash
+// distribution.  We rotate instead of shifting since with a shift the shard
+// bits re-enter the bucket index once bucket_count reaches 2^NumNodeMapsBits.
+// That restores the collapse at a larger table size, and worse, since by then
+// every key in the shard shares a single ideal bucket.
+//
+// Sharding on the high bits instead doesn't work as well: TfHash's low bits are
+// its strongest and its high bits its weakest, by construction.  See the
+// commentary on Tf_HashState::_GetCode() in tf/hash.h.
+struct _NodeMapHash
+{
+    template <class T>
+    inline size_t operator()(T const &x) const {
+        size_t h = TfHash()(x);
+        return (h >> NumNodeMapsBits) |
+               (h << (8 * sizeof(h) - NumNodeMapsBits));
+    }
+};
 
 template <class T>
 struct _PrimTable {
@@ -184,18 +229,29 @@ struct _PrimTable {
     using PoolHandle = Sdf_PathPrimHandle;
     using NodeHandle = Sdf_PathPrimNodeHandle;
 
+    // The mutex and the map each get their own cache line.  Unaligned, this
+    // struct is 88 bytes, so in the _mapsAndMutexes array below a shard's mutex
+    // lands in the same line as the *next* shard's map header -- taking one
+    // shard's lock then invalidates the bucket pointer and bucket count that
+    // every lookup in the neighboring shard has to read, making the effective
+    // sharding much coarser than NumNodeMaps.  Separating the mutex from its
+    // own map as well keeps a waiter's reads of the mutex from invalidating the
+    // holder's writes to the map.
     struct _MapAndMutex {
-        pxr_tsl::robin_map<_ParentAnd<T>, PoolHandle, TfHash> map;
+        alignas(ARCH_CACHE_LINE_SIZE)
         mutable tbb::spin_mutex mutex;
+        alignas(ARCH_CACHE_LINE_SIZE)
+        pxr_tsl::robin_map<_ParentAnd<T>, PoolHandle, _NodeMapHash> map;
     };
+    static_assert(sizeof(_MapAndMutex) % ARCH_CACHE_LINE_SIZE == 0,
+                  "shards must not straddle cache lines");
 
     _MapAndMutex &GetMapAndMutexFor(_ParentAndRef<T> const &pat) {
         size_t z = _OuterHash(pat);
         return _mapsAndMutexes[z & (NumNodeMaps-1)];
     }
-    
+
     _MapAndMutex _mapsAndMutexes[NumNodeMaps];
-     
 };
 
 template <class T>
@@ -204,16 +260,21 @@ struct _PropTable {
     using PoolHandle = Sdf_PathPropHandle;
     using NodeHandle = Sdf_PathPropNodeHandle;
 
+    // Cache line layout as in _PrimTable above.
     struct _MapAndMutex {
-        pxr_tsl::robin_map<_ParentAnd<T>, PoolHandle, TfHash> map;
+        alignas(ARCH_CACHE_LINE_SIZE)
         mutable tbb::spin_mutex mutex;
+        alignas(ARCH_CACHE_LINE_SIZE)
+        pxr_tsl::robin_map<_ParentAnd<T>, PoolHandle, _NodeMapHash> map;
     };
+    static_assert(sizeof(_MapAndMutex) % ARCH_CACHE_LINE_SIZE == 0,
+                  "shards must not straddle cache lines");
 
     _MapAndMutex &GetMapAndMutexFor(_ParentAndRef<T> const &pat) {
         size_t z = _OuterHash(pat);
         return _mapsAndMutexes[z & (NumNodeMaps-1)];
     }
-    
+
     _MapAndMutex _mapsAndMutexes[NumNodeMaps];
 };
 
@@ -425,10 +486,12 @@ Sdf_PathNode::Sdf_PathNode(bool isAbsolute) :
 {
 }
 
+static TfStaticData<
+    const Sdf_PathNode::VariantSelectionType> theEmptyVariantSelection;
+
 const Sdf_PathNode::VariantSelectionType &
 Sdf_PathNode::_GetEmptyVariantSelection() const {
-    static VariantSelectionType _emptyVariantSelection;
-    return _emptyVariantSelection;
+    return *theEmptyVariantSelection;
 }
 
 namespace {
@@ -494,8 +557,7 @@ Sdf_PathNode::GetPathToken(Sdf_PathNode const *primPart,
     TfAutoMallocTag tag2("Sdf_PathNode::GetPathToken");
 
     _PrimToPropTokenTables::accessor primAccessor;
-    _pathTokenTable->insert(
-        primAccessor, std::make_pair(primPart, _PropToTokenTable()));
+    _pathTokenTable->insert(primAccessor, primPart);
     auto &propToTokenTable = primAccessor->second;
     // Release the primAccessor here, since the call to _CreatePathToken below
     // can cause reentry here (for embedded target paths).

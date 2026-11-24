@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <iterator>
 #include <type_traits>
+#include <utility>
 
 
 PXR_NAMESPACE_OPEN_SCOPE
@@ -108,6 +109,9 @@ public:
            typename std::enable_if<
                !std::is_const<element_type>::value &&
                std::is_same<typename Container::value_type, value_type
+                >::value &&
+               std::is_convertible<
+                   decltype(std::declval<Container &>().data()), pointer
                 >::value, Container
            >::type* = 0)
         : _data(cont.data()), _size(cont.size())
@@ -122,6 +126,9 @@ public:
     TfSpan(const Container& cont,
            typename std::enable_if<
                std::is_same<typename Container::value_type, value_type
+                >::value &&
+               std::is_convertible<
+                   decltype(std::declval<Container const &>().data()), pointer
                 >::value, Container
            >::type* = 0)
         : _data(cont.data()), _size(cont.size())
@@ -191,7 +198,7 @@ public:
     /// has a range of [data()+offset, data()+size()). Otherwise, the new
     /// span has range [data()+offset, data()+offset+count).
     TfSpan<T> subspan(difference_type offset, difference_type count=-1) const {
-        TF_DEV_AXIOM(offset >= 0 && (index_type)offset < _size);
+        TF_DEV_AXIOM(offset >= 0 && (index_type)offset <= _size);
         if (count == -1) {
             return TfSpan<T>(_data + offset, _size - offset);
         } else {
@@ -211,6 +218,10 @@ public:
         TF_DEV_AXIOM(_size >= count);
         return TfSpan<T>(end() - count, count);
     }
+
+    /// Identifies TfSpan as a view type to Python bindings.  Translation units
+    /// that wrap functions taking TfSpan must include pxr/base/tf/pySpan.h.
+    using pxr_boost_python_view_type = void;
 
 private:
     pointer _data = nullptr;

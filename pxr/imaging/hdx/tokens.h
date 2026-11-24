@@ -14,33 +14,35 @@
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-
 #define HDX_TOKENS              \
     (hdxOitCounterBuffer)       \
+    (hdxOitColorBuffer)         \
     (hdxOitDataBuffer)          \
     (hdxOitDepthBuffer)         \
+    (hdxOitTransmissionDepthBuffer)\
     (hdxOitIndexBuffer)         \
+    (hdxOitJointBuffer)         \
     (hdxSelectionBuffer)        \
-    (imagerVersion)             \
+    (imagerVersion) /* \deprecated */ \
     (lightingContext)           \
     (lightingShader)            \
+    (minSelectionOpacity)       \
     (occludedSelectionOpacity)  \
     (oitCounter)                \
+    (oitJointBuffer)            \
     (oitData)                   \
-    (oitDepth)                  \
-    (oitIndices)                \
     (oitUniforms)               \
     (oitCounterBufferBar)       \
     (oitDataBufferBar)          \
-    (oitDepthBufferBar)         \
-    (oitIndexBufferBar)         \
+    (oitJointBufferBar)         \
     (oitUniformBar)             \
     (oitRenderPassState)        \
     (oitScreenSize)             \
+    (oitMaxDataBufferSize)      \
     (oitRequestFlag)            \
     (oitClearedFlag)            \
     (renderPassState)           \
-    (renderIndexVersion)        \
+    (renderIndexVersion) /* \deprecated */ \
     (selection)                 \
     (selectionState)            \
     (selectionOffsets)          \
@@ -86,8 +88,7 @@ TF_DECLARE_PUBLIC_TOKENS(HdxPrimitiveTokens, HDX_API, HDX_PRIMITIVE_TOKENS);
     (inCameraGuide)             \
     (streamline)                \
     (interactiveOnlyGeom)       \
-    (path)                      \
-    (widget)
+    (path)
 
 TF_DECLARE_PUBLIC_TOKENS(HdxRenderTagTokens, HDX_API, HDX_RENDERTAG_TOKENS);
 
@@ -131,6 +132,7 @@ TF_DECLARE_PUBLIC_TOKENS(HdxAovTokens, HDX_API,
     (lightingContext)              \
     (useLighting)                  \
     (useColorMaterialDiffuse)      \
+    (lightCount)                   \
     (lightSource)                  \
     (position)                     \
     (ambient)                      \

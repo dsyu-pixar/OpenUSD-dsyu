@@ -20,10 +20,6 @@
 #include "pxr/pxr.h"
 #include "pxr/external/boost/python/common.hpp"
 
-#ifndef PXR_USE_INTERNAL_BOOST_PYTHON
-#include <boost/python/detail/config.hpp>
-#else
-
 # if defined(_MSC_VER)
 
 #  pragma warning (disable : 4786) // disable truncated debug symbols
@@ -44,9 +40,15 @@
  ****************************************************************************/
 
 // backwards compatibility:
-#ifdef PXR_BOOST_PYTHON_STATIC_LIB
-#  define PXR_BOOST_PYTHON_STATIC_LINK
-# elif !defined(PXR_BOOST_PYTHON_DYNAMIC_LIB)
+#if defined(PXR_BOOST_PYTHON_STATIC_LINK) && !defined(PXR_BOOST_PYTHON_STATIC_LIB)
+#  define PXR_BOOST_PYTHON_STATIC_LIB
+#endif
+
+#if defined(PXR_BOOST_PYTHON_DYNAMIC_LINK) && !defined(PXR_BOOST_PYTHON_DYNAMIC_LIB)
+#  define PXR_BOOST_PYTHON_DYNAMIC_LIB
+#endif
+
+#if !defined(PXR_BOOST_PYTHON_STATIC_LIB) && !defined(PXR_BOOST_PYTHON_DYNAMIC_LIB)
 #  define PXR_BOOST_PYTHON_DYNAMIC_LIB
 #endif
 
@@ -85,5 +87,9 @@
 #define PXR_BOOST_PYTHON_SUPPORTS_PY_SIGNATURES // enables smooth transition
 #endif
 
-#endif // PXR_USE_INTERNAL_BOOST_PYTHON
+// Upstream boost::python conditionally defines HAS_CXX11 as part of its
+// build system. We define it here unconditionally since we don't support
+// older versions of the standard.
+#define PXR_BOOST_PYTHON_HAS_CXX11
+
 #endif // PXR_EXTERNAL_BOOST_PYTHON_DETAIL_CONFIG_HPP

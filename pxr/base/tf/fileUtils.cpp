@@ -30,14 +30,11 @@
 #if !defined(ARCH_OS_WINDOWS)
 #include <sys/time.h>
 #include <unistd.h>
-#include <utime.h>
 #include <dirent.h>
-#include <utime.h>
 #else
 #include <Windows.h>
 #include <Shellapi.h>
 #include <ShlwAPI.h>
-#include <sys/utime.h>
 #endif
 using std::set;
 using std::string;
@@ -80,13 +77,22 @@ Tf_HasAttribute(
 
     // Ignore reparse points on network volumes. They can't be resolved
     // properly, so simply remove the reparse point attribute and treat
-    // it like a regular file/directory.
+    // it like a regular file/directory. Also ignore reparse points where
+    // TfReadLink returns the passed in path. As described in ArchReadLink,
+    // this will happen in cases where the reparse points are NT Object
+    // Manager paths, which cannot be used as file paths. Or if TfReadLink
+    // returns an empty string, that means we could not resolve the link
+    // at all, so treat it as if it is not a link.
+    std::string linkPath;
     if ((attribs & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
         // Calling PathIsNetworkPath sometimes sets the "last error" to an
         // error code indicating an incomplete overlapped I/O function. We
         // want to ignore this error.
         DWORD olderr = GetLastError();
-        if (PathIsNetworkPathW(pathW.c_str())) {
+        linkPath = TfReadLink(path.c_str());
+        if (PathIsNetworkPathW(pathW.c_str()) ||
+            linkPath.empty() ||
+            path == linkPath) {
             attribs &= ~FILE_ATTRIBUTE_REPARSE_POINT;
         }
         SetLastError(olderr);
@@ -105,9 +111,14 @@ Tf_HasAttribute(
         return attribute == 0 || (attribs & attribute) == expected;
     }
 
+    // At this point we know (attribs & FILE_ATTRIBUTE_REPARSE_POINT) != 0
+    // or we would have returned in the if block above. This means linkPath
+    // will be holding the result of calling TfReadLink(path.c_str()). The
+    // code is separated in this way to avoid calling TfReadLink twice. This
+    // is why we can simply pass linkPath to the Tf_HasAttribute call below.
+
     // Read symlinks until we find the real file.
-    return Tf_HasAttribute(TfReadLink(path.c_str()), resolveSymlinks,
-                           attribute, expected);
+    return Tf_HasAttribute(linkPath, resolveSymlinks, attribute, expected);
 }
 
 // Same as above but the bits in attribute must all be set.
@@ -666,42 +677,7 @@ TfListDir(string const& path, bool recursive)
 TF_API bool
 TfTouchFile(string const &fileName, bool create)
 {
-    if (create) {
-#if !defined(ARCH_OS_WINDOWS)
-        // Attempt to create the file so it is readable and writable by user,
-        // group and other.
-        int fd = open(fileName.c_str(),
-            O_WRONLY | O_CREAT | O_NONBLOCK | O_NOCTTY,
-            S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
-        if (fd == -1)
-            return false;
-        close(fd);
-#else
-            HANDLE fileHandle =
-                ::CreateFileW(ArchWindowsUtf8ToUtf16(fileName).c_str(),
-            GENERIC_WRITE,          // open for write
-            0,                      // not for sharing
-            NULL,                   // default security
-            OPEN_ALWAYS,            // opens existing
-            FILE_ATTRIBUTE_NORMAL,  //normal file
-            NULL);                  // no template
-
-        if (fileHandle == INVALID_HANDLE_VALUE) {
-            return false;
-        }
-
-        // Close the file
-        ::CloseHandle(fileHandle);
-#endif
-    }
-
-    // Passing NULL to the 'times' argument sets both the atime and mtime to
-    // the current time, with millisecond precision.
-#if defined(ARCH_OS_WINDOWS)
-    return _utime(fileName.c_str(), /* times */ NULL) == 0;
-#else
-    return utimes(fileName.c_str(), /* times */ NULL) == 0;
-#endif
+    return ArchTouchFile(fileName, create);
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE

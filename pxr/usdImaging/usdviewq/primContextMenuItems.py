@@ -4,12 +4,10 @@
 # Licensed under the terms set forth in the LICENSE.txt file available at
 # https://openusd.org/license.
 #
-from __future__ import print_function
 
 from .qt import QtGui, QtWidgets
 from .usdviewContextMenuItem import UsdviewContextMenuItem
-import os
-import sys
+from .common import SpawnUsdTool
 
 #
 # Edit the following to alter the per-prim context menu.
@@ -33,7 +31,9 @@ def _GetContextMenuItems(appController, item):
             CopyModelPathMenuItem(appController, item),
             SeparatorMenuItem(appController, item),
             IsolateAssetMenuItem(appController, item),
-            SetAsActiveCamera(appController, item)]
+            SetAsActiveCamera(appController, item),
+            SetAsActiveRenderSettings(appController, item),
+            SetAsActiveRenderPassPrim(appController, item)]
 
 #
 # The base class for per-prim context menu items.
@@ -284,8 +284,8 @@ class CopyPrimPathMenuItem(PrimContextMenuItem):
         pathStrings = '\n'.join(pathlist)
 
         cb = QtWidgets.QApplication.clipboard()
-        cb.setText(pathStrings, QtGui.QClipboard.Selection )
-        cb.setText(pathStrings, QtGui.QClipboard.Clipboard )
+        cb.setText(pathStrings, QtGui.QClipboard.Mode.Selection )
+        cb.setText(pathStrings, QtGui.QClipboard.Mode.Clipboard )
 
 #
 #  Copies the path of the first-selected prim's enclosing model
@@ -313,51 +313,9 @@ class CopyModelPathMenuItem(PrimContextMenuItem):
     def RunCommand(self):
         modelPath = str(self._modelPrim.GetPath())
         cb = QtWidgets.QApplication.clipboard()
-        cb.setText(modelPath, QtGui.QClipboard.Selection )
-        cb.setText(modelPath, QtGui.QClipboard.Clipboard )
+        cb.setText(modelPath, QtGui.QClipboard.Mode.Selection )
+        cb.setText(modelPath, QtGui.QClipboard.Mode.Clipboard )
 
-
-
-#
-# Copies the current prim and subtree to a file of the user's choosing
-# XXX This is not used, and does not work. Leaving code in for now for
-# future reference/inspiration
-#
-class IsolateCopyPrimMenuItem(PrimContextMenuItem):
-
-    def GetText(self):
-        return "Isolate Copy of Prim..."
-
-    def RunCommand(self):
-        focusPrim = self._selectionDataModel.getFocusPrim()
-
-        inFile = focusPrim.GetScene().GetUsdFile()
-
-        guessOutFile = os.getcwd() + "/" + focusPrim.GetName() + "_copy.usd"
-        (outFile, _) = QtWidgets.QFileDialog.getSaveFileName(None,
-            "Specify the Usd file to create", guessOutFile, 'Usd files (*.usd)')
-        if (outFile.rsplit('.')[-1] != 'usd'):
-            outFile += '.usd'
-
-        if inFile == outFile:
-            sys.stderr.write( "Cannot isolate a copy to the source usd!\n" )
-            return
-
-        sys.stdout.write( "Writing copy to new file '%s' ... " % outFile )
-        sys.stdout.flush()
-
-        os.system( 'usdcopy -inUsd ' + inFile +
-                ' -outUsd ' + outFile + ' ' +
-                ' -sourcePath ' + focusPrim.GetPath() + '; ' +
-                'usdview ' + outFile + ' &')
-
-        sys.stdout.write( "Done!\n" )
-
-    def IsEnabled(self):
-        numSelectedPrims = len(self._selectionDataModel.getPrims())
-        focusPrimActive = self._selectionDataModel.getFocusPrim().GetActive()
-
-        return numSelectedPrims == 1 and focusPrimActive
 
 
 #
@@ -393,8 +351,7 @@ class IsolateAssetMenuItem(PrimContextMenuItem):
         return "usdview asset%s" % name
 
     def RunCommand(self):
-        print("Spawning usdview %s" % self._filePath)
-        os.system("usdview %s &" % self._filePath)
+        SpawnUsdTool('usdview', [self._filePath])
 
 #
 # If the selected prim is a camera and not the currently active camera, display
@@ -409,8 +366,7 @@ class SetAsActiveCamera(PrimContextMenuItem):
         if len(self._selectionDataModel.getPrims()) == 1:
             prim = self._selectionDataModel.getPrims()[0]
             from pxr import UsdGeom
-            cam = UsdGeom.Camera(prim)
-            if cam:
+            if UsdGeom.Camera(prim):
                 if prim != appController.getActiveCamera():
                     self._nonActiveCameraPrim = prim
 
@@ -422,3 +378,59 @@ class SetAsActiveCamera(PrimContextMenuItem):
 
     def RunCommand(self):
         self._appController._cameraSelectionChanged(self._nonActiveCameraPrim)
+
+#
+# If the selected prim is a render settings prim and not the currently active
+# render settings prim, display an enabled menu item to set it as the active
+# render settings prim.
+#
+class SetAsActiveRenderSettings(PrimContextMenuItem):
+
+    def __init__(self, appController, item):
+        PrimContextMenuItem.__init__(self, appController, item)
+
+        self._nonActiveRenderSettingsPrim = None
+        if len(self._selectionDataModel.getPrims()) == 1:
+            prim = self._selectionDataModel.getPrims()[0]
+            from pxr import UsdRender
+            if UsdRender.Settings(prim):
+                if prim != appController.getActiveRenderSettingsPrim():
+                    self._nonActiveRenderSettingsPrim = prim
+
+    def IsEnabled(self):
+        return self._nonActiveRenderSettingsPrim
+
+    def GetText(self):
+        return "Set As Active Render Settings"
+
+    def RunCommand(self):
+        self._appController.setActiveRenderSettingsPrim(
+            self._nonActiveRenderSettingsPrim)
+
+#
+# If the selected prim is a render pass prim and not the currently active
+# render pass prim, display an enabled menu item to set it as the active
+# render pass prim.
+#
+class SetAsActiveRenderPassPrim(PrimContextMenuItem):
+
+    def __init__(self, appController, item):
+        PrimContextMenuItem.__init__(self, appController, item)
+
+        self._nonActiveRenderPassPrim = None
+        if len(self._selectionDataModel.getPrims()) == 1:
+            prim = self._selectionDataModel.getPrims()[0]
+            from pxr import UsdRender
+            if UsdRender.Pass(prim):
+                if prim != appController.getActiveRenderPassPrim():
+                    self._nonActiveRenderPassPrim = prim
+
+    def IsEnabled(self):
+        return self._nonActiveRenderPassPrim
+
+    def GetText(self):
+        return "Set As Active Render Pass Prim"
+
+    def RunCommand(self):
+        self._appController.setActiveRenderPassPrim(
+            self._nonActiveRenderPassPrim)

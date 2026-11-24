@@ -48,6 +48,8 @@ TF_DECLARE_PUBLIC_TOKENS(HdPlaneSchemaTokens, HD_API,
 //-----------------------------------------------------------------------------
 
 
+/// \class HdPlaneSchema
+///
 class HdPlaneSchema : public HdSchema
 {
 public:
@@ -74,6 +76,7 @@ public:
     /// \name Member accessor
     /// @{
 
+    /// Deprecated. Use the prim-level surface schema instead.
     HD_API
     HdBoolDataSourceHandle GetDoubleSided() const;
 

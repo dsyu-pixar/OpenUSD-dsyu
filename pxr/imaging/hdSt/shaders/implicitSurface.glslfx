@@ -1,0 +1,898 @@
+-- glslfx version 0.1
+
+//
+// Copyright 2026 Pixar
+//
+// Licensed under the terms set forth in the LICENSE.txt file available at
+// https://openusd.org/license.
+//
+
+--- This is what an import might look like.
+--- #import $TOOLS/hdSt/shaders/implicitSurface.glslfx
+
+#import $TOOLS/hdSt/shaders/coordUtils.glslfx
+#import $TOOLS/hdSt/shaders/instancing.glslfx
+#import $TOOLS/hdSt/shaders/implicitSurfaceFaceCull.glslfx
+#import $TOOLS/hdSt/shaders/implicitSurfaceNormal.glslfx
+#import $TOOLS/hdSt/shaders/terminals.glslfx
+#import $TOOLS/hdSt/shaders/edgeId.glslfx
+#import $TOOLS/hdSt/shaders/pointId.glslfx
+#import $TOOLS/hdSt/shaders/pointDisk.glslfx
+
+#import $TOOLS/hdSt/shaders/capsule.glslfx
+#import $TOOLS/hdSt/shaders/conicalFrustum.glslfx
+#import $TOOLS/hdSt/shaders/sphere.glslfx
+
+#import $TOOLS/hdSt/shaders/implicitSurfaceWire.glslfx
+
+
+--- --------------------------------------------------------------------------
+--- Shape contract: every shape module (e.g., sphere.glslfx, conicalFrustum.glslfx)
+--- must define the following sections:
+---
+---   -- glsl ImplicitSurface.Common.<Shape>
+---   // The maximum number of hits possible for the shape.
+---   #define MAX_HITS (<NUM>)
+---   // Holds all attributes for the shape.
+---   struct Shape;
+---   // Constructs a Shape by reading its constant primvar values.
+---   Shape ConstructShape();
+---   // Transforms from shape space to object space. E.g., transforming axes
+---   // for conicalFrustum.glslfx.
+---   MAT4 GetShapeToObjMatrix(const Shape shape);
+---   // Inverse of GetShapeToObjMatrix().
+---   MAT4 GetObjToShapeMatrix(const Shape shape);
+---
+---   -- glsl ImplicitSurface.Vertex.<Shape>
+---   // Eye-space bounding box used to size the rasterized billboard.
+---   Bbox ComputeBboxEye(const Shape shape, const MAT4 shapeToEye);
+---
+---   -- glsl ImplicitSurface.Fragment.<Shape>
+---   // Sorted hits in shape space, nearest first.
+---   // Set t = INF for invalid hits.
+---   SortedHits ComputeHitsShape(const Shape shape, const Ray rayShape);
+---   // Unnormalized outward normal in shape space at the given point.
+---   vec3 ComputeNormalShape(const Shape shape, const Point pointShape);
+---
+---   -- glsl ImplicitSurface.Wire.<Shape>
+---   // Pixel distance to the nearest wireframe edge.
+---   // Used by GetMinEdgeDistance in implicitSurfaceWire.glslfx.
+---   float ComputeWireDist(const Shape shape,
+---                         const Point pointShape,
+---                         const MAT4 shapeToEye,
+---                         const MAT4 shapeToPixelClip,
+---                         const mat3 NshapeToNeye,
+---                         const vec3 rayDirEye);
+--- --------------------------------------------------------------------------
+
+--- --------------------------------------------------------------------------
+-- glsl ImplicitSurface.Common.Constants
+
+// Epsilon for checking values that are close to 0.
+const float EPS = 1e-5;
+// Sentinel for invalid hits.
+const float INF = 1e+37;
+// Iteration count for the Newton-Raphson algorithm.
+const int NR_ITER_COUNT = 2;
+
+--- --------------------------------------------------------------------------
+-- layout ImplicitSurface.Vertex
+
+[
+    ["out block", "VertexData", "outData",
+        ["vec3", "Peye"]
+    ]
+]
+
+--- --------------------------------------------------------------------------
+-- glsl ImplicitSurface.Vertex.TypeDef
+
+struct Bbox
+{
+    vec3 minBound;
+    vec3 maxBound;
+};
+
+--- --------------------------------------------------------------------------
+-- glsl ImplicitSurface.Fragment.TypeDef
+
+struct Ray
+{
+    vec3 origin;
+    vec3 dir;
+};
+
+struct Point
+{
+    vec3 position;
+    // Which analytic component of the shape this point lies on (e.g., for
+    // a cylinder: lateral surface vs. top or bottom cap).
+    // Shape-Defined.
+    uint segment;
+};
+
+struct Hit
+{
+    float t;
+    uint segment;
+};
+
+struct SortedHits
+{
+    // Set t = INF for invalid hits.
+    Hit hits[MAX_HITS];
+};
+
+const uint RING_AXIS_X = 0u;
+const uint RING_AXIS_Y = 1u;
+const uint RING_AXIS_Z = 2u;
+
+struct Ring
+{
+    vec3 center;
+    float radius;
+    uint axis;
+};
+
+struct LineSeg
+{
+    vec3 endPoint1;
+    vec3 endPoint2;
+};
+
+--- --------------------------------------------------------------------------
+-- glsl ImplicitSurface.Vertex.Utils
+
+// Lengths of the column vectors of a 3x3 matrix.
+vec3
+ColumnLengths(const mat3 m)
+{
+    return vec3(length(m[0]), length(m[1]), length(m[2]));
+}
+
+// Lengths of the row vectors of a 3x3 matrix.
+vec3
+RowLengths(const mat3 m)
+{
+    return ColumnLengths(transpose(m));
+}
+
+// Lengths of the column vectors of a 3x3 matrix, ignoring their z components.
+vec3
+PlanarColumnLengths(const mat3 m)
+{
+    return vec3(length(m[0].xy), length(m[1].xy), length(m[2].xy));
+}
+
+// Lengths of the row vectors of a 3x3 matrix, ignoring their z components.
+vec3
+PlanarRowLengths(const mat3 m)
+{
+    return PlanarColumnLengths(transpose(m));
+}
+
+--- --------------------------------------------------------------------------
+-- glsl ImplicitSurface.Fragment.Utils
+
+// Computes the roots of a quadratic equation given its coefficients.
+// Returns roots in ascending order, using INF for invalid roots.
+vec2
+ComputeRoots(const float a, const float halfB, const float c)
+{
+    if (abs(a * c) <= halfB * halfB * EPS) {
+        // Infinite solution/no solution
+        if (abs(halfB) == 0.0) {
+            return vec2(INF);
+        }
+
+        // Linear equation
+        // bx + c = 0 => x = -c/b
+        float root = -c/(2.0 * halfB);
+        return vec2(root, INF);
+    }
+
+    // Discriminant
+    const float quarterH = halfB * halfB - a * c;
+
+    if (quarterH < 0.0) {
+        return vec2(INF);
+    }
+
+    const float sqrtQuarterH = sqrt(quarterH);
+
+    const float t1 = -halfB - sqrtQuarterH;
+    const float t2 = -halfB + sqrtQuarterH;
+
+    return vec2(t1, t2)/a;
+}
+
+// Checks if the ray parameter for a hit is valid.
+bool
+IsValidHit(const float t)
+{
+    return t < INF;
+}
+
+// Sorts hits in ascending order by t. Invalid (INF) values sort to the end.
+void
+SortHits(REF(thread, Hit) a, REF(thread, Hit) b)
+{
+    if (b.t < a.t) {
+        Hit tmp = a;
+        a = b;
+        b = tmp;
+    }
+}
+
+// Creates a SortedHits struct and sets all t values to INF.
+SortedHits
+CreateDefaultHits()
+{
+    SortedHits result;
+
+    for (int i = 0; i < MAX_HITS; i++) {
+        result.hits[i].t = INF;
+    }
+
+    return result;
+}
+
+// Conditionally inserts a hit at the end if it is valid and
+// the hits array has space.
+void
+ConditionalInsertHit(REF(thread, SortedHits) shapeHits,
+                     REF(thread, int) numInserted,
+                     const float t,
+                     const uint segment,
+                     const bool valid)
+{
+    if (!valid || numInserted >= MAX_HITS) {
+        return;
+    }
+
+    shapeHits.hits[numInserted].t = t;
+    shapeHits.hits[numInserted].segment = segment;
+    numInserted++;
+}
+
+// Computes the facing characteristic of a surface with the given normal.
+// Returns +1 for front-facing, -1 for back-facing, and 0 for surfaces that
+// are orthogonal to the view direction.
+float ComputeFacing(const mat3 NshapeToNeye,
+                    const vec3 Nshape,
+                    const vec3 rayDirEye)
+{
+    return sign(dot(NshapeToNeye * Nshape, -rayDirEye));
+}
+
+// Returns the distance in pixels between the screen-space point Pscreen and
+// the shape-space point Qshape.
+float ComputeScreenDist(const vec2 Pscreen,
+                        const vec3 Qshape,
+                        const MAT4 shapeToPixelClip)
+{
+    return length(Pscreen - TransformPoint(shapeToPixelClip, Qshape).xy);
+}
+
+// Returns the distance in pixels between Pscreen and Qshape.
+// Returns INF if the surface point at Pscreen and Qshape have opposite facing
+// characteristics.
+// QNshape need not be normalized.
+float ComputeFacingAwareScreenDist(const vec2 Pscreen,
+                                   const vec3 Qshape,
+                                   const float Pfacing,
+                                   const vec3 QNshape,
+                                   const mat3 NshapeToNeye,
+                                   const MAT4 shapeToEye,
+                                   const MAT4 shapeToPixelClip)
+{
+    const vec3 Qeye = TransformPoint(shapeToEye, Qshape);
+    const float Qfacing = ComputeFacing(NshapeToNeye,
+                                        QNshape,
+                                        ComputeRayDirectionEye(Qeye));
+
+    if (Pfacing * Qfacing < 0.0) {
+        return INF;
+    }
+
+    return ComputeScreenDist(Pscreen, Qshape, shapeToPixelClip);
+}
+
+// Returns (cosT, sinT) via Newton-Raphson such that the screen-space distance^2
+// from the corresponding ring point to the surface point is minimized.
+// initRingDir is the initial guess (cosT, sinT).
+vec2 RingDistNR(const vec2 Pscreen,
+                const vec4 ringBasis0Clip,
+                const vec4 ringBasis1Clip,
+                const vec4 ringCenterClip,
+                const vec2 initRingDir)
+{
+    vec2 ringDir = initRingDir;
+    for (int iter = 0; iter < NR_ITER_COUNT; iter++) {
+        const float cosT = ringDir.x;
+        const float sinT = ringDir.y;
+
+        const vec4 ringPointClip = cosT * ringBasis0Clip +
+                                   sinT * ringBasis1Clip +
+                                   ringCenterClip;
+
+        const vec4 ringPointClip_1d = -sinT * ringBasis0Clip +
+                                       cosT * ringBasis1Clip;
+
+        // Let f = ringPointClip
+        // f'' = -cosT * ringBasis0Clip - sinT * ringBasis1Clip
+        //     = -(ringPointClip - ringCenterClip)
+        const vec4 ringPointClip_2d = -(ringPointClip - ringCenterClip);
+
+        const vec2 ringPointScreen = ringPointClip.xy / ringPointClip.w;
+
+        // Let f = u/v
+        // => f' = (u/v)' = (u'v - uv')/v^2
+        //                = u'/v - uv'/v^2
+        // u = f * v
+        // => f' = u'/v - f * v * v'/v^2
+        //       = (u' - f * v')/v
+        const vec2 ringPointScreen_1d = (ringPointClip_1d.xy
+                                        - ringPointScreen * ringPointClip_1d.w)
+                                        / ringPointClip.w;
+
+        const vec2 ringPointScreen_2d = (ringPointClip_2d.xy
+                                        - 2.0 * ringPointScreen_1d * ringPointClip_1d.w
+                                        - ringPointScreen * ringPointClip_2d.w)
+                                        / ringPointClip.w;
+
+        const vec2 PtoRingPoint = ringPointScreen - Pscreen;
+
+        // dist^2 = dot(p2 - p1, p2 - p1)
+        //        = dot(p2, p2) + dot(p1, p1) - 2 * dot(p1, p2)
+        // Since p1 is a constant in our case, the function that we want to
+        // minimize is:
+        // f(theta) = dot(p2, p2) - 2 * dot(p1, p2)
+        //          = dot(p2, p2 - 2 * p1)
+        // => f'(theta) = dot(p2', p2 - 2 * p1) + dot(p2, p2')
+        //              = dot(p2', 2 * p2 - 2 * p1)
+        //              = 2 * dot(p2', p2 - p1)
+        const float f_1d = 2.0 * dot(ringPointScreen_1d, PtoRingPoint);
+        const float f_2d = 2.0 * (dot(ringPointScreen_1d, ringPointScreen_1d) +
+                                  dot(PtoRingPoint, ringPointScreen_2d));
+
+        if (abs(f_1d) < EPS || f_2d < EPS) {
+            break;
+        }
+
+        // Setting cos and sin for the next iteration.
+        // Since we want to minimize f(theta), we are attempting to find the
+        // nearest root of f'(theta).
+        // => nextTheta - theta = -f'(theta) / f''(theta)
+        const float delta = f_1d / f_2d;
+
+        float sinDelta, cosDelta;
+
+        // Avoid evaluating transcendentals for small angles.
+        if (abs(delta) < 0.1) {
+            // For small angles, sin(x) can be approximated as x.
+            sinDelta = delta;
+            cosDelta = sqrt(1.0 - sinDelta * sinDelta);
+        } else {
+            sinDelta = sin(delta);
+            cosDelta = cos(delta);
+        }
+
+        // cos(A - B) = cos(A) * cos(B) + sin(A) * sin(B)
+        // sin(A - B) = sin(A) * cos(B) - cos(A) * sin(B)
+        ringDir = vec2(cosT * cosDelta + sinT * sinDelta,
+                       sinT * cosDelta - cosT * sinDelta);
+    }
+
+    return ringDir;
+}
+
+// Returns the shape-space ring point with the smallest pixel distance
+// to Pshape.
+vec3 ComputeNearestRingPointShape(const Ring ring,
+                                  const vec3 Pshape,
+                                  const vec2 Pscreen,
+                                  const MAT4 shapeToPixelClip)
+{
+    // If radius is 0, the nearest ring point is the ring's center.
+    if (abs(ring.radius) < EPS) {
+        return ring.center;
+    }
+
+    // We use the closest ring point in shape space as the initial guess
+    // for Newton-Raphson.
+    uint ringBasis0Idx;
+    uint ringBasis1Idx;
+
+    if (ring.axis == RING_AXIS_X) {
+        ringBasis0Idx = 1;
+        ringBasis1Idx = 2;
+    } else if (ring.axis == RING_AXIS_Y) {
+        ringBasis0Idx = 0;
+        ringBasis1Idx = 2;
+    } else {
+        ringBasis0Idx = 0;
+        ringBasis1Idx = 1;
+    }
+
+    // The closest ring point in shape space can be obtained by projecting
+    // Pshape onto the ring plane, and then pushing the projected point to
+    // the ring's boundary along the radial direction.
+    const vec3 ringCenterToP = Pshape - ring.center;
+
+    const vec2 radialDir = vec2(ringCenterToP[ringBasis0Idx],
+                                ringCenterToP[ringBasis1Idx]);
+
+    // If Pshape lies on the ring's axis, use an arbitrary initial direction.
+    const vec2 initRingDir = SafeNormalize(radialDir, vec2(1.0, 0.0));
+
+    // Converting to vec4 explicitly in case shapeToPixelClip is a
+    // double-precision matrix.
+    const vec4 ringBasis0Clip = ring.radius *
+                                vec4(shapeToPixelClip[ringBasis0Idx]);
+    const vec4 ringBasis1Clip = ring.radius *
+                                vec4(shapeToPixelClip[ringBasis1Idx]);
+
+    // Run Newton-Raphson on initial ring dir to obtain the ring dir
+    // corresponding to the (approx.) smallest screen-space distance.
+    const vec4 ringCenterClip = vec4(shapeToPixelClip * vec4(ring.center, 1.0));
+
+    const vec2 finalRingDir = RingDistNR(Pscreen,
+                                         ringBasis0Clip,
+                                         ringBasis1Clip,
+                                         ringCenterClip,
+                                         initRingDir);
+    const float cosT = finalRingDir.x;
+    const float sinT = finalRingDir.y;
+
+    vec3 ringBasis0Shape = vec3(0.0);
+    ringBasis0Shape[ringBasis0Idx] = 1.0;
+
+    vec3 ringBasis1Shape = vec3(0.0);
+    ringBasis1Shape[ringBasis1Idx] = 1.0;
+
+    const vec3 ringDirShape = cosT * ringBasis0Shape + sinT * ringBasis1Shape;
+
+    return ring.center + ring.radius * ringDirShape;
+}
+
+// Returns the screen-space line segment point with the smallest pixel distance
+// to Pscreen.
+vec2 ComputeNearestLinePointScreen(const LineSeg lineSegShape,
+                                   const vec2 Pscreen,
+                                   const MAT4 shapeToPixelClip)
+{
+    const vec2 endPoint1Screen = TransformPoint(shapeToPixelClip,
+                                                lineSegShape.endPoint1).xy;
+    const vec2 endPoint2Screen = TransformPoint(shapeToPixelClip,
+                                                lineSegShape.endPoint2).xy;
+
+    const vec2 lineSegVec = endPoint1Screen - endPoint2Screen;
+
+    // Case where the 2 end points project to the same screen-space point.
+    const float lineSegLenSq = dot(lineSegVec, lineSegVec);
+    if (lineSegLenSq < EPS) {
+        return endPoint1Screen;
+    }
+
+    const vec2 lineDir = lineSegVec * inversesqrt(lineSegLenSq);
+
+    // Out-of-bounds cases.
+    if (dot(lineDir, Pscreen - endPoint2Screen) <= 0.0) {
+        return endPoint2Screen;
+    }
+
+    if (dot(lineDir, Pscreen - endPoint1Screen) >= 0.0) {
+        return endPoint1Screen;
+    }
+
+    // General case.
+    return endPoint2Screen
+           + dot(Pscreen - endPoint2Screen, lineDir) * lineDir;
+}
+
+--- --------------------------------------------------------------------------
+-- glsl ImplicitSurface.Vertex
+
+void main(void)
+{
+    ProcessPrimvarsIn();
+
+    const Shape shape = ConstructShape();
+
+    const MAT4 shapeToEye = GetWorldToViewMatrix() *
+                            ApplyInstanceTransform(HdGet_transform()) *
+                            GetShapeToObjMatrix(shape);
+
+    // Get bounds for the surface in eye space
+    const Bbox bboxEye = ComputeBboxEye(shape, shapeToEye);
+
+    const MAT4 projMat = GetProjectionMatrix();
+
+    // Get min and max x and y values in screen space.
+    // Converting to vec4 explicitly in case projMat is a double-precision matrix.
+    const vec4 clipMinBack = vec4(projMat * vec4(
+                                  bboxEye.minBound, 1.0));
+
+    const vec4 clipMaxBack = vec4(projMat * vec4(
+                                  bboxEye.maxBound.xy,
+                                  bboxEye.minBound.z, 1.0));
+
+    const vec4 clipMinFront = vec4(projMat * vec4(
+                                   bboxEye.minBound.xy,
+                                   bboxEye.maxBound.z, 1.0));
+
+    const vec4 clipMaxFront = vec4(projMat * vec4(
+                                   bboxEye.maxBound, 1.0));
+
+    vec3 xyzmin = min(clipMinFront.xyz / clipMinFront.w,
+                      clipMinBack.xyz / clipMinBack.w);
+    vec3 xyzmax = max(clipMaxFront.xyz / clipMaxFront.w,
+                      clipMaxBack.xyz / clipMaxBack.w);
+
+    const float nearPlaneNDC = GetNearPlaneNDC();
+
+    // If the entire surface is behind the camera, early out
+    if (clipMinBack.w < 0.0) {
+        gl_Position = vec4(0, 0, nearPlaneNDC - 1.0, 1);
+        outData.Peye = vec3(0);
+        return;
+    }
+    // If part of the surface is behind the camera, clip x and y bounds to
+    // -1.0, 0.0 or 1.0 depending on their eye space positions.
+    // Also clip z lower bound to the near plane, since the perspective division
+    // might yield a large positive value for it in this case.
+    if (clipMinFront.w < 0.0) {
+        xyzmin.z = nearPlaneNDC;
+
+        if (clipMinFront.x < 0.0) {
+            xyzmin.x = -1.0;
+        } else {
+            xyzmin.x = 0.0;
+        }
+
+        if (clipMaxFront.x < 0.0) {
+            xyzmax.x = 0.0;
+        } else {
+            xyzmax.x = 1.0;
+        }
+
+        if (clipMinFront.y < 0.0) {
+            xyzmin.y = -1.0;
+        } else {
+            xyzmin.y = 0.0;
+        }
+
+        if (clipMaxFront.y < 0.0) {
+            xyzmax.y = 0.0;
+        } else {
+            xyzmax.y = 1.0;
+        }
+    }
+
+    const float zmin = min(xyzmax.z, max(nearPlaneNDC, xyzmin.z));
+
+    // Early out if surface is not visible
+    if (zmin < nearPlaneNDC) {
+        gl_Position = vec4(0, 0, zmin, 1);
+        outData.Peye = vec3(0);
+        return;
+    }
+
+    vec2 xyNDC;
+    switch(hd_VertexID)
+    {
+        case 0:
+            xyNDC = vec2(xyzmin.x, xyzmax.y);
+            break;
+        case 1:
+            xyNDC = xyzmax.xy;
+            break;
+        case 2:
+            xyNDC = vec2(xyzmax.x, xyzmin.y);
+            break;
+        default:
+            xyNDC = xyzmin.xy;
+            break;
+    }
+
+    gl_Position = vec4(xyNDC, zmin, 1.0);
+
+    // When calculating Peye, push the billboard slightly away from the surface,
+    // because the FS uses Peye as rayOrigin
+    outData.Peye = TransformPoint(GetProjectionInverseMatrix(),
+                                  vec3(xyNDC, zmin - EPS));
+}
+
+--- --------------------------------------------------------------------------
+-- layout ImplicitSurface.Fragment
+
+[
+    ["in block", "VertexData", "inData",
+        ["vec3", "Peye"]
+    ]
+]
+
+--- --------------------------------------------------------------------------
+-- glsl ImplicitSurface.Fragment
+
+bool ShouldDiscardByClipPlanes(vec3 Peye)
+{
+#if defined(HD_HAS_numClipPlanes) && defined(HD_HAS_clipPlanes)
+    for (int i=0; i<HdGet_numClipPlanes(); ++i) {
+        if (dot(HdGet_clipPlanes(i), vec4(Peye, 1.0)) < 0.0) {
+            return true;
+        }
+    }
+#endif
+
+    return false;
+}
+
+// Returns a matrix whose output xy coordinates, after the perspective divide,
+// are measured in pixels (relative to the viewport center) instead of NDC.
+MAT4 GetShapeToPixelClip(const MAT4 projMat, const MAT4 shapeToEye)
+{
+    const vec2 pixelsPerNdc = 0.5 * GetViewport().zw;
+
+    // Scale the x and y rows.
+    const vec4 rowScale = vec4(pixelsPerNdc, 1.0, 1.0);
+
+    MAT4 projPixel = projMat;
+    projPixel[0] *= rowScale;
+    projPixel[1] *= rowScale;
+    projPixel[2] *= rowScale;
+    projPixel[3] *= rowScale;
+
+    return projPixel * shapeToEye;
+}
+
+// Returns the window-space depth of Peye, offset by the wireframe depth bias
+// and clamped to be no less than gl_FragCoord.z so that the depth_greater
+// qualifier is respected.
+float WindowDepthFromPeye(const MAT4 projMat, const vec3 Peye)
+{
+    const float ndcDepth = TransformPoint(projMat, Peye).z;
+    const float windowDepth = NDCToWindowDepth(ndcDepth);
+
+    return max(windowDepth + GetEdgeDepthBias(), gl_FragCoord.z);
+}
+
+bool ShouldDiscardByDepthReadback(const MAT4 projMat,
+                                  const vec3 Peye,
+                                  const float opaqueZWindow)
+{
+    const float windowDepth = WindowDepthFromPeye(projMat, Peye);
+    return windowDepth >= opaqueZWindow;
+}
+
+#ifdef HD_MATERIAL_TAG_TRANSLUCENT
+#ifdef HD_HAS_depthReadback
+#define OIT_TRANSLUCENT_PASS
+#else
+// Translucent implicits without depthReadback are in the OIT opaque pass.
+#define OIT_OPAQUE_PASS
+#endif
+#endif
+
+void main(void)
+{
+    const Shape shape = ConstructShape();
+
+    const MAT4 shapeToEye = GetWorldToViewMatrix() *
+                            ApplyInstanceTransform(HdGet_transform()) *
+                            GetShapeToObjMatrix(shape);
+
+    const MAT4 eyeToShape = GetObjToShapeMatrix(shape) *
+                            ApplyInstanceTransformInverse(
+                                HdGet_transformInverse()) *
+                            GetWorldToViewInverseMatrix();
+
+    const MAT4 projMat = GetProjectionMatrix();
+    const MAT4 shapeToPixelClip = GetShapeToPixelClip(projMat, shapeToEye);
+
+    const vec3 rayDirEye = ComputeRayDirectionEye(inData.Peye);
+
+#ifdef OIT_TRANSLUCENT_PASS
+    // This section needs to come here to keep texture sampling in uniform
+    // control flow.
+    const float opaqueZWindow = SampleZBuffer(gl_FragCoord.xy);
+#endif
+
+    Ray rayShape;
+    rayShape.origin = TransformPoint(eyeToShape, inData.Peye);
+    rayShape.dir = TransformDir(eyeToShape, rayDirEye);
+
+    const SortedHits shapeHits = ComputeHitsShape(shape, rayShape);
+
+    vec4 albedo = vec4(0.5, 0.5, 0.5, 1);
+#ifdef HD_HAS_displayColor
+    albedo.rgb = HdGet_displayColor().rgb;
+#endif
+#ifdef HD_HAS_displayOpacity
+    albedo.a = HdGet_displayOpacity();
+#endif
+
+    const mat3 NshapeToNeye = transpose(Mat4ToMat3(eyeToShape));
+
+    // Process all hits.
+    bool anyRendered = false;
+    for (int i = 0; i < MAX_HITS; i++) {
+        // Invalids sort to the end
+        if (!IsValidHit(shapeHits.hits[i].t)) {
+            break;
+        }
+
+        // Skip hits that are behind the ray origin
+        if (shapeHits.hits[i].t < 0.0) {
+            continue;
+        }
+
+        // Hits at even indices are front-facing
+        const bool frontFacing = (i % 2) == 0;
+        if (ShouldDiscardBasedOnShading(frontFacing)) {
+            continue;
+        }
+
+        Point pointShape;
+        pointShape.position = rayShape.origin + shapeHits.hits[i].t * rayShape.dir;
+
+        const vec3 Peye = TransformPoint(shapeToEye, pointShape.position);
+        if (ShouldDiscardByClipPlanes(Peye)) {
+            continue;
+        }
+
+#ifdef OIT_TRANSLUCENT_PASS
+        if (ShouldDiscardByDepthReadback(projMat, Peye, opaqueZWindow)) {
+            continue;
+        }
+#endif
+
+        pointShape.segment = shapeHits.hits[i].segment;
+
+        // XXX: We can probably add an optimization to prevent duplicate
+        // calculations for edge-only cases. If we do that, we will need to
+        // ensure that we write the correct depth.
+        const float edgeDist = GetMinEdgeDistance(shape,
+                                                  pointShape,
+                                                  shapeToEye,
+                                                  shapeToPixelClip,
+                                                  NshapeToNeye,
+                                                  rayDirEye);
+
+        const float edgeBlend = GetEdgeBlendFactor(edgeDist);
+        if (ShouldDiscardBasedOnEdgeCoverage(edgeBlend)) {
+            continue;
+        }
+
+        const vec3 Nshape = ComputeNormalShape(shape, pointShape);
+
+        // We get -Neye if this is a backface and the surface is double-sided
+        const vec3 Neye = GetShadingNormal(
+                            normalize(NshapeToNeye * Nshape), frontFacing);
+
+        // hard code patchCoord since the entire implicit surface is one "patch"
+        const vec4 patchCoord = vec4(0);
+
+        vec4 color = ShadingTerminal(vec4(Peye, 1), Neye, albedo, patchCoord);
+
+        color = ApplyEdgeColor(color, edgeBlend);
+
+#ifdef HD_MATERIAL_TAG_MASKED
+        if (ShouldDiscardByAlpha(color)) {
+            continue;
+        }
+#endif
+
+#ifdef OIT_TRANSLUCENT_PASS
+        // OIT translucent pass does not handle opaque pixels.
+        if (color.a >= 1.0) {
+            break;
+        }
+#endif
+
+#ifdef OIT_OPAQUE_PASS
+        // OIT opaque pass does not handle translucent pixels.
+        if (color.a < 1.0) {
+            continue;
+        }
+#endif
+
+        RenderOutput(vec4(Peye, 1), Neye, color, patchCoord);
+
+        if (!anyRendered) {
+            anyRendered = true;
+#ifndef OIT_TRANSLUCENT_PASS
+            // If we are not in the OIT translucent pass, set gl_FragDepth at
+            // the first hit that gets rendered.
+            gl_FragDepth = WindowDepthFromPeye(projMat, Peye);
+            break;
+#endif
+        }
+    }
+
+    if (!anyRendered) {
+        discard;
+        return;
+    }
+}
+
+#undef OIT_TRANSLUCENT_PASS
+#undef OIT_OPAQUE_PASS
+
+--- --------------------------------------------------------------------------
+-- layout ImplicitSurface.Vertex.Points
+
+[
+    ["out block", "VertexData", "outData",
+        ["vec3", "Peye"]
+    ]
+]
+
+--- --------------------------------------------------------------------------
+-- glsl ImplicitSurface.Vertex.Points
+
+// Fwd declare methods defined in pointId.glslfx, that are used below.
+FORWARD_DECL(int GetPointId());
+FORWARD_DECL(float GetPointRasterSize(int));
+FORWARD_DECL(void ProcessPointId(int));
+
+void main(void)
+{
+    ProcessPrimvarsIn();
+    const MAT4 objToEye = GetWorldToViewMatrix() *
+                          ApplyInstanceTransform(HdGet_transform());
+
+    // For native implicit surfaces, we draw a single camera-facing point at
+    // the origin of the object.
+    const vec3 origin = vec3(0.0);
+    outData.Peye = TransformPoint(objToEye, origin);
+
+    int pointId = GetPointId();
+    gl_PointSize = ApplyPointSizeBias(GetPointRasterSize(pointId));
+    ProcessPointId(pointId);
+
+    gl_Position = vec4(GetProjectionMatrix() * vec4(outData.Peye, 1.0));
+    ApplyClipPlanes(vec4(outData.Peye, 1.0));
+}
+
+--- --------------------------------------------------------------------------
+-- layout ImplicitSurface.Fragment.Points
+
+[
+    ["in block", "VertexData", "inData",
+        ["vec3", "Peye"]
+    ]
+]
+
+--- --------------------------------------------------------------------------
+-- glsl ImplicitSurface.Fragment.Points
+
+void main(void)
+{
+    ApplyDiskSampleMask();
+
+    const vec3 Peye = inData.Peye;
+    // camera facing.
+    const vec3 Neye = vec3(0, 0, 1);
+
+    vec4 color = vec4(0.5, 0.5, 0.5, 1);
+#ifdef HD_HAS_displayColor
+    color.rgb = HdGet_displayColor().rgb;
+#endif
+#ifdef HD_HAS_displayOpacity
+    color.a = HdGet_displayOpacity();
+#endif
+
+    const vec4 patchCoord = vec4(0);
+    color = ShadingTerminal(vec4(Peye, 1), Neye, color, patchCoord);
+
+#ifdef HD_MATERIAL_TAG_MASKED
+    if (ShouldDiscardByAlpha(color)) {
+        discard;
+        return;
+    }
+#endif
+
+    RenderOutput(vec4(Peye, 1), Neye, color, patchCoord);
+}

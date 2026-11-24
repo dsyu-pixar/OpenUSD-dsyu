@@ -45,7 +45,7 @@ class SdfAssetPath;
 /// transformed relative to the model, rather than copying its animation.
 /// 
 /// \section Usd_SpatialAudio_TimeScaling Timecode Attributes and Time Scaling
-/// \a startTime and \a endTime are \ref SdfTimeCode "timecode" valued 
+/// \a startTime and \a endTime are \ref GfTimeCode "timecode" valued 
 /// attributes which gives them the special behavior that 
 /// \ref SdfLayerOffset "layer offsets" affecting the layer in 
 /// which one of these values is authored are applied to the attribute's value 
@@ -65,22 +65,6 @@ class SdfAssetPath;
 /// composed stage-time. Even if we could compute a composed dilation this way,
 /// it would still be impossible to flatten a stage or layer stack into a single
 /// layer and still retain the composed audio dilation using this schema.
-/// 
-/// #### Inverting startTime and endTime
-/// Although we do not expect it to be common, it is possible to apply a 
-/// negative time scale to USD layers, which mostly has the effect of reversing
-/// animation in the affected composition. If a negative scale is applied to a
-/// composition that contains authored \a startTime and \a endTime, it will
-/// reverse their relative ordering in time. Therefore, we stipulate when
-/// \a playbackMode is "onceFromStartToEnd" or "loopFromStartToEnd", if 
-/// \a endTime is less than \a startTime, then begin playback at \a endTime, 
-/// and continue until \a startTime. When \a startTime and \a endTime are 
-/// inverted, we do not, however, stipulate that playback of the audio media 
-/// itself be inverted, since doing so "successfully" would require perfect 
-/// knowledge of when, within the audio clip, relevant audio ends (so that we 
-/// know how to offset the reversed audio to align it so that we reach the 
-/// "beginning" at \a startTime), and sounds played in reverse are not likely 
-/// to produce desirable results. 
 /// 
 ///
 /// For any described attribute \em Fallback \em Value or \em Allowed \em Values below
@@ -304,7 +288,7 @@ public:
     /// | ||
     /// | -- | -- |
     /// | Declaration | `uniform timecode startTime = 0` |
-    /// | C++ Type | SdfTimeCode |
+    /// | C++ Type | GfTimeCode |
     /// | \ref Usd_Datatypes "Usd Type" | SdfValueTypeNames->TimeCode |
     /// | \ref SdfVariability "Variability" | SdfVariabilityUniform |
     USDMEDIA_API
@@ -338,7 +322,7 @@ public:
     /// | ||
     /// | -- | -- |
     /// | Declaration | `uniform timecode endTime = 0` |
-    /// | C++ Type | SdfTimeCode |
+    /// | C++ Type | GfTimeCode |
     /// | \ref Usd_Datatypes "Usd Type" | SdfValueTypeNames->TimeCode |
     /// | \ref SdfVariability "Variability" | SdfVariabilityUniform |
     USDMEDIA_API

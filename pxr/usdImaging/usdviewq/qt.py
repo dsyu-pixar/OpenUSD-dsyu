@@ -40,34 +40,20 @@ if PySideModule == 'PySide2':
     
     QGLWidget.isContextInitialised = isContextInitialised
 
-    def bindTexture(self, qimage):
-        from OpenGL import GL
-        tex = self.bindTexture(qimage, GL.GL_TEXTURE_2D, GL.GL_RGBA,
-                               QtOpenGL.QGLContext.NoBindOption)
-        GL.glBindTexture(GL.GL_TEXTURE_2D, tex)
-
-        return tex
-
-    def releaseTexture(self, tex):
-        from OpenGL import GL
-        GL.glDeleteTextures(tex)
-
-    QGLWidget.BindTexture = bindTexture
-    QGLWidget.ReleaseTexture = releaseTexture
-
     def initQGLWidget(self, glFormat, parent):
         QGLWidget.__init__(self, glFormat, parent)
 
     QGLWidget.InitQGLWidget = initQGLWidget
+
+    # QGLFormat has the alpha channel disabled by default. Note that
+    # setAlphaBufferSize() would implicitly *enable* it, so use setAlpha().
+    QGLFormat.DisableAlphaBuffer = lambda self: self.setAlpha(False)
 
 elif PySideModule == 'PySide6':
     from PySide6 import QtCore, QtGui, QtWidgets, QtOpenGL
     from PySide6.QtOpenGLWidgets import QOpenGLWidget as QGLWidget
     from PySide6.QtGui import QSurfaceFormat as QGLFormat
     from PySide6 import QtGui as QtActionWidgets
-
-    if not hasattr(QtCore.Qt, 'MatchRegExp'):
-        QtCore.Qt.MatchRegExp = QtCore.Qt.MatchRegularExpression
 
     def isContextInitialised(self):
         return True
@@ -79,18 +65,6 @@ elif PySideModule == 'PySide6':
     if not hasattr(QGLWidget, 'grabFrameBuffer'):
         QGLWidget.grabFrameBuffer = QGLWidget.grabFramebuffer
 
-    def bindTexture(self, qimage):
-        tex = QtOpenGL.QOpenGLTexture(qimage)
-        tex.bind()
-        return tex
-
-    def releaseTexture(self, tex):
-        tex.release()
-        tex.destroy()
-
-    QGLWidget.BindTexture = bindTexture
-    QGLWidget.ReleaseTexture = releaseTexture
-
     if not hasattr(QGLFormat, 'setSampleBuffers'):
         QGLFormat.setSampleBuffers = lambda self, _: None
 
@@ -99,6 +73,11 @@ elif PySideModule == 'PySide6':
         self.setFormat(glFormat)
 
     QGLWidget.InitQGLWidget = initQGLWidget
+
+    # QSurfaceFormat leaves the alpha buffer size unspecified (-1), which lets
+    # the platform pick a pixel format that has one; Windows does, which makes
+    # the grabbed framebuffer RGBA instead of RGB. Request none explicitly.
+    QGLFormat.DisableAlphaBuffer = lambda self: self.setAlphaBufferSize(0)
 
 else:
     raise ImportError('Unrecognized PySide module "{}"'.format(PySideModule))

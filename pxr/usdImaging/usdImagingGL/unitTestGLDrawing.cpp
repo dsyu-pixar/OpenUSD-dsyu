@@ -9,9 +9,6 @@
 #include "pxr/imaging/garch/glApi.h"
 
 #include "pxr/usdImaging/usdImagingGL/unitTestGLDrawing.h"
-#include "pxr/imaging/glf/contextCaps.h"
-#include "pxr/imaging/glf/diagnostic.h"
-#include "pxr/imaging/glf/drawTarget.h"
 #include "pxr/imaging/garch/glDebugWindow.h"
 
 #include "pxr/imaging/hdSt/textureUtils.h"
@@ -26,11 +23,20 @@
 
 #include "pxr/base/plug/registry.h"
 #include "pxr/base/arch/systemInfo.h"
+#include "pxr/base/tf/stringUtils.h"
+
+#include "pxr/imaging/hd/dataSource.h"
+#include "pxr/imaging/hd/sceneIndex.h"
+#include "pxr/imaging/hd/sceneIndexPrimView.h"
+#include "pxr/usd/sdf/path.h"
 
 #include <stdio.h>
 #include <stdarg.h>
 
 #include <fstream>
+#include <memory>
+#include <sstream>
+#include <vector>
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -49,34 +55,124 @@ static void UsdImagingGL_UnitTestHelper_InitPlugins()
 
 ////////////////////////////////////////////////////////////
 
-class UsdImagingGL_UnitTestWindow : public GarchGLDebugWindow {
+// Minimal raw-GL offscreen render target for the client-framebuffer
+// present-output modes (-presentComposite / -presentDisabled).
+class _OffscreenFramebuffer
+{
 public:
-    typedef UsdImagingGL_UnitTestWindow This;
+    _OffscreenFramebuffer()
+        : _fbo(0), _colorTexture(0), _depthTexture(0)
+        , _restoreReadFramebuffer(0), _restoreDrawFramebuffer(0)
+    {}
 
+    void Create(int width, int height) {
+        _size = GfVec2i(width, height);
+
+        glGenFramebuffers(1, &_fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, _fbo);
+
+        glGenTextures(1, &_colorTexture);
+        glBindTexture(GL_TEXTURE_2D, _colorTexture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, _size[0], _size[1], 0,
+                     GL_RGBA, GL_FLOAT, nullptr);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D, _colorTexture, 0);
+
+        glGenTextures(1, &_depthTexture);
+        glBindTexture(GL_TEXTURE_2D, _depthTexture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F,
+                     _size[0], _size[1], 0, GL_DEPTH_COMPONENT, GL_FLOAT,
+                     nullptr);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                               GL_TEXTURE_2D, _depthTexture, 0);
+
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
+
+    void Destroy() {
+        glDeleteTextures(1, &_colorTexture);
+        glDeleteTextures(1, &_depthTexture);
+        glDeleteFramebuffers(1, &_fbo);
+        _colorTexture = _depthTexture = _fbo = 0;
+    }
+
+    void Resize(int width, int height) {
+        if (GfVec2i(width, height) == _size) {
+            return;
+        }
+        _size = GfVec2i(width, height);
+
+        glBindTexture(GL_TEXTURE_2D, _colorTexture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, _size[0], _size[1], 0,
+                     GL_RGBA, GL_FLOAT, nullptr);
+
+        glBindTexture(GL_TEXTURE_2D, _depthTexture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F,
+                     _size[0], _size[1], 0, GL_DEPTH_COMPONENT, GL_FLOAT,
+                     nullptr);
+
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
+
+    void Bind() {
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &_restoreReadFramebuffer);
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &_restoreDrawFramebuffer);
+        glBindFramebuffer(GL_FRAMEBUFFER, _fbo);
+    }
+
+    void Unbind() {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, _restoreReadFramebuffer);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, _restoreDrawFramebuffer);
+    }
+
+    GLuint   GetFbo()  const { return _fbo; }
+    GfVec2i  GetSize() const { return _size; }
+
+private:
+    GLuint  _fbo;
+    GLuint  _colorTexture;
+    GLuint  _depthTexture;
+    GfVec2i _size;
+    GLint   _restoreReadFramebuffer;
+    GLint   _restoreDrawFramebuffer;
+};
+
+////////////////////////////////////////////////////////////
+
+class UsdImagingGL_UnitTestWindow : public GarchGLDebugWindow
+{
 public:
     UsdImagingGL_UnitTestWindow(UsdImagingGL_UnitTestGLDrawing * unitTest,
                                 int w, int h);
-    virtual ~UsdImagingGL_UnitTestWindow();
+    ~UsdImagingGL_UnitTestWindow() override;
 
     void DrawOffscreen();
 
-    bool WriteToFile(std::string const & attachment, 
+    bool WriteToFile(std::string const & attachment,
                      std::string const & filename);
 
-    // GarchGLDebugWIndow overrides;
-    virtual void OnInitializeGL();
-    virtual void OnUninitializeGL();
-    virtual void OnPaintGL();
-    virtual void OnKeyRelease(int key);
-    virtual void OnMousePress(int button, int x, int y, int modKeys);
-    virtual void OnMouseRelease(int button, int x, int y, int modKeys);
-    virtual void OnMouseMove(int x, int y, int modKeys);
+    void OnInitializeGL() override;
+    void OnUninitializeGL() override;
+    void OnPaintGL() override;
+    void OnKeyRelease(int key) override;
+    void OnMousePress(int button, int x, int y, int modKeys) override;
+    void OnMouseRelease(int button, int x, int y, int modKeys) override;
+    void OnMouseMove(int x, int y, int modKeys) override;
 
 private:
     void _ClearPresentationOutput();
 
     UsdImagingGL_UnitTestGLDrawing *_unitTest;
-    GlfDrawTargetRefPtr _drawTarget;
+    _OffscreenFramebuffer _offscreenFbo;
     bool _clearedOnce;
 };
 
@@ -88,9 +184,7 @@ UsdImagingGL_UnitTestWindow::UsdImagingGL_UnitTestWindow(
 {
 }
 
-UsdImagingGL_UnitTestWindow::~UsdImagingGL_UnitTestWindow()
-{
-}
+UsdImagingGL_UnitTestWindow::~UsdImagingGL_UnitTestWindow() = default;
 
 void
 UsdImagingGL_UnitTestWindow::_ClearPresentationOutput()
@@ -111,25 +205,20 @@ void
 UsdImagingGL_UnitTestWindow::OnInitializeGL()
 {
     GarchGLApiLoad();
-    GlfRegisterDefaultDebugOutputMessageCallback();
-    GlfContextCaps::InitInstance();
 
     if (_unitTest->IsEnabledTestPresentOutput()) {
         //
-        // Create an offscreen draw target which is the same size as this
-        // widget and initialize the unit test with the draw target bound.
+        // Create an offscreen framebuffer which is the same size as this
+        // widget and initialize the unit test with the framebuffer bound.
         //
-        _drawTarget = GlfDrawTarget::New(GfVec2i(GetWidth(), GetHeight()));
-        _drawTarget->Bind();
-        _drawTarget->AddAttachment("color", GL_RGBA, GL_FLOAT, GL_RGBA);
-        _drawTarget->AddAttachment("depth", GL_DEPTH_COMPONENT, GL_FLOAT,
-                                            GL_DEPTH_COMPONENT);
+        _offscreenFbo.Create(GetWidth(), GetHeight());
+        _offscreenFbo.Bind();
     }
 
     _unitTest->InitTest();
 
     if (_unitTest->IsEnabledTestPresentOutput()) {
-        _drawTarget->Unbind();
+        _offscreenFbo.Unbind();
     }
 }
 
@@ -138,7 +227,7 @@ void
 UsdImagingGL_UnitTestWindow::OnUninitializeGL()
 {
     if (_unitTest->IsEnabledTestPresentOutput()) {
-        _drawTarget = GlfDrawTargetRefPtr();
+        _offscreenFbo.Destroy();
     }
 
     _unitTest->ShutdownTest();
@@ -149,15 +238,15 @@ void
 UsdImagingGL_UnitTestWindow::OnPaintGL()
 {
     //
-    // Update the draw target's size and execute the unit test with
-    // the draw target bound.
+    // Update the framebuffer's size and execute the unit test with
+    // the framebuffer bound.
     //
     int width = GetWidth();
     int height = GetHeight();
 
     if (_unitTest->IsEnabledTestPresentOutput()) {
-        _drawTarget->Bind();
-        _drawTarget->SetSize(GfVec2i(width, height));
+        _offscreenFbo.Bind();
+        _offscreenFbo.Resize(width, height);
     }
 
     _ClearPresentationOutput();
@@ -165,14 +254,14 @@ UsdImagingGL_UnitTestWindow::OnPaintGL()
     _unitTest->DrawTest(false);
 
     if (_unitTest->IsEnabledTestPresentOutput()) {
-        _drawTarget->Unbind();
+        _offscreenFbo.Unbind();
 
         //
         // Blit the resulting color buffer to the window (this is a noop
         // if we're drawing offscreen).
         //
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, _drawTarget->GetFramebufferId());
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, _offscreenFbo.GetFbo());
 
         glBlitFramebuffer(0, 0, width, height,
                           0, 0, width, height,
@@ -188,8 +277,8 @@ void
 UsdImagingGL_UnitTestWindow::DrawOffscreen()
 {
     if (_unitTest->IsEnabledTestPresentOutput()) {
-        _drawTarget->Bind();
-        _drawTarget->SetSize(GfVec2i(GetWidth(), GetHeight()));
+        _offscreenFbo.Bind();
+        _offscreenFbo.Resize(GetWidth(), GetHeight());
     }
 
     _ClearPresentationOutput();
@@ -197,7 +286,7 @@ UsdImagingGL_UnitTestWindow::DrawOffscreen()
     _unitTest->DrawTest(true);
 
     if (_unitTest->IsEnabledTestPresentOutput()) {
-        _drawTarget->Unbind();
+        _offscreenFbo.Unbind();
     }
 }
 
@@ -205,17 +294,48 @@ bool
 UsdImagingGL_UnitTestWindow::WriteToFile(std::string const & attachment,
         std::string const & filename)
 {
-    // We need to unbind the draw target before writing to file to be sure the
-    // attachment is in a good state.
-    bool isBound = _drawTarget->IsBound();
-    if (isBound)
-        _drawTarget->Unbind();
+    if (attachment != "color") {
+        TF_CODING_ERROR(
+            "\"%s\" is not a valid attachment name for this framebuffer",
+            attachment.c_str());
+        return false;
+    }
 
-    bool result = _drawTarget->WriteToFile(attachment, filename);
+    GLint restoreReadFramebuffer;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &restoreReadFramebuffer);
+    GLint restorePackAlignment;
+    glGetIntegerv(GL_PACK_ALIGNMENT, &restorePackAlignment);
 
-    if (isBound)
-        _drawTarget->Bind();
-    return result;
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, _offscreenFbo.GetFbo());
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+
+    GfVec2i const fboSize = _offscreenFbo.GetSize();
+    size_t const bufferSize =
+        (size_t)fboSize[0] * (size_t)fboSize[1] * 4 * sizeof(float);
+    std::unique_ptr<char[]> buffer(new char[bufferSize]);
+    glReadPixels(0, 0, fboSize[0], fboSize[1], GL_RGBA, GL_FLOAT,
+                 buffer.get());
+
+    glPixelStorei(GL_PACK_ALIGNMENT, restorePackAlignment);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, restoreReadFramebuffer);
+
+    HioImage::StorageSpec storage;
+    storage.width = fboSize[0];
+    storage.height = fboSize[1];
+    storage.format = HioFormatFloat32Vec4;
+    storage.flipped = true;
+    storage.data = buffer.get();
+
+    HioImageSharedPtr const image = HioImage::OpenForWriting(filename);
+    bool const writeSuccess = image && image->Write(storage);
+
+    if (!writeSuccess) {
+        TF_RUNTIME_ERROR("Failed to write image to %s", filename.c_str());
+        return false;
+    }
+
+    return true;
 }
 
 /* virtual */
@@ -262,22 +382,23 @@ UsdImagingGL_UnitTestGLDrawing::UsdImagingGL_UnitTestGLDrawing()
     , _cameraLight(false)
     , _enableSceneMaterials(true)
     , _unloadedAsBounds(false)
+    , _skipTestPlugins(false)
     , _complexity(1.0f)
     , _drawMode(UsdImagingGLDrawMode::DRAW_SHADED_SMOOTH)
     , _shouldFrameAll(false)
     , _cullStyle(UsdImagingGLCullStyle::CULL_STYLE_NOTHING)
     , _rendererAov(HdAovTokens->color)
+    , _sceneIndexDumpMode(SceneIndexDumpMode::PathTypeAndDataSource)
     , _showGuides(UsdImagingGLRenderParams().showGuides)
     , _showRender(UsdImagingGLRenderParams().showRender)
     , _showProxy(UsdImagingGLRenderParams().showProxy)
     , _presentComposite(false)
     , _presentDisabled(false)
+    , _numErrorsAllowed(0)
 {
 }
 
-UsdImagingGL_UnitTestGLDrawing::~UsdImagingGL_UnitTestGLDrawing()
-{
-}
+UsdImagingGL_UnitTestGLDrawing::~UsdImagingGL_UnitTestGLDrawing() = default;
 
 int
 UsdImagingGL_UnitTestGLDrawing::GetWidth() const
@@ -359,6 +480,106 @@ UsdImagingGL_UnitTestGLDrawing::WriteAovToFile(
     return true;
 }
 
+////////////////////////////////////////////////////////////
+// Scene index dump helpers
+
+// Scrub pointer-address literals so the output is stable across runs.
+// Recognises "0x[0-9a-fA-F]*" and "@ [0-9a-fA-F]" patterns and replaces
+// the hex digits with 'X' padded to 16 characters.
+// Adapted from testUsdImagingStageSceneIndexContents.cpp.
+static bool
+_IsHexChar(char ch)
+{
+    return (ch >= '0' && ch <= '9')
+        || (ch >= 'a' && ch <= 'f')
+        || (ch >= 'A' && ch <= 'F')
+        || ch == 'x';
+}
+
+static std::string
+_CleanOutputForDiff(const std::string &inputStr)
+{
+    enum _Mode { DEFAULT, FOUND_0, FOUND_AT, PTR };
+
+    std::string outputStr;
+    size_t numPtrDigits = 0;
+    _Mode mode = DEFAULT;
+
+    for (char ch : inputStr) {
+        switch (mode) {
+        case DEFAULT:
+            if (ch == '0')      { mode = FOUND_0; }
+            else if (ch == '@') { mode = FOUND_AT; }
+            outputStr += ch;
+            break;
+        case FOUND_0:
+            mode = (ch == 'x') ? PTR : DEFAULT;
+            outputStr += ch;
+            break;
+        case FOUND_AT:
+            mode = (ch == ' ') ? PTR : DEFAULT;
+            outputStr += ch;
+            break;
+        case PTR:
+            if (_IsHexChar(ch)) {
+                outputStr += 'X';
+                numPtrDigits++;
+            } else {
+                outputStr.append(16 - numPtrDigits, 'X');
+                outputStr += ch;
+                numPtrDigits = 0;
+                mode = DEFAULT;
+            }
+            break;
+        }
+    }
+    return outputStr;
+}
+
+/* static */ void
+UsdImagingGL_UnitTestGLDrawing::WriteSceneIndexToFile(
+    UsdImagingGLEngine *engine,
+    std::string const &filename,
+    SceneIndexDumpMode mode)
+{
+    HdSceneIndexBaseRefPtr si = engine->_GetTerminalSceneIndex();
+    if (!si) {
+        TF_WARN("WriteSceneIndexToFile: terminal scene index is null");
+        return;
+    }
+
+    std::ostringstream ss;
+
+    HdSceneIndexPrimView view(
+        si, SdfPath::AbsoluteRootPath(), HdSceneIndexPrimView::Lexicographic);
+
+    // The task controller scene index inserts prims under a manufactured prim
+    // that contains the substring "_UsdImaging_", like
+    // </_UsdImaging_GL_0x...>. Skip these prims in the scene index dump.
+    // See UsdImagingGLEngine::_ComputeControllerPath().
+    const std::string controllerNameSubstr = "_UsdImaging_";
+    for (auto it = view.begin(); it != view.end(); ++it) {
+        const SdfPath &primPath = *it;
+        if (TfStringContains(primPath.GetString(), controllerNameSubstr)) {
+            continue;
+        }
+
+        HdSceneIndexPrim prim = si->GetPrim(primPath);
+        ss << "<" << primPath << "> type = " << prim.primType << "\n";
+        
+        if (mode == SceneIndexDumpMode::PathTypeAndDataSource) {
+            HdDebugPrintDataSource(ss, prim.dataSource, 1);
+        }
+    }
+
+    std::ofstream out(filename);
+    if (TF_VERIFY(out.is_open())) {
+        out << _CleanOutputForDiff(ss.str());
+    }
+}
+
+////////////////////////////////////////////////////////////
+
 struct UsdImagingGL_UnitTestGLDrawing::_Args {
     _Args()
       : offscreen(false)
@@ -422,6 +643,7 @@ static void Usage(int argc, char *argv[])
 "                           [-offscreen] [-lighting]\n"
 "                           [-disableSceneMaterials]\n"
 "                           [-camera pathToCamera]\n"
+"                           [-pickCamera pathToPickCamera]\n"
 "                           [-complexity complexity]\n"
 "                           [-renderer rendererName]\n"
 "                           [-shading [flat|smooth|wire|wireOnSurface|points]]\n"
@@ -434,7 +656,10 @@ static void Usage(int argc, char *argv[])
 "                           [-renderSetting name type value]\n"
 "                           [-rendererAov name]\n"
 "                           [-perfStatsFile path]\n"
-"                           [-traceFile path] [...]\n"
+"                           [-traceFile path]\n"
+"                           [-writeSceneIndex filePath]\n"
+"                           [-writeSceneIndexMode pathAndType|pathTypeAndDataSource]\n"
+"                           [-skipTestPlugins] [...]\n"
 "\n"
 "  usdImaging basic drawing test\n"
 "\n"
@@ -472,6 +697,13 @@ static void Usage(int argc, char *argv[])
 "  -rendererAov name   Name of AOV to display or write out\n"
 "  -perfStatsFile path Path to file performance stats are written to\n"
 "  -traceFile path     Path to trace file to write\n"
+"  -writeSceneIndex filePath\n"
+"                      Dump terminal scene index (geometry prims) to text file\n"
+"  -writeSceneIndexMode pathAndType|pathTypeAndDataSource\n"
+"                      Controls detail level for -writeSceneIndex;\n"
+"                      pathAndType writes path and primType only;\n"
+"                      pathTypeAndDataSource also writes the full data source\n"
+"                      tree (default: pathTypeAndDataSource)\n"
 "  -renderSetting name type value\n"
 "                      Specifies a setting with given name, type (such as\n"
 "                      float) and value passed to renderer. -renderSetting\n"
@@ -493,6 +725,8 @@ static void Usage(int argc, char *argv[])
 "  -windowPolicy [matchVertically|matchHorizontally|fit|crop|dontConform]\n"
 "                      Forces the window policy\n"
 "                      (defaults to matchVertically to match usdview)\n"
+"  -numErrorsAllowed n Number of errors allowed before test fails (default 0)\n"
+"  -skipTestPlugins    Skip loading the usdImaging test plugins."
 ;
 
     Die(usage, TfGetBaseName(argv[0]).c_str());
@@ -530,6 +764,24 @@ static double ParseDouble(int& i, int argc, char *argv[],
         ParseError(argv[0], "invalid parameter for '%s': %s",
                    argv[i], argv[i + 1]);
     }
+    ++i;
+    if (invalid) {
+        *invalid = false;
+    }
+    return result;
+}
+
+
+static int ParseInt(int& i, int argc, char *argv[], bool* invalid = nullptr)
+{
+    if (i + 1 == argc) {
+        if (invalid) {
+            *invalid = true;
+            return 0.0;
+        }
+        ParseError(argv[0], "missing parameter for '%s'", argv[i]);
+    }
+    int result = atoi(argv[i + 1]);
     ++i;
     if (invalid) {
         *invalid = false;
@@ -592,13 +844,37 @@ ParseDoubleVector(
     }
 }
 
+static bool ParseBool(int& i, int argc, char *argv[])
+{
+    if (i + 1 == argc) {
+        ParseError(argv[0], "missing parameter for '%s'", argv[i]);
+        return false;
+    }
+
+    bool result = false;
+    if (strcmp(argv[i + 1], "true") == 0) {
+        result = true;
+    } else if (strcmp(argv[i + 1], "false") == 0) {
+        result = false;
+    } else {
+        ParseError(argv[0], "invalid parameter for '%s': %s. Must be either "
+                            "'true' or 'false'",
+                   argv[i], argv[i + 1]);
+    }
+
+    ++i;
+    return result;
+}
+
 static VtValue ParseVtValue(int &i, int argc, char *argv[])
 {
     const char * const typeString = ParseString(i, argc, argv);
-
     if (strcmp(typeString, "float") == 0) {
         CheckForMissingArguments(i, 1, argc, argv);
         return VtValue(float(ParseDouble(i, argc, argv)));
+    } else if (strcmp(typeString, "bool") == 0) {
+        CheckForMissingArguments(i, 1, argc, argv);
+        return VtValue(ParseBool(i, argc, argv));
     } else {
         ParseError(argv[0], "unknown type '%s'", typeString);
         return VtValue();
@@ -611,6 +887,9 @@ UsdImagingGL_UnitTestGLDrawing::_Parse(int argc, char *argv[], _Args* args)
     for (int i = 1; i != argc; ++i) {
         if (strcmp(argv[i], "-") == 0) {
             Usage(argc, argv);
+        }
+        else if (strcmp(argv[i], "-skipTestPlugins") == 0) {
+            _skipTestPlugins = true;
         }
         else if (strcmp(argv[i], "-frameAll") == 0) {
             _shouldFrameAll = true;
@@ -634,6 +913,10 @@ UsdImagingGL_UnitTestGLDrawing::_Parse(int argc, char *argv[], _Args* args)
         else if (strcmp(argv[i], "-camera") == 0) {
             CheckForMissingArguments(i, 1, argc, argv);
             _cameraPath = argv[++i];
+        }
+        else if (strcmp(argv[i], "-pickCamera") == 0) {
+            CheckForMissingArguments(i, 1, argc, argv);
+            _pickCameraPath = argv[++i];
         }
         else if (strcmp(argv[i], "-disableSceneMaterials") == 0) {
             _enableSceneMaterials = false;
@@ -672,6 +955,26 @@ UsdImagingGL_UnitTestGLDrawing::_Parse(int argc, char *argv[], _Args* args)
         else if (strcmp(argv[i], "-traceFile") == 0) {
             CheckForMissingArguments(i, 1, argc, argv);
             _traceFile = argv[++i];
+        }
+        else if (strcmp(argv[i], "-writeSceneIndex") == 0) {
+            CheckForMissingArguments(i, 1, argc, argv);
+            _sceneIndexOutputFilePath = argv[++i];
+        }
+        else if (strcmp(argv[i], "-writeSceneIndexMode") == 0) {
+            CheckForMissingArguments(i, 1, argc, argv);
+            const char *modeStr = argv[++i];
+            if (strcmp(modeStr, "pathAndType") == 0) {
+                _sceneIndexDumpMode =
+                    SceneIndexDumpMode::PathAndType;
+            } else if (strcmp(modeStr, "pathTypeAndDataSource") == 0) {
+                _sceneIndexDumpMode =
+                    SceneIndexDumpMode::PathTypeAndDataSource;
+            } else {
+                ParseError(argv[0],
+                    "unknown -writeSceneIndexMode value '%s'; "
+                    "expected pathAndType or pathTypeAndDataSource",
+                    modeStr);
+            }
         }
         else if (strcmp(argv[i], "-clipPlane") == 0) {
             CheckForMissingArguments(i, 4, argc, argv);
@@ -764,6 +1067,10 @@ UsdImagingGL_UnitTestGLDrawing::_Parse(int argc, char *argv[], _Args* args)
         else if (strcmp(argv[i], "-presentDisabled") == 0) {
             _presentDisabled = true;
         }
+        else if (strcmp(argv[i], "-numErrorsAllowed") == 0) {
+            // CheckForMissingArguments(i, 1, argc, argv);
+            _numErrorsAllowed = ParseInt(i, argc, argv);
+        }
         else {
             ParseError(argv[0], "unknown argument %s", argv[i]);
         }
@@ -803,7 +1110,9 @@ UsdImagingGL_UnitTestGLDrawing::RunTest(int argc, char *argv[])
         TraceCollector::GetInstance().SetEnabled(true);
     }
 
-    UsdImagingGL_UnitTestHelper_InitPlugins();
+    if (!_skipTestPlugins) {
+        UsdImagingGL_UnitTestHelper_InitPlugins();
+    }
 
     for (size_t i=0; i<args.clipPlaneCoords.size()/4; ++i) {
         _clipPlanes.push_back(GfVec4d(&args.clipPlaneCoords[i*4]));

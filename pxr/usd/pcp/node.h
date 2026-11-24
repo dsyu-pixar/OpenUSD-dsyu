@@ -233,6 +233,11 @@ public:
     PCP_API
     PcpLayerStackSite GetSite() const;
 
+    /// Equivalent to comparing `this->GetSite() == node.GetSite()` but without
+    /// constructing a PcpLayerStackSite.
+    PCP_API
+    bool HasSameSiteAs(const PcpNodeRef &node) const;
+
     /// Returns the path for the site this node represents.
     PCP_API
     const SdfPath& GetPath() const;
@@ -251,6 +256,20 @@ public:
     void SetIsDueToAncestor(bool isDueToAncestor);
     PCP_API
     bool IsDueToAncestor() const;
+
+    // Get/set whether this node or any of its ancestor nodes represents a
+    // direct dependency.
+    PCP_API
+    void SetHasTransitiveDirectDependency(bool hasDep);
+    PCP_API
+    bool HasTransitiveDirectDependency() const;
+
+    // Get/set whether this node or any of its ancestor nodes represents an
+    // ancestral dependency.
+    PCP_API
+    void SetHasTransitiveAncestralDependency(bool hasDep);
+    PCP_API
+    bool HasTransitiveAncestralDependency() const;
 
     /// Get/set whether this node provides any symmetry opinions, either
     /// directly or from a namespace ancestor.
@@ -320,6 +339,13 @@ public:
     PCP_API
     bool HasSpecs() const;
 
+    /// Returns true if this node's site or a namespace ancestor
+    /// has authored value clips.
+    PCP_API
+    void SetHasValueClips(bool hasValueClips);
+    PCP_API
+    bool HasValueClips() const;
+
     /// @}
 
     // Returns a compressed Sd site.  For internal use only.
@@ -340,6 +366,13 @@ private:
     friend class PcpNodeRef_PrivateChildrenConstReverseIterator;
     friend class PcpNodeRef_PrivateSubtreeConstIterator;
     template <class T> friend class Pcp_TraversalCache;
+    friend bool Pcp_IsPropagatedSpecializesNode(const PcpNodeRef& node);
+    friend bool Pcp_IsElided(const PcpNodeRef& node);
+    friend void Pcp_SetElided(const PcpNodeRef& node);
+    friend size_t Pcp_GetSealedDepth(const PcpNodeRef& node);
+    friend void Pcp_SetSealed(const PcpNodeRef& node, uint16_t depth);
+    friend bool Pcp_IsDirectDuplicate(const PcpNodeRef& node);
+    friend void Pcp_SetDirectDuplicate(const PcpNodeRef& node, bool value);
 
     // Private constructor for internal use.
     PcpNodeRef(PcpPrimIndex_Graph* graph, size_t idx)

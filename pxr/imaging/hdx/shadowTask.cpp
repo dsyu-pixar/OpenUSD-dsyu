@@ -24,7 +24,6 @@
 #include "pxr/imaging/hdSt/tokens.h"
 
 #include "pxr/imaging/glf/simpleLightingContext.h"
-#include "pxr/imaging/glf/diagnostic.h"
 
 #include "pxr/imaging/hio/image.h"
 #include "pxr/base/arch/fileSystem.h"
@@ -38,6 +37,44 @@ _HasDrawItems(HdRenderPassSharedPtr pass,
 {
     HdSt_RenderPass *hdStRenderPass = static_cast<HdSt_RenderPass*>(pass.get());
     return hdStRenderPass && hdStRenderPass->HasDrawItems(renderTags);
+}
+
+// Shadow passes enable depth clamping, which disables the rasterizer's near
+// plane clipping. Some drivers then mis-rasterize triangles that cross the
+// center of projection (clip-space w = 0) of a perspective shadow frustum,
+// dropping coverage that should be kept. Restore well-defined behavior by
+// clipping just in front of the center of projection (w >= epsilon), which
+// only removes geometry the frustum's side planes would exclude anyway, so
+// casters in front of the near plane are still depth clamped.
+//
+// Note that OpenGL defines clipping as following:
+// http://registry.khronos.org/OpenGL/specs/gl/glspec46.core.pdf (page 454)
+// The view volume is -w <= x <= w; -w <= y <= w; the z check is omitted
+// for shadow maps.  If w < 0 this inequality is impossible to satisfy so this
+// clip plane should be a no-op.  Vulkan & Metal also clip before perspective
+// divide.  However, this clip plane fixes observed rasterization issues.
+// Annoyingly, I haven't been able to distill a unit test yet :|.
+static HdRenderPassState::ClipPlanesVector
+_ComputeShadowClipPlanes(GfMatrix4d const &projection)
+{
+    const GfVec4d wPlane = projection.GetColumn(3);
+
+    // Orthographic projections have constant w; nothing to clip.
+    if (GfVec3d(wPlane[0], wPlane[1], wPlane[2]) == GfVec3d(0.0)) {
+        return {};
+    }
+
+    // Use a small fraction of w at the center of the clip volume so that
+    // epsilon scales with the frustum.
+    // A valid projection maps the clip volume's center to w > 0.
+    const GfVec4d center =
+        GfVec4d(0.0, 0.0, 0.0, 1.0) * projection.GetInverse();
+    if (center[3] <= 0.0) {
+        return {};
+    }
+    const double epsilon = 1e-3 / center[3];
+
+    return { wPlane - GfVec4d(0.0, 0.0, 0.0, epsilon) };
 }
 
 HdxShadowTask::HdxShadowTask(HdSceneDelegate* delegate, SdfPath const& id)
@@ -58,7 +95,6 @@ HdxShadowTask::Sync(HdSceneDelegate* delegate,
 {
     HD_TRACE_FUNCTION();
     HF_MALLOC_TAG_FUNCTION();
-    GLF_GROUP_FUNCTION();
 
     HdRenderIndex &renderIndex = delegate->GetRenderIndex();
     if (!renderIndex.IsSprimTypeSupported(HdPrimTypeTokens->simpleLight)) {
@@ -94,16 +130,22 @@ HdxShadowTask::Sync(HdSceneDelegate* delegate,
 
     if (numShadowMaps > 0) {
         // Make sure we have the right number of shadow render passes.
-        // Because we would like to render only prims with the 
-        // "defaultMaterialTag" or "masked" material tag, we need to make two 
-        // collections and thus two render passes for what would be the same 
-        // shadow map pass. Thus we must make a distinction between the number 
-        // of render passes and the number of shadow maps indicated by the 
-        // shadow array.
-        static const TfToken shadowMaterialTags[2] = 
+        // We would like to render only prims with the "defaultMaterialTag"
+        // (i.e. opaque) or "masked" material tag. Prims with
+        // "occludedSelectionShowsThrough" are grouped in a special material
+        // tag "translucentToSelection", but otherwise behave the same as
+        // opaque/masked.
+        // Therefore, we need to make three collections and render passes for
+        // what would be the same shadow map pass. This means we must make a
+        // distinction between the number of render passes and the number of
+        // shadow maps indicated by the shadow array.
+        static const TfToken shadowMaterialTags[3] = 
             { HdStMaterialTagTokens->defaultMaterialTag, 
-              HdStMaterialTagTokens->masked };
+              HdStMaterialTagTokens->masked,
+              HdStMaterialTagTokens->translucentToSelection };
         _passes.resize( TfArraySize(shadowMaterialTags) * numShadowMaps);
+        const size_t maskedPassOffset = numShadowMaps;
+        const size_t ttsPassOffset = numShadowMaps * 2;
 
         // Mostly we can populate the renderpasses from shadow info, but the 
         // lights contain the shadow collection; so we need to loop through the 
@@ -133,12 +175,14 @@ HdxShadowTask::Sync(HdSceneDelegate* delegate,
                     : HdRprimCollection();
 
             // Only want opaque or masked prims to appear in shadow pass, so 
-            // make two copies of the shadow collection with appropriate 
+            // make copies of the shadow collection with appropriate 
             // material tags
             HdRprimCollection newColDefault = col;
             newColDefault.SetMaterialTag(shadowMaterialTags[0]);
             HdRprimCollection newColMasked = col;
             newColMasked.SetMaterialTag(shadowMaterialTags[1]);
+            HdRprimCollection newColTranslucentToSelection = col;
+            newColTranslucentToSelection.SetMaterialTag(shadowMaterialTags[2]);
 
             int shadowStart = glfLights[lightId].GetShadowIndexStart();
             int shadowEnd = glfLights[lightId].GetShadowIndexEnd();
@@ -148,8 +192,9 @@ HdxShadowTask::Sync(HdSceneDelegate* delegate,
             // SetRprimCollection checks for identity changes on the collection
             // and no-ops in that case.
             for (int shadowId = shadowStart; shadowId <= shadowEnd; ++shadowId){
-                // Remember, we have two render passes (one for each collection)
-                // per shadow map. First the "defaultMaterialTag" passes.
+                // Remember, we have three render passes (one for each
+                // collection) per shadow map.
+                // First the "defaultMaterialTag" passes.
                 if (_passes[shadowId]) {
                     _passes[shadowId]->SetRprimCollection(newColDefault);
                 } else {
@@ -158,13 +203,23 @@ HdxShadowTask::Sync(HdSceneDelegate* delegate,
                 }
 
                 // Then the "masked" materialTag passes
-                if (_passes[shadowId + numShadowMaps]) {
-                    _passes[shadowId + numShadowMaps]->SetRprimCollection(
+                if (_passes[shadowId + maskedPassOffset]) {
+                    _passes[shadowId + maskedPassOffset]->SetRprimCollection(
                         newColMasked);
                 } else {
-                    _passes[shadowId + numShadowMaps] = 
+                    _passes[shadowId + maskedPassOffset] = 
                         std::make_shared<HdSt_RenderPass>
                         (&renderIndex, newColMasked);
+                }
+
+                // Then the "translucentToSelection" materialTag passes
+                if (_passes[shadowId + ttsPassOffset]) {
+                    _passes[shadowId + ttsPassOffset]->SetRprimCollection(
+                        newColTranslucentToSelection);
+                } else {
+                    _passes[shadowId + ttsPassOffset] =
+                        std::make_shared<HdSt_RenderPass>
+                        (&renderIndex, newColTranslucentToSelection);
                 }
             }
         }
@@ -192,6 +247,32 @@ HdxShadowTask::Sync(HdSceneDelegate* delegate,
                     std::make_shared<HdStRenderPassState>(
                         renderPassShadowShader);
 
+                //                
+                // The pipeline state below merits explanation.
+                // Hardcoded state:
+                // 1. Depth clamping is enabled, which disables clipping for the
+                //    clip-space Z coordinate. So, objects between the shadow
+                //    camera and the near plane, and those behind the far plane
+                //    may not be clipped.
+                // 2, The depth range is set to [0.0, 0.99999] and not [0,1].
+                //    This is done to clamps the depth of objects behind the far
+                //    plane of the shadow frustum to 1. Note that the hardware
+                //    always clamps depth values to [0,1], even when using float
+                //    depth buffer formats. See ARB_depth_buffer_float.
+                // 
+                // Configurable state:
+                // a. Depth function: This goes hand-in-hand with the shadow
+                //    sampler's compare function, the depth range and the clear
+                //    value used. All of these are currently hardcoded!
+                //    XXX The simple lighting shader hardcodes the compare to
+                //        LEQUAL and the clear value to 1.0.
+                //        See HdStSimpleLightingShader::AllocateTextureHandles.
+                //
+                // b. Slope-scale bias:
+                //    This offsets the fragment's interpolated depth using the
+                //    slope and constant factors.
+                //    XXX Do positive values push away or towards the eye?
+                //     
                 renderPassState->SetDepthFunc(_params.depthFunc);
                 renderPassState->SetDepthBiasUseDefault(
                     !_params.depthBiasEnable);
@@ -237,19 +318,27 @@ HdxShadowTask::Sync(HdSceneDelegate* delegate,
                 continue;
             }
 
-            // Because we create two render passes for each shadow map, we must 
-            // convert the index
+            // Because we create three render passes for each shadow map,
+            // we must convert the index.
             size_t shadowMapId = passId % numShadowMaps;
 
             GfVec2i shadowMapRes = shadows->GetShadowMapSize(shadowMapId);
 
+            const GfMatrix4d shadowProj =
+                shadows->GetProjectionMatrix(shadowMapId);
+
             // Set camera framing based on the shadow map's, which is computed 
             // in HdxSimpleLightTask.
+
+            // Note that for perspective shadow projections, we optionally add a clip
+            // plane to work around an observed driver bug (on Linux GL) where
+            // triangles that cross the projection point with depth clamp on are clipped
+            // incorrectly.  The clip plane should be a no-op on a correct driver.
             _renderPassStates[passId]->SetCameraFramingState( 
                 shadows->GetViewMatrix(shadowMapId), 
-                shadows->GetProjectionMatrix(shadowMapId),
+                shadowProj,
                 GfVec4d(0,0,shadowMapRes[0], shadowMapRes[1]),
-                HdRenderPassState::ClipPlanesVector());
+                _ComputeShadowClipPlanes(shadowProj));
             
             // Set AOV bindings.
             if (shadowMapId < shadowAovBindings.size()) {
@@ -257,7 +346,8 @@ HdxShadowTask::Sync(HdSceneDelegate* delegate,
                     _renderPassStates[passId]->SetAovBindings(
                         { shadowAovBindings[shadowMapId] });
                 } else {
-                    // Don't want "masked" render passes to clear.
+                    // Don't want "masked"/"translucentToSelection"
+                    // render passes to clear.
                     HdRenderPassAovBinding aovBindingCopy = 
                         shadowAovBindings[shadowMapId];
                     aovBindingCopy.clearValue = VtValue();
@@ -277,6 +367,19 @@ void
 HdxShadowTask::Prepare(HdTaskContext* ctx,
                        HdRenderIndex* renderIndex)
 {
+    GlfSimpleLightingContextRefPtr lightingContext;
+    if (!_GetTaskContextData(ctx,
+            HdxTokens->lightingContext, &lightingContext)) {
+        return;
+    }
+
+    GlfSimpleShadowArrayRefPtr const shadows = lightingContext->GetShadows();
+    if (shadows->GetNumShadowMapPasses() == 0) {
+        // Bail if we are not generating shadow maps. We don't want to call
+        // Prepare on outdated AOV bindings.
+        return;
+    }
+
     HdResourceRegistrySharedPtr resourceRegistry =
         renderIndex->GetResourceRegistry();
 
@@ -290,7 +393,6 @@ HdxShadowTask::Execute(HdTaskContext* ctx)
 {
     HD_TRACE_FUNCTION();
     HF_MALLOC_TAG_FUNCTION();
-    GLF_GROUP_FUNCTION();
 
     // Extract the lighting context information from the task context
     GlfSimpleLightingContextRefPtr lightingContext;
@@ -301,7 +403,9 @@ HdxShadowTask::Execute(HdTaskContext* ctx)
 
     // Generate the actual shadow maps
     GlfSimpleShadowArrayRefPtr const shadows = lightingContext->GetShadows();
-    size_t numShadowMaps = shadows->GetNumShadowMapPasses();
+    const size_t numShadowMaps = shadows->GetNumShadowMapPasses();
+    const size_t maskedPassOffset = numShadowMaps;
+    const size_t ttsPassOffset = numShadowMaps * 2;
 
     // Get AOV bindings.
     HdRenderPassAovBindingVector shadowAovBindings;
@@ -320,6 +424,7 @@ HdxShadowTask::Execute(HdTaskContext* ctx)
     // GlfSimpleShadowArray's shadow textures to the textures backing the 
     // shadow render buffers.
     std::vector<uint32_t> textureIds;
+    HgiTextureHandleVector textureHandles;
     for (size_t shadowId = 0; shadowId < numShadowMaps; shadowId++) {
         if (shadowId < shadowAovBindings.size()) {
             HdRenderBuffer const * renderBuffer = 
@@ -329,6 +434,12 @@ HdxShadowTask::Execute(HdTaskContext* ctx)
                 HgiTextureHandle texture = aov.UncheckedGet<HgiTextureHandle>();
                 if (texture) {
                     textureIds.push_back((uint32_t)texture->GetRawResource());
+                    
+                    // While we're here, transition layout of texture to depth
+                    // target. Store textures in vector so we can transition
+                    // back after shadow render passes complete.
+                    texture->SubmitLayoutChange(HgiTextureUsageBitsDepthTarget);
+                    textureHandles.push_back(texture);
                 }
             }
         }
@@ -340,7 +451,8 @@ HdxShadowTask::Execute(HdTaskContext* ctx)
         // Make sure each pass got created. Light shadow indices are supposed
         // to be compact (see simpleLightTask.cpp).
         if (!TF_VERIFY(_passes[shadowId]) || 
-            !TF_VERIFY(_passes[shadowId + numShadowMaps])) {
+            !TF_VERIFY(_passes[shadowId + maskedPassOffset]) ||
+            !TF_VERIFY(_passes[shadowId + ttsPassOffset])) {
             continue;
         }
 
@@ -350,11 +462,21 @@ HdxShadowTask::Execute(HdTaskContext* ctx)
             _renderPassStates[shadowId],
             GetRenderTags());
 
-        if (_HasDrawItems(_passes[shadowId + numShadowMaps], GetRenderTags())) {
+        if (_HasDrawItems(_passes[shadowId + maskedPassOffset],
+            GetRenderTags())) {
             // Render the actual geometry in the "masked" materialTag collection
-            _passes[shadowId + numShadowMaps]->Execute(
-               _renderPassStates[shadowId + numShadowMaps],
+            _passes[shadowId + maskedPassOffset]->Execute(
+               _renderPassStates[shadowId + maskedPassOffset],
                GetRenderTags());
+        }
+
+        if (_HasDrawItems(_passes[shadowId + ttsPassOffset],
+            GetRenderTags())) {
+            // Render the actual geometry in the "translucentToSelection"
+            // materialTag collection
+            _passes[shadowId + ttsPassOffset]->Execute(
+                _renderPassStates[shadowId + ttsPassOffset],
+                GetRenderTags());
         }
     }
 
@@ -405,6 +527,11 @@ HdxShadowTask::Execute(HdTaskContext* ctx)
             }
         }
     }
+
+    // Transition layout of shadows maps to shader read for next render tasks.
+    for (HgiTextureHandle& texture : textureHandles) {
+        texture->SubmitLayoutChange(HgiTextureUsageBitsShaderRead);
+    }
 }
 
 const TfTokenVector &
@@ -420,11 +547,6 @@ HdxShadowTask::_UpdateDirtyParams(HdStRenderPassStateSharedPtr &renderPassState,
     renderPassState->SetOverrideColor(params.overrideColor);
     renderPassState->SetWireframeColor(params.wireframeColor);
     renderPassState->SetCullStyle(HdInvertCullStyle(params.cullStyle));
-
-    if (HdStRenderPassState* extendedState =
-            dynamic_cast<HdStRenderPassState*>(renderPassState.get())) {
-        extendedState->SetUseSceneMaterials(params.enableSceneMaterials);
-    }
 }
 
 // ---------------------------------------------------------------------------//
@@ -437,7 +559,6 @@ std::ostream& operator<<(std::ostream& out, const HdxShadowTaskParams& pv)
         << pv.overrideColor << " " 
         << pv.wireframeColor << " " 
         << pv.enableLighting << " "
-        << pv.enableSceneMaterials << " "
         << pv.alphaThreshold << " "
         << pv.depthBiasEnable << " "
         << pv.depthBiasConstantFactor << " "
@@ -453,7 +574,6 @@ bool operator==(const HdxShadowTaskParams& lhs, const HdxShadowTaskParams& rhs)
     return  lhs.overrideColor == rhs.overrideColor                      && 
             lhs.wireframeColor == rhs.wireframeColor                    && 
             lhs.enableLighting == rhs.enableLighting                    &&
-            lhs.enableSceneMaterials == rhs.enableSceneMaterials        &&
             lhs.alphaThreshold == rhs.alphaThreshold                    &&
             lhs.depthBiasEnable == rhs.depthBiasEnable                  && 
             lhs.depthBiasConstantFactor == rhs.depthBiasConstantFactor  && 

@@ -19,6 +19,7 @@
 MATERIALX_NAMESPACE_BEGIN
     class FileSearchPath;
     using DocumentPtr = std::shared_ptr<class Document>;
+    using NodeDefPtr = std::shared_ptr<class NodeDef>;
 MATERIALX_NAMESPACE_END
 
 PXR_NAMESPACE_OPEN_SCOPE
@@ -60,6 +61,64 @@ struct HdMtlxTexturePrimvarData {
 HDMTLX_API
 std::string
 HdMtlxCreateNameFromPath(SdfPath const& path);
+
+/// Custom nodes may have their nodeDefs in a separate mtlx file, this function
+/// additional looks to the ImplementationURI stored on the sdr to find this 
+/// mtlx file and nodeDef. 
+/// This method is preferred over mxDoc->getNodeDef() to catch this custom 
+/// node case.
+HDMTLX_API
+MaterialX::NodeDefPtr
+HdMtlxGetNodeDef(
+    TfToken const& hdNodeType,
+    MaterialX::DocumentPtr const& mxDoc=nullptr);
+
+/// NodeDef names may change between MaterialX versions, this function returns
+/// the nodeDef name appropriate for the version of MaterialX being used.
+HDMTLX_API
+std::string
+HdMtlxGetNodeDefName(std::string const& prevMxNodeDefName);
+
+/// Returns true if the given nodeDef's implementation is a nodegraph that
+/// contains a 'geompropvalue' or 'geompropvalueuniform' node, i.e. the node
+/// reads a primvar (for example UsdPrimvarReader). Native 'geompropvalue'
+/// nodes are not detected here since their implementation is source code
+/// rather than a nodegraph.
+HDMTLX_API
+bool
+HdMtlxIsPrimvarReaderNodeDef(MaterialX::NodeDefPtr const& mxNodeDef);
+
+/// Returns the node input that carries the primvar name for a primvar-reading
+/// node. For wrapper nodes (such as UsdPrimvarReader) this is discovered from
+/// the 'interfacename' on the wrapped geompropvalue's 'geomprop' input (for
+/// example "varname"). For native geompropvalue nodes, or any node without such
+/// a binding, this returns "geomprop".
+HDMTLX_API
+TfToken
+HdMtlxGetPrimvarNameInputName(MaterialX::NodeDefPtr const& mxNodeDef);
+
+/// Returns the node input that carries the fallback value for a primvar-reading
+/// node. For wrapper nodes (such as UsdPrimvarReader) this is discovered from
+/// the 'interfacename' on the wrapped geompropvalue's 'default' input (for
+/// example "fallback"). For native geompropvalue nodes, or any node without such
+/// a binding, this returns "default".
+HDMTLX_API
+TfToken
+HdMtlxGetPrimvarDefaultInputName(MaterialX::NodeDefPtr const& mxNodeDef);
+
+/// Get the terminal name used in the MaterialX document based on the Hydra
+/// terminal node.
+HDMTLX_API
+std::string
+HdMtlxGetMxTerminalName(
+    HdMaterialNetworkInterface *netInterface,
+    TfToken const& hdTerminalNodeName);
+
+/// Get the terminal name used in the MaterialX document based on the MaterialX
+/// terminal node type.
+HDMTLX_API
+std::string
+HdMtlxGetMxTerminalName(std::string const& mxTerminalType);
 
 /// Creates and returns a MaterialX Document from the given HdMaterialNetwork2 
 /// Collecting the hdTextureNodes and hdPrimvarNodes as the network is 

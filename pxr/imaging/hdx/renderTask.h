@@ -8,6 +8,7 @@
 #define PXR_IMAGING_HDX_RENDER_TASK_H
 
 #include "pxr/pxr.h"
+#include "pxr/imaging/hd/renderIndex.h"
 #include "pxr/imaging/hdx/api.h"
 #include "pxr/imaging/hdx/version.h"
 #include "pxr/imaging/hdx/task.h"
@@ -49,7 +50,7 @@ class HdxRenderTask : public HdxTask
 {
 public:
     using TaskParams = HdxRenderTaskParams;
-    
+
     HDX_API
     HdxRenderTask(HdSceneDelegate* delegate, SdfPath const& id);
 
@@ -81,13 +82,20 @@ protected:
                HdDirtyBits* dirtyBits) override;
 
     HDX_API
-    HdRenderPassStateSharedPtr _GetRenderPassState(HdTaskContext *ctx) const;
+    HdRenderPassStateSharedPtr _GetRenderPassState() const;
+
+    HDX_API
+    HdRenderPassSharedPtr _GetRenderPass() const;
+
+    HDX_API
+    void _PrepareRenderPassState(HdTaskContext* ctx,
+                                 HdRenderIndex* renderIndex);
 
     // XXX: Storm specific API
     // While HdDrawItem is currently a core-Hydra concept, it'll be moved
     // to Storm. Until then, allow querying the render pass to know if there's
     // draw submission work.
-
+    //
     // Returns whether the render pass has any draw items to submit.
     // For non-Storm backends, this returns true.
     // When using with Storm tasks, make sure to call it after
@@ -95,8 +103,25 @@ protected:
     HDX_API
     bool _HasDrawItems() const;
 
+    // XXX: Storm specific API
+    // Binds the selection highlight buffers published by HdxSelectionTask onto
+    // the given render pass shader.
+    HDX_API
+    void _AddStormSelectionBindings(
+        HdTaskContext* ctx,
+        HdStRenderPassShaderSharedPtr passShader);
+
+    // XXX: Storm specific API
+    // Binds the lighting shader published by HdxSimpleLightTask onto
+    // the given render pass state.
+    HDX_API
+    void _AddStormLightingShader(
+        HdTaskContext* ctx,
+        HdStRenderPassStateSharedPtr passState);
+
 private:
     HdRenderPassSharedPtr _pass;
+    HdRenderPassStateSharedPtr _passState;
     TfTokenVector _renderTags;
 
     // Optional internal render setup task, for params unpacking.
@@ -106,7 +131,7 @@ private:
     // Setup additional state that HdStRenderPassState requires.
     void _SetHdStRenderPassState(HdTaskContext *ctx,
                                  HdStRenderPassState *renderPassState);
-    
+
     // Inspect the AOV bindings to determine if any of them need to be cleared.
     bool _NeedToClearAovs(HdRenderPassStateSharedPtr const &renderPassState)
         const;

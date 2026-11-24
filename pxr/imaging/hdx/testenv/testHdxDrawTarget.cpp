@@ -5,8 +5,7 @@
 // https://openusd.org/license.
 //
 
-#include "pxr/imaging/glf/diagnostic.h"
-#include "pxr/imaging/glf/testGLContext.h"
+#include "pxr/imaging/garch/glDebugWindow.h"
 #include "pxr/base/gf/frustum.h"
 
 #include "pxr/imaging/hd/driver.h"
@@ -28,6 +27,8 @@
 
 #include "pxr/usd/sdr/registry.h"
 
+#include "pxr/base/tf/errorMark.h"
+
 #include <iostream>
 #include <memory>
 
@@ -40,12 +41,13 @@ TF_DEFINE_PRIVATE_TOKENS(
 
 int main(int argc, char *argv[])
 {
+    TfErrorMark mark;
+
     HdPerfLog& perfLog = HdPerfLog::GetInstance();
     perfLog.Enable();
 
-    // prepare GL context
-    GlfTestGLContext::RegisterGLContextCallbacks();
-    GlfSharedGLContextScopeHolder sharedContext;
+    GarchGLDebugWindow window("Hd Test", 512, 512);
+    window.Init();
 
     // Hgi and HdDriver should be constructed before HdEngine to ensure they
     // are destructed last. Hgi may be used during engine/delegate destruction.
@@ -140,7 +142,7 @@ int main(int argc, char *argv[])
         shaderReg.GetShaderNodeFromSourceCode(
             source, 
             HioGlslfxTokens->glslfx,
-            NdrTokenMap()); // metadata
+            SdrTokenMap()); // metadata
 
     TfToken const& terminalType = HdMaterialTerminalTokens->surface;
 
@@ -266,5 +268,11 @@ int main(int argc, char *argv[])
 
     delegate->WriteRenderBufferToFile(colorBuffer, "color1.png");
 
-    std::cout << "OK" << std::endl;
+    if (mark.IsClean()) {
+        std::cout << "OK" << std::endl;
+        return EXIT_SUCCESS;
+    } else {
+        std::cout << "FAILED" << std::endl;
+        return EXIT_FAILURE;
+    }
 }

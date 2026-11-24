@@ -5,10 +5,10 @@
 # Licensed under the terms set forth in the LICENSE.txt file available at
 # https://openusd.org/license.
 #
-from __future__ import print_function
 import difflib, os, sys
 from subprocess import call
-from pxr.UsdUtils.toolPaths import FindUsdBinary
+from pxr.UsdUtils.toolPaths import (
+    FindUsdBinary, RunUsdBinary, SplitCommandLine)
 
 import platform
 isWindows = (platform.system() == 'Windows')
@@ -22,53 +22,53 @@ def _exit(msg, exitCode):
         sys.stderr.write(msg + "\n")
     sys.exit(exitCode)
 
-# generates a command list representing a call which will generate
-# a temporary text file used during diffing.
-def _generateCatCommand(usdcatCmd, inPath, outPath, flatten=None, fmt=None):
-    command = [usdcatCmd, inPath, '--out', outPath]
+# generates the option list for a usdcat call which will generate a temporary
+# text file used during diffing. The input path is supplied separately, so that
+# it is passed after an end-of-options separator.
+def _generateCatOptions(outPath, flatten=None, fmt=None):
+    options = ['--out', outPath]
     if flatten:
-        command.append('--flatten')
+        options.append('--flatten')
 
     if fmt and os.path.splitext(outPath)[1] == '.usd':
-        command.append('--usdFormat')
-        command.append(fmt)
+        options.append('--usdFormat')
+        options.append(fmt)
 
-    return command
+    return options
 
-def _splitDiffCommand(diffCmd):
-    diffCmdArgs = list()
+# returns the program and arguments of the command named by the first of
+# envVarNames that is set to anything but whitespace, or (None, []) if none is.
+def _splitDiffCommand(*envVarNames):
+    for envVarName in envVarNames:
+        try:
+            diffCmdList = SplitCommandLine(os.environ.get(envVarName, ''))
+        except ValueError as e:
+            _exit("Error: Failed to parse $%s: %s" % (envVarName, e),
+                  ERROR_EXIT_CODE)
+        if diffCmdList:
+            return (diffCmdList[0], diffCmdList[1:])
 
-    if diffCmd is not None:
-        diffCmdList = diffCmd.split()
-        diffCmd = diffCmdList[0]
-        
-        if diffCmdList[1:]:
-            diffCmdArgs = diffCmdList[1:]
+    return (None, [])
 
-    return (diffCmd, diffCmdArgs)
-
-# looks up a suitable diff tool, and locates usdcat
+# looks up a suitable diff tool, and verifies usdcat is available
 def _findDiffTools():
-    usdcatCmd = FindUsdBinary("usdcat")
-    if not usdcatCmd:
+    if not FindUsdBinary("usdcat"):
         _exit("Error: Could not find 'usdcat'. Expected it to be in PATH", 
               ERROR_EXIT_CODE)
 
     # prefer USD_DIFF, then DIFF, else use the internal unified diff.
-    diffCmd, diffCmdArgs = _splitDiffCommand(
-        os.environ.get('USD_DIFF') or os.environ.get('DIFF'))
+    diffCmd, diffCmdArgs = _splitDiffCommand('USD_DIFF', 'DIFF')
 
     if diffCmd and not FindUsdBinary(diffCmd):
         _exit("Error: Failed to find diff tool %s." % (diffCmd, ),
               ERROR_EXIT_CODE)
 
-    return (usdcatCmd, diffCmd, diffCmdArgs)
+    return (diffCmd, diffCmdArgs)
 
 
 def _findImageDiffTools():
     # prefer USD_IMAGE_DIFF, else use the internal filecmp.
-    imageDiffCommand, imageDiffCmdArgs = _splitDiffCommand(
-        os.environ.get('USD_IMAGE_DIFF'))
+    imageDiffCommand, imageDiffCmdArgs = _splitDiffCommand('USD_IMAGE_DIFF')
 
     if imageDiffCommand and not FindUsdBinary(imageDiffCommand):
         _exit("Error: Failed to find image diff tool %s." % (imageDiffCommand),
@@ -128,7 +128,18 @@ def _getFileFormat(path):
 
     return None
 
-def _convertTo(inPath, outPath, usdcatCmd, flatten=None, fmt=None):
+# A .usd file may hold either text or crate data. Returns the format id of the
+# one that can read path, so that writing back preserves it, or None if neither
+# can (e.g. the file is empty), leaving usdcat to use its default.
+def _getUnderlyingUsdFormat(path):
+    from pxr import Sdf
+    for formatId in ('usdc', 'usda'):
+        fileFormat = Sdf.FileFormat.FindById(formatId)
+        if fileFormat and fileFormat.CanRead(path):
+            return formatId
+    return None
+
+def _convertTo(inPath, outPath, flatten=None, fmt=None):
     # Just copy empty files -- we want something to diff against but
     # the file isn't valid usd.
     try:
@@ -143,17 +154,26 @@ def _convertTo(inPath, outPath, usdcatCmd, flatten=None, fmt=None):
         # assume it's because file doesn't exist yet, because it's an unresolved
         # path...
         pass
-    return call(_generateCatCommand(usdcatCmd, inPath, outPath, flatten, fmt))
+    try:
+        return RunUsdBinary('usdcat',
+                            options=_generateCatOptions(outPath, flatten, fmt),
+                            paths=[inPath], wait=True)
+    except (RuntimeError, OSError) as e:
+        _exit('Error: %s' % e, ERROR_EXIT_CODE)
 
-def _tryEdit(fileName, tempFileName, usdcatCmd, fileType, flattened):
+def _tryEdit(fileName, tempFileName, fileType, flattened):
     if flattened:
         _exit('Error: Cannot write out flattened result.', ERROR_EXIT_CODE)
 
     if not os.access(fileName, os.W_OK):
         _exit('Error: Cannot write to %s, insufficient permissions' % fileName,
               ERROR_EXIT_CODE)
-    
-    return _convertTo(tempFileName, fileName, usdcatCmd, flatten=None, fmt=fileType)
+
+    # usdcat's --usdFormat takes the underlying format, not 'usd' itself.
+    if fileType == 'usd':
+        fileType = _getUnderlyingUsdFormat(fileName)
+
+    return _convertTo(tempFileName, fileName, flatten=None, fmt=fileType)
 
 class FileManager(object):
     def __init__(self, baseline, comparison):
@@ -217,9 +237,9 @@ class FileManager(object):
 def _launchDiffTool(diffCmd, diffCmdArgs, baseline, comparison, brief):
     if diffCmd:
         # Run the external diff tool.
-        if brief:
-            diffCmdArgs.append("--brief")
-        return call([diffCmd] + diffCmdArgs + [baseline, comparison])
+        briefArgs = ["--brief"] if brief else []
+        return call([diffCmd] + diffCmdArgs + briefArgs +
+                    [baseline, comparison])
 
     else:
         # Read the files.
@@ -257,14 +277,14 @@ def _diffUsdzArchives(base, comp, brief):
     return _diffUsdz(base, comp, brief, [base], [comp])
 
 def _diffUsdz(base, comp, brief, baseStack, compStack):
-    from pxr import Tf, Usd
+    from pxr import Sdf, Tf
     diffResult = 0
 
     imageFormats = _findImageDiffFormats()
     imageDiffCmd, imageDiffCmdArgs = _findImageDiffTools()
 
-    baseZip = Usd.ZipFile.Open(base)
-    compZip = Usd.ZipFile.Open(comp)
+    baseZip = Sdf.ZipFile.Open(base)
+    compZip = Sdf.ZipFile.Open(comp)
 
     baseFiles = set(baseZip.GetFileNames())
     compFiles = set(compZip.GetFileNames())
@@ -323,13 +343,9 @@ def _diffUsdz(base, comp, brief, baseStack, compStack):
 
             #run a traditional diff
             else:
-                _, diffCmd, diffCmdArgs = _findDiffTools()
-
-                diffResult |= _launchDiffTool(diffCmd, 
-                                                diffCmdArgs, 
-                                                tempBaseline.name, 
-                                                tempComparison.name, 
-                                                brief)
+                diffResult |= _runDiff(
+                    tempBaseline.name, tempComparison.name,
+                    flatten=False, noeffect=True, brief=brief)
 
     for b in baseOnly:
         print('Only in baseline: %s.' % _getArchivePath(baseStack, b))
@@ -344,7 +360,7 @@ def _runDiff(baseline, comparison, flatten, noeffect, brief):
 
     diffResult = 0
 
-    usdcatCmd, diffCmd, diffCmdArgs = _findDiffTools()
+    diffCmd, diffCmdArgs = _findDiffTools()
 
     with FileManager(baseline, comparison) as fmgr:
     
@@ -384,11 +400,11 @@ def _runDiff(baseline, comparison, flatten, noeffect, brief):
             # Dump the contents of our files into the temporaries
             convertError = 'Error: failed to convert from %s to %s.'
             if _convertTo(fmgr.GetBaselineName(), tempBaseline.name,
-                          usdcatCmd, flatten, fmt=None) != 0:
+                          flatten, fmt=None) != 0:
                 _exit(convertError % (baseline, tempBaseline.name),
                       ERROR_EXIT_CODE)
             if _convertTo(fmgr.GetComparisonName(), tempComparison.name,
-                          usdcatCmd, flatten, fmt=None) != 0:
+                          flatten, fmt=None) != 0:
                 _exit(convertError % (comparison, tempComparison.name),
                       ERROR_EXIT_CODE)
 
@@ -409,12 +425,12 @@ def _runDiff(baseline, comparison, flatten, noeffect, brief):
             if not noeffect:
                 if tempBaselineChanged:
                     if _tryEdit(baseline, tempBaseline.name, 
-                                usdcatCmd, baselineFileType, flatten) != 0:
+                                baselineFileType, flatten) != 0:
                         _exit(convertError % (baseline, tempBaseline.name),
                               ERROR_EXIT_CODE)
                 if tempComparisonChanged:
                     if _tryEdit(comparison, tempComparison.name,
-                                usdcatCmd, comparisonFileType, flatten) != 0:
+                                comparisonFileType, flatten) != 0:
                         _exit(convertError % (comparison, tempComparison.name),
                               ERROR_EXIT_CODE)
     return diffResult

@@ -6,10 +6,12 @@
 # https://openusd.org/license.
 
 import contextlib
+import math
 import os
 import shutil
+import sys
 import unittest
-from pxr import Sdf, Tf, Usd, Vt, Gf
+from pxr import Sdf, Tf, Ts, Usd, Vt, Gf
 
 @contextlib.contextmanager
 def InterpolationType(stage, interpolationType):
@@ -32,6 +34,45 @@ def LayerChangeListener():
 
     l = _Listener()
     yield l
+
+@contextlib.contextmanager
+def ObjectsChangedListener(stage, objs):
+    """Collect the paths of the objects in objs that are affected by any
+    UsdNotice::ObjectsChanged sent by stage while the context is active."""
+    class _Listener(object):
+        def __init__(self):
+            self.affectedPaths = set()
+            self._key = Tf.Notice.Register(
+                Usd.Notice.ObjectsChanged, self._HandleNotice, stage)
+        def _HandleNotice(self, notice, sender):
+            self.affectedPaths.update(
+                o.GetPath() for o in objs if notice.AffectedObject(o))
+
+    l = _Listener()
+    try:
+        yield l
+    finally:
+        l._key.Revoke()
+
+def _WriteClipFile(path, samples):
+    """Write a clip layer to path with the given time samples, a dict
+    mapping attribute path strings to dicts of {time: value}.  The file's
+    modification time is advanced if it already exists so that
+    SdfLayer::Reload sees the new contents regardless of timestamp
+    resolution."""
+    layer = Sdf.Layer.CreateAnonymous('.usda')
+    for attrPath, timeSamples in samples.items():
+        attrPath = Sdf.Path(attrPath)
+        prim = Sdf.CreatePrimInLayer(layer, attrPath.GetPrimPath())
+        prim.specifier = Sdf.SpecifierDef
+        Sdf.AttributeSpec(prim, attrPath.name, Sdf.ValueTypeNames.Double)
+        for t, v in timeSamples.items():
+            layer.SetTimeSample(attrPath, t, v)
+
+    oldMTime = os.path.getmtime(path) if os.path.exists(path) else None
+    layer.Export(path)
+    if oldMTime is not None:
+        os.utime(path, (oldMTime + 10, oldMTime + 10))
 
 class TestUsdValueClips(unittest.TestCase):
     def CheckTimeSamples(self, attr):
@@ -121,6 +162,60 @@ class TestUsdValueClips(unittest.TestCase):
                     Gf.Interval(endClip, endClip + 1, False, True)),
                 [])
 
+    def CheckSpline(self, attr, extrap=True):
+        """
+        Verifies attribute spline is as expected via the spline API. If extrap is
+        True (the default) then it checks the pre- and post extrapolation
+        regions.
+        """
+        # XXX: The extrap flag is a workaround for a bug where the first and last
+        # knots on the spline have dual valued knots. The clip evaluation clamps
+        # values outside the clip time range to the edges of the range, but the
+        # dual valued knots give the spline different values in the extrapolation
+        # region than the ones computed for normal evaluation.
+        self.assertTrue(attr.HasSpline())
+        spline = attr.GetSpline()
+
+        stage = attr.GetStage()
+        held = (stage.GetInterpolationType() == Usd.InterpolationTypeHeld)
+
+        # All splines "may be time varying"
+        self.assertTrue(attr.ValueMightBeTimeVarying())
+
+        # time samples API should return empty objects
+        self.assertEqual(len(attr.GetTimeSamples()), 0)
+        self.assertEqual(attr.GetNumTimeSamples(), 0)
+        self.assertEqual(attr.GetBracketingTimeSamples(0), ())
+        self.assertEqual(len(attr.GetTimeSamples()), 0)
+
+        # Check that evaluating the spline at time t is equivalent to
+        # UsdAttribute::Get(t). Note that `spline` is expected to have
+        # layer offsets baked in.
+        span = spline.GetKnotsWithInnerLoopsBaked().GetTimeSpan()
+        if extrap:
+            begin = int(span.min - 1)
+            end = int(span.max + 2)
+        else:
+            begin = int(math.floor(span.min + 1))
+            end = int(math.ceil(span.max))
+        for t in range(begin, end):
+            evalResult = (spline.EvalHeld(t) if held else
+                          spline.Eval(t))
+            getResult = attr.Get(t)
+            if evalResult is None or getResult is None:
+                self.assertEqual(evalResult, getResult)
+            else:
+                self.assertAlmostEqual(float(evalResult), float(getResult))
+
+            evalPreResult = (spline.EvalPreValueHeld(t) if held else
+                             spline.EvalPreValue(t))
+            getPreResult = attr.Get(Usd.TimeCode.PreTime(t))
+            if evalPreResult is None or getPreResult is None:
+                self.assertEqual(evalPreResult, getPreResult)
+            else:
+                self.assertAlmostEqual(float(evalPreResult),
+                                       float(getPreResult))
+
     def CheckValue(self, attr, expected, time=None, query=True):
         if time is not None:
             self.assertEqual(attr.Get(time), expected)
@@ -130,6 +225,40 @@ class TestUsdValueClips(unittest.TestCase):
             self.assertEqual(attr.Get(), expected)
             if query:
                 self.assertEqual(Usd.AttributeQuery(attr).Get(), expected)
+
+    def CheckValueClose(self, attr, expected, time=None, query=True):
+        if time is not None:
+            self.assertAlmostEqual(attr.Get(time), expected)
+            if query:
+                self.assertAlmostEqual(Usd.AttributeQuery(attr).Get(time),
+                                       expected)
+        else:
+            self.assertAlmostEqual(attr.Get(), expected)
+            if query:
+                self.assertAlmostEqual(Usd.AttributeQuery(attr).Get(),
+                                       expected)
+
+    def test_ArrayEdits(self):
+        """Checks that array edits in defaults, samples, and clips compose."""
+        stage = Usd.Stage.Open('arrayEdits/root.usda')
+        root = stage.GetPrimAtPath('/Root')
+        attr = root.GetAttribute('attr')
+        self.assertTrue(attr)
+
+        self.assertTrue(attr.ValueMightBeTimeVarying())
+
+        # At default time we see the weakest default plus the actions of the
+        # append & prepend.
+        self.CheckValue(attr, expected=[3, 3, 3, -999])
+
+        # At sample times we expect to see the values as edited by the strongest
+        # default, the next weaker samples, and the next weaker two clips.
+        self.CheckValue(attr, time=1, expected=[8, -1, -1, 555, -999])
+        self.CheckValue(attr, time=2, expected=[-1, 9, -1, 555, -999])
+        self.CheckValue(attr, time=3, expected=[10, -7, 11, 555, -999])
+        self.CheckValue(attr, time=4, expected=[10, -7, 11, 666, -999])
+
+        self.CheckTimeSamples(attr)
 
     def test_BasicClipBehavior(self):
         """Exercises basic clip behavior."""
@@ -157,7 +286,7 @@ class TestUsdValueClips(unittest.TestCase):
         # Clips are never consulted for default values.  This implies also
         # that no clips should even get loaded as a result of the queries.
         # However, we must tell CheckValue() not to construct UsdAttributeQuery
-        # objects, since that act *does* need to load clips is the attr is 
+        # objects, since that act *does* need to load clips if the attr is 
         # affected by clips
         self.CheckValue(localAttr, expected=1.0, query=False)
         self.CheckValue(refAttr, expected=1.0, query=False)
@@ -179,14 +308,15 @@ class TestUsdValueClips(unittest.TestCase):
         self.assertTrue(payloadAttr.ValueMightBeTimeVarying())
         self.assertTrue(varAttr.ValueMightBeTimeVarying())
 
-        # Model_1 has active clips authored starting at time 10. However, the first
-        # active clip is "held active" to -inf, and for any given time t, the prior
-        # active clip at time t is still considered active.  So even when querying
-        # a timeSample prior to the first "active time", we expect the first clip
-        # to be loaded and consulted, with a linear time-mapping from stage time
-        # to time-within-clip-earlier-than-first-clipTimes-knot.  In our test case,
-        # this means all attrs except localAttr (which has local timeSamples in the
-        # clip-anchoring layer) should get their values from the first clip.
+        # Model_1 has active clips authored starting at time 10. However, the
+        # first active clip is "held active" to -inf, and for any given time t,
+        # the prior active clip at time t is still considered active.  So even
+        # when querying a timeSample prior to the first "active time", we expect
+        # the first clip to be loaded and consulted, with a linear time-mapping
+        # from stage time to time-within-clip-earlier-than-first-clipTimes-knot.
+        # In our test case, this means all attrs except localAttr (which has
+        # local timeSamples in the clip-anchoring layer) should get their values
+        # from the first clip.
         self.CheckValue(localAttr, time=5, expected=5.0)
         self.CheckValue(refAttr, time=5, expected=-5.0)
         self.CheckValue(clsAttr, time=5, expected=-5.0)
@@ -197,19 +327,51 @@ class TestUsdValueClips(unittest.TestCase):
         self.assertTrue(Sdf.Layer.Find('basic/clip.usda'))
         self.assertTrue(Sdf.Layer.Find('basic/manifest.usda'))
 
+        # Check we get the same values from the first clip for edge conditions.
+        minDouble = -sys.float_info.max
+        self.CheckValue(localAttr, time=minDouble, expected=5.0)
+        self.CheckValue(refAttr, time=minDouble, expected=-5.0)
+        self.CheckValue(clsAttr, time=minDouble, expected=-5.0)
+        self.CheckValue(payloadAttr, time=minDouble, expected=-5.0)
+        self.CheckValue(varAttr, time=minDouble, expected=-5.0)
+        
+        negInf = float('-inf')
+        self.CheckValue(localAttr, time=negInf, expected=5.0)
+        self.CheckValue(refAttr, time=negInf, expected=-5.0)
+        self.CheckValue(clsAttr, time=negInf, expected=-5.0)
+        self.CheckValue(payloadAttr, time=negInf, expected=-5.0)
+        self.CheckValue(varAttr, time=negInf, expected=-5.0)
+
         # Starting at time 10, clips should be consulted for values.
         #
-        # The strength order using during time sample resolution is 
-        # L1(ocal)C(lip)L2(ocal)I(nherit)V(ariant)R(eference)P(ayload), so
-        # local opinions in layers stronger than the layer that anchors the clip
-        # metadata (L1 above, which *includes* the anchoring subLayer) should win
-        # over the clip, but the clip should win over all other opinions, including
-        # those from loal subLayers weaker than the anchoring layer (L2).
+        # The strength order using during time sample resolution is
+        # L1(ocal)C(lip)L2(ocal)I(nherit)V(ariant)R(eference)P(ayload), so local
+        # opinions in layers stronger than the layer that anchors the clip
+        # metadata (L1 above, which *includes* the anchoring subLayer) should
+        # win over the clip, but the clip should win over all other opinions,
+        # including those from loal subLayers weaker than the anchoring layer
+        # (L2).
         self.CheckValue(localAttr, time=10, expected=10.0)
         self.CheckValue(refAttr, time=10, expected=-10.0)
         self.CheckValue(clsAttr, time=10, expected=-10.0)
         self.CheckValue(payloadAttr, time=10, expected=-10.0)
         self.CheckValue(varAttr, time=10, expected=-10.0)
+
+        # The last active clip is considered active to +inf. Test edge
+        # conditions.
+        maxDouble = sys.float_info.max
+        self.CheckValue(localAttr, time=maxDouble, expected=20.0)
+        self.CheckValue(refAttr, time=maxDouble, expected=-20.0)
+        self.CheckValue(clsAttr, time=maxDouble, expected=-20.0)
+        self.CheckValue(payloadAttr, time=maxDouble, expected=-20.0)
+        self.CheckValue(varAttr, time=maxDouble, expected=-20.0)
+
+        posInf = float('inf')
+        self.CheckValue(localAttr, time=posInf, expected=20.0)
+        self.CheckValue(refAttr, time=posInf, expected=-20.0)
+        self.CheckValue(clsAttr, time=posInf, expected=-20.0)
+        self.CheckValue(payloadAttr, time=posInf, expected=-20.0)
+        self.CheckValue(varAttr, time=posInf, expected=-20.0)
 
         # Attributes in prims that are descended from where the clip
         # metadata was authored should pick up opinions from the clip
@@ -366,28 +528,93 @@ class TestUsdValueClips(unittest.TestCase):
         self.CheckTimeSamples(attr)
 
     def test_ClipTimeCodeTiming(self):
-        """Exercises clip retiming via clipTimes metadata for timecode value 
-        attributes"""
+        """Exercises clip retiming via clipTimes metadata for timecode and
+        duration value attributes, authored as time samples, splines, and
+        arrays.
+
+        Time-based values read from a clip are converted from the clip's
+        internal time to external (stage) time using the bracketing clipTimes
+        segment. A GfTimeCode is a point on the time axis, so the segment's
+        full linear map (scale and offset) is applied, exactly as an internal
+        time would be translated to external time. A GfDuration is a length on
+        the time axis, so only the segment's scale is applied; a constant offset
+        would cancel out of a duration and must not be added.
+
+        With the clipTimes authored here the first segment maps external
+        [0, 20] to internal [10, 20] (external advances twice as fast as
+        internal, so scale = 2), and after a jump discontinuity the second
+        segment maps external [20, 40] to internal [0, 20] (scale = 1). This is
+        why, e.g., the same clip value resolves to different external values in
+        the two segments, and why 'dur' (scaled only) diverges from 'time'
+        (scaled and offset)."""
         stage = Usd.Stage.Open('timeCodeTiming/root.usda')
 
         model = stage.GetPrimAtPath('/Model')
         attr = model.GetAttribute('time')
         attr2 = model.GetAttribute('timeArray')
+        timeSpline = model.GetAttribute('timeSpline')
+        dur = model.GetAttribute('dur')
+        durSpline = model.GetAttribute('durSpline')
+        durArray = model.GetAttribute('durArray')
 
         # Default value should come through regardless of clip timing.
         self.CheckValue(attr, expected=1.0)
-        self.CheckValue(attr2, expected=Sdf.TimeCodeArray([1.0,2.0]))
+        self.CheckValue(attr2, expected=Vt.TimeCodeArray([1.0,2.0]))
+        self.CheckValue(timeSpline, expected=1.0)
+        self.CheckValue(dur, expected=Gf.Duration(1.0))
+        self.CheckValue(durSpline, expected=Gf.Duration(1.0))
+        self.CheckValue(durArray, expected=Vt.DurationArray([1.0, 2.0]))
+
+        self.assertTrue(timeSpline.HasSpline())
+        self.assertTrue(durSpline.HasSpline())
+
+        # 'timeSpline' is a timecode spline whose value equals the internal
+        # time; it retimes identically to the 'time' time samples below (scale
+        # and offset). Outside the clip's mapped range the query external time
+        # is clamped to the range boundary, so the value is held (10.0 / 25.0)
+        # rather than extrapolated along the spline.
+        #
+        # The value after the jump discontinuity below is tricky to follow. The
+        # time values come through a value clip with two time regions. The first
+        # is [(0, 10), (20, 20)]. Which maps stage times of 0 and 20 to clip
+        # times of 10 and 20. This is equivalent to a layer offset of scale = 2
+        # and offset = -20. (Remember, layer offsets map from clip times toward
+        # stage times while the "times" array in clips defines the inverse
+        # operation.) A scale of 2 and offset of -20 maps clipTime 10 to
+        # stageTime 0 and clipTime 20 to stageTime 20. But the second time
+        # region maps [(20, 0), (40, 20)] which is linear, but with an offset.
+        # As a layer offset, it would be scale = 1 and offset = +20
+        #
+        # So:
+        #   stageTime 0 -> clipTime 10 -> clipValue 15 -> stageValue 10
+        #   stageTime 5 -> clipTime 12.5 -> clipValue 12.5 -> stageValue 5
+        #   stageTime pre 20 -> clipTime pre 20 -> clipValue 5 -> stageValue -10
+        # <jump discontinuity>, switch to the second time region and layer offset
+        #   stageTime 20 -> clipTime 0 -> clipValue 25 -> stageValue 45
+        #   ...
+        #
+        # XXX: See the comment at the top of CheckSpline for an explanation
+        # of the extrap argument and why we're setting it to false.
+        self.CheckSpline(timeSpline, extrap=False)
+
+        # 'durSpline' is a duration spline with the same authored values, but
+        # durations are only scaled (never offset), so it diverges from
+        # 'timeSpline': the left segment scales by 2, the right segment by 1.
+        self.CheckSpline(durSpline, extrap=False)
 
         stage.SetInterpolationType(Usd.InterpolationTypeLinear)
 
-        # The 'clipTimes' metadata authored in the test asset offsets the 
-        # time samples in the clip by 10 frames and scales it slower by 50%,
-        # then at frame 21 it repeats the clip from frame 0 without the offset
-        # and scaling..
-        self.CheckValue(attr, time=0, expected=5.0)
+        # The 'clipTimes' metadata authored in the test asset maps external
+        # [0, 20] to internal [10, 20] (external advances twice as fast, so
+        # timecode values scale by 2), then after a jump discontinuity maps
+        # external [20, 40] to internal [0, 20] (scale 1).
+        self.CheckValue(attr, time=0, expected=10.0)
         self.CheckValue(attr, time=5, expected=5.0)
-        self.CheckValue(attr, time=10, expected=5.0)
-        self.CheckValue(attr, time=15, expected=5.0)
+        self.CheckValue(attr, time=10, expected=0.0)
+        self.CheckValue(attr, time=15, expected=-5.0)
+        # @20 we should get the jump discontinuity time sample as the pre-time
+        # (left segment, scale 2).
+        self.CheckValue(attr, time=Usd.TimeCode.PreTime(20), expected=-10.0)
         self.CheckValue(attr, time=20, expected=45.0)
         self.CheckValue(attr, time=25, expected=40.0)
         self.CheckValue(attr, time=30, expected=35.0)
@@ -395,36 +622,87 @@ class TestUsdValueClips(unittest.TestCase):
         self.CheckValue(attr, time=40, expected=25.0)
 
         # Requests for samples before and after the mapping specified in
-        # 'clipTimes' just pick up the first or last time sample.
-        self.CheckValue(attr, time=-1, expected=5.0)
+        # 'clipTimes' hold the first or last time sample (scaled by the nearest
+        # real segment).
+        self.CheckValue(attr, time=-1, expected=10.0)
         self.CheckValue(attr, time=41, expected=25.0)
 
-        # Repeat getting values at the same times for the SdfTimeCodeArray 
+        # Repeat getting values at the same times for the Vt.TimeCodeArray
         # valued attribute.
-        self.CheckValue(attr2, time=0, expected=Sdf.TimeCodeArray([0.0, 5.0]))
-        self.CheckValue(attr2, time=5, expected=Sdf.TimeCodeArray([5.0, 5.0]))
-        self.CheckValue(attr2, time=10, expected=Sdf.TimeCodeArray([10.0, 5.0]))
-        self.CheckValue(attr2, time=15, expected=Sdf.TimeCodeArray([15.0, 5.0]))
-        self.CheckValue(attr2, time=20, expected=Sdf.TimeCodeArray([20.0, 45.0]))
-        self.CheckValue(attr2, time=25, expected=Sdf.TimeCodeArray([25.0, 40.0]))
-        self.CheckValue(attr2, time=30, expected=Sdf.TimeCodeArray([30.0, 35.0]))
-        self.CheckValue(attr2, time=35, expected=Sdf.TimeCodeArray([35.0, 30.0]))
-        self.CheckValue(attr2, time=40, expected=Sdf.TimeCodeArray([40.0, 25.0]))
+        self.CheckValue(attr2, time=0, expected=Vt.TimeCodeArray([0.0, 10.0]))
+        self.CheckValue(attr2, time=5, expected=Vt.TimeCodeArray([5.0, 5.0]))
+        self.CheckValue(attr2, time=10, expected=Vt.TimeCodeArray([10.0, 0.0]))
+        self.CheckValue(attr2, time=15, expected=Vt.TimeCodeArray([15.0, -5.0]))
+        # @20 we should get the jump discontinuity time sample as the pre-time
+        # (left segment, scale 2).
+        self.CheckValue(attr2, time=Usd.TimeCode.PreTime(20),
+                        expected=Vt.TimeCodeArray([20.0, -10.0]))
+        self.CheckValue(attr2, time=20, expected=Vt.TimeCodeArray([20.0, 45.0]))
+        self.CheckValue(attr2, time=25, expected=Vt.TimeCodeArray([25.0, 40.0]))
+        self.CheckValue(attr2, time=30, expected=Vt.TimeCodeArray([30.0, 35.0]))
+        self.CheckValue(attr2, time=35, expected=Vt.TimeCodeArray([35.0, 30.0]))
+        self.CheckValue(attr2, time=40, expected=Vt.TimeCodeArray([40.0, 25.0]))
 
-        self.CheckValue(attr2, time=-1, expected=Sdf.TimeCodeArray([0.0, 5.0]))
-        self.CheckValue(attr2, time=41, expected=Sdf.TimeCodeArray([40.0, 25.0]))
+        self.CheckValue(attr2, time=-1, expected=Vt.TimeCodeArray([0.0, 10.0]))
+        self.CheckValue(attr2, time=41, expected=Vt.TimeCodeArray([40.0, 25.0]))
+
+        # 'dur' is a duration authored with the same clip time samples as
+        # 'time', but durations are only scaled (never offset): each value is
+        # multiplied by the bracketing segment's scale (2 in the first segment,
+        # 1 in the second).
+        self.CheckValue(dur, time=0, expected=Gf.Duration(30.0))
+        self.CheckValue(dur, time=5, expected=Gf.Duration(25.0))
+        self.CheckValue(dur, time=10, expected=Gf.Duration(20.0))
+        self.CheckValue(dur, time=15, expected=Gf.Duration(15.0))
+        self.CheckValue(dur, time=Usd.TimeCode.PreTime(20),
+                        expected=Gf.Duration(10.0))
+        self.CheckValue(dur, time=20, expected=Gf.Duration(25.0))
+        self.CheckValue(dur, time=25, expected=Gf.Duration(20.0))
+        self.CheckValue(dur, time=30, expected=Gf.Duration(15.0))
+        self.CheckValue(dur, time=35, expected=Gf.Duration(10.0))
+        self.CheckValue(dur, time=40, expected=Gf.Duration(5.0))
+        self.CheckValue(dur, time=-1, expected=Gf.Duration(30.0))
+        self.CheckValue(dur, time=41, expected=Gf.Duration(5.0))
+
+        # 'durArray' mirrors 'timeArray' but scaled only (no offset).
+        self.CheckValue(durArray, time=0,
+                        expected=Vt.DurationArray([20.0, 30.0]))
+        self.CheckValue(durArray, time=5,
+                        expected=Vt.DurationArray([25.0, 25.0]))
+        self.CheckValue(durArray, time=10,
+                        expected=Vt.DurationArray([30.0, 20.0]))
+        self.CheckValue(durArray, time=15,
+                        expected=Vt.DurationArray([35.0, 15.0]))
+        self.CheckValue(durArray, time=Usd.TimeCode.PreTime(20),
+                        expected=Vt.DurationArray([40.0, 10.0]))
+        self.CheckValue(durArray, time=20,
+                        expected=Vt.DurationArray([0.0, 25.0]))
+        self.CheckValue(durArray, time=25,
+                        expected=Vt.DurationArray([5.0, 20.0]))
+        self.CheckValue(durArray, time=30,
+                        expected=Vt.DurationArray([10.0, 15.0]))
+        self.CheckValue(durArray, time=35,
+                        expected=Vt.DurationArray([15.0, 10.0]))
+        self.CheckValue(durArray, time=40,
+                        expected=Vt.DurationArray([20.0, 5.0]))
+        self.CheckValue(durArray, time=-1,
+                        expected=Vt.DurationArray([20.0, 30.0]))
+        self.CheckValue(durArray, time=41,
+                        expected=Vt.DurationArray([20.0, 5.0]))
 
         # Repeat the test over again with held interpolation.
         stage.SetInterpolationType(Usd.InterpolationTypeHeld)
 
-        # The 'clipTimes' metadata authored in the test asset offsets the 
-        # time samples in the clip by 10 frames and scales it slower by 50%,
-        # then at frame 21 it repeats the clip from frame 0 without the offset
-        # and scaling..
-        self.CheckValue(attr, time=0, expected=5.0)
-        self.CheckValue(attr, time=5, expected=5.0)
-        self.CheckValue(attr, time=10, expected=5.0)
-        self.CheckValue(attr, time=15, expected=5.0)
+        # The same retiming as above, now with held interpolation of the
+        # clip's time samples.
+        self.CheckValue(attr, time=0, expected=10.0)
+        self.CheckValue(attr, time=5, expected=10.0)
+        self.CheckValue(attr, time=10, expected=0.0)
+        self.CheckValue(attr, time=15, expected=0.0)
+        # @20 we should get the jump discontinuity time sample as the pre-time
+        # (left segment, scale 2).
+        self.CheckValue(attr, time=Usd.TimeCode.PreTime(20),
+                        expected=-10.0)
         self.CheckValue(attr, time=20, expected=45.0)
         self.CheckValue(attr, time=25, expected=40.0)
         self.CheckValue(attr, time=30, expected=35.0)
@@ -432,37 +710,94 @@ class TestUsdValueClips(unittest.TestCase):
         self.CheckValue(attr, time=40, expected=25.0)
 
         # Requests for samples before and after the mapping specified in
-        # 'clipTimes' just pick up the first or last time sample.
-        self.CheckValue(attr, time=-1, expected=5.0)
+        # 'clipTimes' hold the first or last time sample (scaled by the nearest
+        # real segment).
+        self.CheckValue(attr, time=-1, expected=10.0)
         self.CheckValue(attr, time=41, expected=25.0)
 
-        # Repeat getting values at the same times for the SdfTimeCodeArray 
+        # Repeat getting values at the same times for the Vt.TimeCodeArray
         # valued attribute.
-        self.CheckValue(attr2, time=0, expected=Sdf.TimeCodeArray([0.0, 5.0]))
-        self.CheckValue(attr2, time=5, expected=Sdf.TimeCodeArray([0.0, 5.0]))
-        self.CheckValue(attr2, time=10, expected=Sdf.TimeCodeArray([10.0, 5.0]))
-        self.CheckValue(attr2, time=15, expected=Sdf.TimeCodeArray([10.0, 5.0]))
-        self.CheckValue(attr2, time=20, expected=Sdf.TimeCodeArray([20.0, 45.0]))
-        self.CheckValue(attr2, time=25, expected=Sdf.TimeCodeArray([25.0, 40.0]))
-        self.CheckValue(attr2, time=30, expected=Sdf.TimeCodeArray([30.0, 35.0]))
-        self.CheckValue(attr2, time=35, expected=Sdf.TimeCodeArray([35.0, 30.0]))
-        self.CheckValue(attr2, time=40, expected=Sdf.TimeCodeArray([40.0, 25.0]))
+        self.CheckValue(attr2, time=0, expected=Vt.TimeCodeArray([0.0, 10.0]))
+        self.CheckValue(attr2, time=5, expected=Vt.TimeCodeArray([0.0, 10.0]))
+        self.CheckValue(attr2, time=10, expected=Vt.TimeCodeArray([10.0, 0.0]))
+        self.CheckValue(attr2, time=15, expected=Vt.TimeCodeArray([10.0, 0.0]))
+        # @20 we should get the jump discontinuity time sample as the pre-time
+        # (left segment, scale 2).
+        self.CheckValue(attr2, time=Usd.TimeCode.PreTime(20),
+                        expected=Vt.TimeCodeArray([20.0, -10.0]))
+        self.CheckValue(attr2, time=20,
+                        expected=Vt.TimeCodeArray([20.0, 45.0]))
+        self.CheckValue(attr2, time=25, expected=Vt.TimeCodeArray([25.0, 40.0]))
+        self.CheckValue(attr2, time=30, expected=Vt.TimeCodeArray([30.0, 35.0]))
+        self.CheckValue(attr2, time=35, expected=Vt.TimeCodeArray([35.0, 30.0]))
+        self.CheckValue(attr2, time=40, expected=Vt.TimeCodeArray([40.0, 25.0]))
 
-        self.CheckValue(attr2, time=-1, expected=Sdf.TimeCodeArray([0.0, 5.0]))
-        self.CheckValue(attr2, time=41, expected=Sdf.TimeCodeArray([40.0, 25.0]))
+        self.CheckValue(attr2, time=-1, expected=Vt.TimeCodeArray([0.0, 10.0]))
+        self.CheckValue(attr2, time=41, expected=Vt.TimeCodeArray([40.0, 25.0]))
+
+        # 'dur' held (scaled only, no offset).
+        self.CheckValue(dur, time=0, expected=Gf.Duration(30.0))
+        self.CheckValue(dur, time=5, expected=Gf.Duration(30.0))
+        self.CheckValue(dur, time=10, expected=Gf.Duration(20.0))
+        self.CheckValue(dur, time=15, expected=Gf.Duration(20.0))
+        self.CheckValue(dur, time=Usd.TimeCode.PreTime(20),
+                        expected=Gf.Duration(10.0))
+        self.CheckValue(dur, time=20, expected=Gf.Duration(25.0))
+        self.CheckValue(dur, time=25, expected=Gf.Duration(20.0))
+        self.CheckValue(dur, time=30, expected=Gf.Duration(15.0))
+        self.CheckValue(dur, time=35, expected=Gf.Duration(10.0))
+        self.CheckValue(dur, time=40, expected=Gf.Duration(5.0))
+        self.CheckValue(dur, time=-1, expected=Gf.Duration(30.0))
+        self.CheckValue(dur, time=41, expected=Gf.Duration(5.0))
+
+        # 'durArray' held (scaled only, no offset).
+        self.CheckValue(durArray, time=0,
+                        expected=Vt.DurationArray([20.0, 30.0]))
+        self.CheckValue(durArray, time=5,
+                        expected=Vt.DurationArray([20.0, 30.0]))
+        self.CheckValue(durArray, time=10,
+                        expected=Vt.DurationArray([30.0, 20.0]))
+        self.CheckValue(durArray, time=15,
+                        expected=Vt.DurationArray([30.0, 20.0]))
+        self.CheckValue(durArray, time=Usd.TimeCode.PreTime(20),
+                        expected=Vt.DurationArray([40.0, 10.0]))
+        self.CheckValue(durArray, time=20,
+                        expected=Vt.DurationArray([0.0, 25.0]))
+        self.CheckValue(durArray, time=25,
+                        expected=Vt.DurationArray([5.0, 20.0]))
+        self.CheckValue(durArray, time=30,
+                        expected=Vt.DurationArray([10.0, 15.0]))
+        self.CheckValue(durArray, time=35,
+                        expected=Vt.DurationArray([15.0, 10.0]))
+        self.CheckValue(durArray, time=40,
+                        expected=Vt.DurationArray([20.0, 5.0]))
+        self.CheckValue(durArray, time=-1,
+                        expected=Vt.DurationArray([20.0, 30.0]))
+        self.CheckValue(durArray, time=41,
+                        expected=Vt.DurationArray([20.0, 5.0]))
 
         # The clip has time samples authored every 5 frames, but
         # since we've scaled everything by 50%, we should have samples
         # every 10 frames.
         self.assertEqual(
-            attr.GetTimeSamples(), 
+            attr.GetTimeSamples(),
             [0, 10, 20 - Usd.TimeCode.SafeStep(), 20, 25, 30, 35, 40])
         self.assertEqual(
             attr.GetTimeSamplesInInterval(Gf.Interval(0, 30)),
             [0, 10, 20 - Usd.TimeCode.SafeStep(), 20, 25, 30])
 
+        # 'dur' shares the same retimed sample times as 'time'.
+        self.assertEqual(
+            dur.GetTimeSamples(),
+            [0, 10, 20 - Usd.TimeCode.SafeStep(), 20, 25, 30, 35, 40])
+        self.assertEqual(
+            dur.GetTimeSamplesInInterval(Gf.Interval(0, 30)),
+            [0, 10, 20 - Usd.TimeCode.SafeStep(), 20, 25, 30])
+
         self.CheckTimeSamples(attr)
         self.CheckTimeSamples(attr2)
+        self.CheckTimeSamples(dur)
+        self.CheckTimeSamples(durArray)
 
     def test_ClipsWithLayerOffsets(self):
         """Tests behavior of clips when layer offsets are involved"""
@@ -474,6 +809,16 @@ class TestUsdValueClips(unittest.TestCase):
         attr2 = model2.GetAttribute('size')
         model3 = stage.GetPrimAtPath('/Model_3')
         attr3 = model3.GetAttribute('size')
+        model4 = stage.GetPrimAtPath('/Model_4')
+        attr4 = model4.GetAttribute('size')
+        model5 = stage.GetPrimAtPath('/Model_5')
+        attr5 = model5.GetAttribute('size')
+        model6 = stage.GetPrimAtPath('/Model_6')
+        attr6 = model6.GetAttribute('size')
+        model7 = stage.GetPrimAtPath('/Model_7')
+        attr7 = model7.GetAttribute('size')
+        model8 = stage.GetPrimAtPath('/Model_8')
+        attr8 = model8.GetAttribute('size')
 
         # Default value should be unaffected by layer offsets.
         self.CheckValue(attr1, expected=1.0)
@@ -520,14 +865,34 @@ class TestUsdValueClips(unittest.TestCase):
         self.assertEqual(attr3.GetTimeSamples(), 
             [20.0, 25.0, 30.0, 35.0, 40.0])
         self.assertEqual(attr3.GetTimeSamplesInInterval(
-            Gf.Interval(-5, 5)), 
+            Gf.Interval(-5, 5)),
             [])
+
+        # Test that a reference offset with a non-unit scale is taken into
+        # account. Model_4 references the same clip data as Model_3 but with a
+        # scale of 2 on the reference (offset = 10; scale = 2), which composes
+        # with the sublayer offset of 10 to a net offset of 20 and a scale of 2.
+        # The clip's internal time t therefore maps to stage time 2*t + 20. The
+        # 'size' value is a plain float, so only the sample lookup is retimed;
+        # the returned values are not themselves transformed.
+        self.CheckValue(attr4, expected=1.0)
+        self.CheckValue(attr4, time=19, expected=-5.0)
+        self.CheckValue(attr4, time=30, expected=-5.0)
+        self.CheckValue(attr4, time=40, expected=-10.0)
+        self.CheckValue(attr4, time=50, expected=-15.0)
+        self.CheckValue(attr4, time=60, expected=-20.0)
+        self.assertEqual(attr4.GetTimeSamples(),
+            [20.0, 30.0, 40.0, 50.0, 60.0])
+        self.assertEqual(attr4.GetTimeSamplesInInterval(
+            Gf.Interval(-5, 25)),
+            [20.0])
 
         self.CheckTimeSamples(attr1)
         self.CheckTimeSamples(attr2)
         self.CheckTimeSamples(attr3)
+        self.CheckTimeSamples(attr4)
 
-        # Verify GetPropertyStackWithLayerOffsets run on an attribute with 
+        # Verify GetPropertyStackWithLayerOffsets run on an attribute with
         # clips returns the clip spec's layer offset matching the source spec's
         # layer offset.
         self.assertEqual(attr3.GetPropertyStackWithLayerOffsets(40),
@@ -536,9 +901,94 @@ class TestUsdValueClips(unittest.TestCase):
              (Sdf.Find('layerOffsets/ref.usda', '/Model.size'), 
                 Sdf.LayerOffset(20))])
 
+        # Test that layer offsets are taken into account when clip times is
+        # absent. This should result in the same time samples as attr1
+        self.CheckValue(attr5, time=0, expected=-5)
+        self.CheckValue(attr5, time=9, expected=-5)
+        self.CheckValue(attr5, time=10, expected=-5)
+        self.CheckValue(attr5, time=15, expected=-5)
+        self.CheckValue(attr5, time=20, expected=-10)
+        self.CheckValue(attr5, time=25, expected=-15)
+        self.CheckValue(attr5, time=30, expected=-20)
+        self.CheckValue(attr5, time=50, expected=-20)
+        self.assertEqual(attr1.GetTimeSamples(), attr5.GetTimeSamples())
+        self.CheckTimeSamples(attr5)
+
+        # Test that layer offsets combined with stretch/shrink regions in clip
+        # times are taken into account. This example is sped up 2x by clip
+        # times with a layer offset of 10.
+        self.CheckValue(attr6, time=0, expected=-5)
+        self.CheckValue(attr6, time=2.5, expected=-5)
+        self.CheckValue(attr6, time=5, expected=-5)
+        self.CheckValue(attr6, time=10, expected=-10)
+        self.CheckValue(attr6, time=11, expected=-10)
+        self.CheckTimeSamples(attr6)
+
+        # Test that the layer offset for a clipSet is the offset from the
+        # stage to the layer where the strongest authored 'active' metadata
+        # is defined.
+        self.CheckValue(attr7, time=0, expected=-5)
+        self.CheckValue(attr7, time=20, expected=-5)
+        self.CheckValue(attr7, time=25, expected=-5)
+        self.CheckValue(attr7, time=30, expected=-10)
+        self.CheckValue(attr7, time=35, expected=-15)
+        self.CheckValue(attr7, time=40, expected=-20)
+        self.CheckValue(attr7, time=45, expected=-20)
+        self.CheckTimeSamples(attr7)
+
+        # Test that clip times are offset independently of the layer offset
+        # for a clipSet. The base offset is 20 and the clip times offset is
+        # 10, so evaluation proceeds as if clip times is scaled by
+        # 10 - 20 = -10. Note that evaluation itself proceeds by first
+        # applying the base offset (20) to the queried time.
+        self.CheckValue(attr8, time=0, expected=-5)
+        self.CheckValue(attr8, time=10, expected=-5)
+        self.CheckValue(attr8, time=15, expected=-5)
+        self.CheckValue(attr8, time=20, expected=-10)
+        self.CheckValue(attr8, time=25, expected=-15)
+        self.CheckValue(attr8, time=30, expected=-20)
+        self.CheckValue(attr8, time=50, expected=-20)
+        self.CheckTimeSamples(attr8)
+
+    def test_ClipsWithSplineWithLayerOffsets(self):
+        """Tests behavior of splines in clips with layer offsets involvement"""
+        stage = Usd.Stage.Open('layerOffsets/root.usda')
+        model1 = stage.GetPrimAtPath('/Model_1')
+        attr1 = model1.GetAttribute('attrSpline')
+        self.CheckSpline(attr1)
+        self.CheckValue(attr1, time=14, expected=3)
+        self.CheckValue(attr1, time=15, expected=5)
+        self.CheckValue(attr1, time=26, expected=17)
+        self.CheckValue(attr1, time=30, expected=9)
+        self.CheckValue(attr1, time=50, expected=9)
+
+        model3 = stage.GetPrimAtPath('/Model_3')
+        attr3 = model3.GetAttribute('attrSpline')
+        self.CheckSpline(attr3)
+        # Times are +10 of attr1 checks
+        self.CheckValue(attr3, time=24, expected=3)
+        self.CheckValue(attr3, time=25, expected=5)
+        self.CheckValue(attr3, time=36, expected=17)
+        self.CheckValue(attr3, time=40, expected=9)
+        self.CheckValue(attr3, time=60, expected=9)
+
+        # Model_4's net layer offset is (offset = 20, scale = 2), so the clip's
+        # internal time t maps to stage time 2*t + 20. attr1's checks land at
+        # internal times 4/5/16/20/40; for Model_4 those occur at 2*t + 20,
+        # i.e. stage 28/30/52/60/100. The spline values are plain floats and so
+        # are not transformed; only the spline's time axis is retimed.
+        model4 = stage.GetPrimAtPath('/Model_4')
+        attr4 = model4.GetAttribute('attrSpline')
+        self.CheckSpline(attr4)
+        self.CheckValue(attr4, time=28, expected=3)
+        self.CheckValue(attr4, time=30, expected=5)
+        self.CheckValue(attr4, time=52, expected=17)
+        self.CheckValue(attr4, time=60, expected=9)
+        self.CheckValue(attr4, time=100, expected=9)
+
     def test_TimeCodeClipsWithLayerOffsets(self):
         """Tests behavior of clips when layer offsets are involved and the
-        attributes are SdfTimeCode values. This test is almost identical to 
+        attributes are GfTimeCode values. This test is almost identical to 
         test_ClipsWithLayerOffsets except that values returned themselves are
         also offset by the layer offsets."""
         stage = Usd.Stage.Open('layerOffsets/root.usda')
@@ -549,6 +999,8 @@ class TestUsdValueClips(unittest.TestCase):
         attr2 = model2.GetAttribute('time')
         model3 = stage.GetPrimAtPath('/Model_3')
         attr3 = model3.GetAttribute('time')
+        model4 = stage.GetPrimAtPath('/Model_4')
+        attr4 = model4.GetAttribute('time')
 
         # Default time code value will be affected by layer offsets.
         self.CheckValue(attr1, expected=11.0)
@@ -597,12 +1049,136 @@ class TestUsdValueClips(unittest.TestCase):
         self.assertEqual(attr3.GetTimeSamples(), 
             [20.0, 25.0, 30.0, 35.0, 40.0])
         self.assertEqual(attr3.GetTimeSamplesInInterval(
-            Gf.Interval(-5, 5)), 
+            Gf.Interval(-5, 5)),
             [])
+
+        # This gets a little complicated so some explanation is in order:
+        # Model_4 comes from the root_sublayer.usda with an offset of 10.  But
+        # Model_4 in root_sublayer.usda comes from /Model in ref2.usda with
+        # another offset of 10 and a scale of 2. /Model in ref2.usda comes from
+        # /Model in ref.usda (with no scale or offset). The default value for
+        # the time attribute is in ref.usda, but ref2.usda used a value clip
+        # referencing clip.usda for the timeSamples. So the default is 1.0 but
+        # the time samples are 5:-5, 10:-10, 15:-15, and 20:-20.
+        #
+        # Mapping this all back, the total time offset from clip.usda or
+        # ref.usda to the stage is a scale=2 and offset=20.
+        #
+        # When querying the default value, 1.0 is found in ref.usda:
+        #    stageValue = 1.0 * 2 + 20 = 22.0
+        #
+        # When querying time samples, they are found in clip.usda. Stage times
+        # are mapped back through the offsets as:
+        #    clipTime = (stageTime - 20) / 2
+        # So:
+        #    stageTime 30 -> clipTime 5 -> clipValue -5 -> stageValue 10
+        #    stageTime 40 -> clipTime 10 -> clipValue -10 -> stageValue 0
+        #    ...
+        self.CheckValue(attr4, expected=22.0)
+        self.CheckValue(attr4, time=19, expected=10.0)
+        self.CheckValue(attr4, time=30, expected=10.0)
+        self.CheckValue(attr4, time=40, expected=0.0)
+        self.CheckValue(attr4, time=50, expected=-10.0)
+        self.CheckValue(attr4, time=60, expected=-20.0)
+        self.assertEqual(attr4.GetTimeSamples(),
+            [20.0, 30.0, 40.0, 50.0, 60.0])
+        self.assertEqual(attr4.GetTimeSamplesInInterval(
+            Gf.Interval(-5, 25)),
+            [20.0])
 
         self.CheckTimeSamples(attr1)
         self.CheckTimeSamples(attr2)
         self.CheckTimeSamples(attr3)
+        self.CheckTimeSamples(attr4)
+
+    def test_DurationClipsWithLayerOffsets(self):
+        """Tests behavior of clips when layer offsets are involved and the
+        attributes are GfDuration values. This is analogous to
+        test_TimeCodeClipsWithLayerOffsets, except that a GfDuration is a length
+        on the time axis rather than a point: only the scale of a layer offset
+        is applied to a duration value, never the offset (a constant translation
+        cancels out of a length). With the translation-only offsets on
+        Model_1/2/3 (scale = 1), the returned duration values therefore equal
+        the raw clip values, matching test_ClipsWithLayerOffsets; only Model_4,
+        whose net offset has scale = 2, shows the values scaled."""
+        stage = Usd.Stage.Open('layerOffsets/root.usda')
+
+        model1 = stage.GetPrimAtPath('/Model_1')
+        attr1 = model1.GetAttribute('dur')
+        model2 = stage.GetPrimAtPath('/Model_2')
+        attr2 = model2.GetAttribute('dur')
+        model3 = stage.GetPrimAtPath('/Model_3')
+        attr3 = model3.GetAttribute('dur')
+        model4 = stage.GetPrimAtPath('/Model_4')
+        attr4 = model4.GetAttribute('dur')
+
+        # Default duration value is unaffected by the translation-only offset
+        # (scale = 1, offset dropped).
+        self.CheckValue(attr1, expected=Gf.Duration(1.0))
+
+        # The clip is active starting from frame +10.0 due to the offset; before
+        # that, we get the held value of the clip's first time sample. Unlike a
+        # timecode, the duration value is not shifted by the offset.
+        self.CheckValue(attr1, time=9, expected=Gf.Duration(-5.0))
+
+        # Sublayer offset of 10 frames is present, so the attribute value at
+        # frame 20 comes from the clip at frame 10, etc. The value itself is not
+        # offset.
+        self.CheckValue(attr1, time=20, expected=Gf.Duration(-10.0))
+        self.CheckValue(attr1, time=15, expected=Gf.Duration(-5.0))
+        self.CheckValue(attr1, time=10, expected=Gf.Duration(-5.0))
+        self.assertEqual(attr1.GetTimeSamples(),
+           [10.0, 15.0, 20.0, 25.0, 30.0])
+        self.assertEqual(attr1.GetTimeSamplesInInterval(
+            Gf.Interval(-10, 10)), [10.0])
+
+        # As in test_ClipsWithLayerOffsets, Model_2 authors clipTimes/clipActive
+        # in a sublayer offset by 20 frames instead of 10.
+        self.CheckValue(attr2, expected=Gf.Duration(1.0))
+        self.CheckValue(attr2, time=19, expected=Gf.Duration(-5.0))
+        self.CheckValue(attr2, time=40, expected=Gf.Duration(-20.0))
+        self.CheckValue(attr2, time=35, expected=Gf.Duration(-15.0))
+        self.CheckValue(attr2, time=30, expected=Gf.Duration(-10.0))
+        self.assertEqual(attr2.GetTimeSamples(),
+            [20.0, 25.0, 30.0, 35.0, 40.0])
+        self.assertEqual(attr2.GetTimeSamplesInInterval(
+            Gf.Interval(-17, 21)),
+            [20.0])
+
+        # Model_3 combines a reference offset of 10 with the sublayer offset of
+        # 10 for a net offset of 20 (scale = 1). The duration values are still
+        # not shifted.
+        self.CheckValue(attr3, expected=Gf.Duration(1.0))
+        self.CheckValue(attr3, time=19, expected=Gf.Duration(-5.0))
+        self.CheckValue(attr3, time=40, expected=Gf.Duration(-20.0))
+        self.CheckValue(attr3, time=35, expected=Gf.Duration(-15.0))
+        self.CheckValue(attr3, time=30, expected=Gf.Duration(-10.0))
+        self.assertEqual(attr3.GetTimeSamples(),
+            [20.0, 25.0, 30.0, 35.0, 40.0])
+        self.assertEqual(attr3.GetTimeSamplesInInterval(
+            Gf.Interval(-5, 5)),
+            [])
+
+        # Model_4's net layer offset is (offset = 20, scale = 2), so the clip's
+        # internal time t maps to stage time 2*t + 20. A duration is scaled but
+        # not offset, so the returned values are 2*clipValue (the +20 is
+        # dropped), which is what distinguishes this from the timecode case.
+        self.CheckValue(attr4, expected=Gf.Duration(2.0))
+        self.CheckValue(attr4, time=19, expected=Gf.Duration(-10.0))
+        self.CheckValue(attr4, time=30, expected=Gf.Duration(-10.0))
+        self.CheckValue(attr4, time=40, expected=Gf.Duration(-20.0))
+        self.CheckValue(attr4, time=50, expected=Gf.Duration(-30.0))
+        self.CheckValue(attr4, time=60, expected=Gf.Duration(-40.0))
+        self.assertEqual(attr4.GetTimeSamples(),
+            [20.0, 30.0, 40.0, 50.0, 60.0])
+        self.assertEqual(attr4.GetTimeSamplesInInterval(
+            Gf.Interval(-5, 25)),
+            [20.0])
+
+        self.CheckTimeSamples(attr1)
+        self.CheckTimeSamples(attr2)
+        self.CheckTimeSamples(attr3)
+        self.CheckTimeSamples(attr4)
 
     def test_ClipTimingDiscontinuities(self):
         """Tests behavior of clip timing with discontinuities to control
@@ -661,6 +1237,89 @@ class TestUsdValueClips(unittest.TestCase):
             [0, 2, 4, 6, 8])
 
         self.CheckTimeSamples(attr)
+
+        # Verify reversed timing for time-based values. The 'times' metadata
+        # maps external [0, 4] to internal [0, 4] (scale 1, offset 0), then
+        # reverses on external (4, 8], mapping to internal [4, 0] (scale -1,
+        # offset 8). A GfTimeCode is a point on the time axis, so it is retimed
+        # with the segment's full linear map (scale and offset). A GfDuration is
+        # a length, so only the scale is applied (a constant offset cancels);
+        # when the segment reverses the duration is negated and can go negative.
+        timeAttr = stage.GetAttributeAtPath('/Model.time')
+        durAttr = stage.GetAttributeAtPath('/Model.dur')
+
+        # Default values pass through unaffected by clip retiming.
+        self.CheckValue(timeAttr, expected=1.0)
+        self.CheckValue(durAttr, expected=Gf.Duration(1.0))
+
+        # Forward segment (scale 1, offset 0): timecode and duration agree.
+        self.CheckValue(timeAttr, time=0, expected=10.0)
+        self.CheckValue(timeAttr, time=1, expected=12.0)
+        self.CheckValue(timeAttr, time=2, expected=14.0)
+        self.CheckValue(timeAttr, time=3, expected=16.0)
+        self.CheckValue(timeAttr, time=4, expected=18.0)
+
+        self.CheckValue(durAttr, time=0, expected=Gf.Duration(10.0))
+        self.CheckValue(durAttr, time=1, expected=Gf.Duration(12.0))
+        self.CheckValue(durAttr, time=2, expected=Gf.Duration(14.0))
+        self.CheckValue(durAttr, time=3, expected=Gf.Duration(16.0))
+        self.CheckValue(durAttr, time=4, expected=Gf.Duration(18.0))
+
+        # Reversed segment (scale -1, offset 8): the clip authors samples at
+        # internal times 0, 2, 4, which retime to external times 4, 6, 8, so
+        # 6 and 8 are exact samples. A timecode keeps the segment's offset
+        # (8 - v): 14 -> -6, 10 -> -2. A duration is scale-only (-v): 14 -> -14,
+        # 10 -> -10, i.e. negative and diverging from the timecode.
+        self.CheckValue(timeAttr, time=6, expected=-6.0)
+        self.CheckValue(timeAttr, time=8, expected=-2.0)
+
+        self.CheckValue(durAttr, time=6, expected=Gf.Duration(-14.0))
+        self.CheckValue(durAttr, time=8, expected=Gf.Duration(-10.0))
+
+        # Values between the retimed samples are linearly interpolated by value
+        # resolution from the *converted* bracketing samples, not by evaluating
+        # a single segment's linear map at the query time. External time 5 falls
+        # between the samples at external 4 (forward: 18) and external 6
+        # (reversed: -6 for timecode, -14 for duration), so it blends across the
+        # timing peak: timecode -> (18 + -6)/2 = 6, duration -> (18 + -14)/2 = 2.
+        # External time 7 lies wholly within the reversed segment, between the
+        # samples at 6 and 8.
+        self.CheckValue(timeAttr, time=5, expected=6.0)
+        self.CheckValue(timeAttr, time=7, expected=-4.0)
+
+        self.CheckValue(durAttr, time=5, expected=Gf.Duration(2.0))
+        self.CheckValue(durAttr, time=7, expected=Gf.Duration(-12.0))
+
+        self.assertEqual(timeAttr.GetTimeSamples(), [0, 2, 4, 6, 8])
+        self.assertEqual(durAttr.GetTimeSamples(), [0, 2, 4, 6, 8])
+
+        self.CheckTimeSamples(timeAttr)
+        self.CheckTimeSamples(durAttr)
+
+    def test_ClipStrengthOrderingInherits(self):
+        '''Tests strength of clips when inherits provides clips with nested
+        prims during resolution'''
+        rootLayerFile = 'inherits/root.usda'
+        stage = Usd.Stage.Open(rootLayerFile)
+
+        primInherited = stage.GetPrimAtPath("/InheritedClips/Inner")
+        attrInherited = primInherited.GetAttribute("attr")
+        self.CheckValue(attrInherited, time=0, expected=10)
+        self.CheckValue(attrInherited, time=1, expected=20)
+        self.CheckValue(attrInherited, time=2, expected=30)
+
+        # The "_firstInherits" class should have the strongest opinion,
+        # clobbering any clips from "_hasClips"
+        primClobberedBase = stage.GetPrimAtPath("/InheritedClipsClobbered")
+        attrClobberedBase = primClobberedBase.GetAttribute("attr")
+        self.CheckValue(attrClobberedBase, time=0, expected=-1)
+        self.CheckValue(attrClobberedBase, time=1, expected=-2)
+        self.CheckValue(attrClobberedBase, time=2, expected=-3)
+
+        primClobbered = stage.GetPrimAtPath("/InheritedClipsClobbered/Inner")
+        attrClobbered = primClobbered.GetAttribute("attr")
+        self.CheckValue(attrClobbered, time=0, expected=-10)
+        self.CheckValue(attrClobbered, time=1, expected=-20)
 
     def test_ClipStrengthOrdering(self):
         '''Tests strength of clips during resolution'''
@@ -751,6 +1410,24 @@ class TestUsdValueClips(unittest.TestCase):
 
         self.CheckTimeSamples(attr_2)
 
+        # This attribute has a spline, all of whose knots and extrapolations
+        # will be used because there is only one clip.
+        attr_3 = model.GetAttribute('attr_3')
+        self.CheckSpline(attr_3)
+        floatType = "float"
+        spline = Ts.Spline(floatType)
+        k1 = Ts.Knot(floatType, time=-1, value=1,
+                     nextInterp=Ts.InterpLinear)
+        k2 = Ts.Knot(floatType, time=2, value=2,
+                     nextInterp=Ts.InterpLinear)
+        spline.SetKnot(k1)
+        spline.SetKnot(k2)
+        spline.SetPreExtrapolation(Ts.Extrapolation(Ts.ExtrapLoopReset))
+        postExtrap = Ts.Extrapolation(Ts.ExtrapSloped)
+        postExtrap.slope = 1.0
+        spline.SetPostExtrapolation(postExtrap)
+        self.assertEqual(attr_3.GetSpline(), spline)
+
     def test_MultipleClips(self):
         """Verifies behavior with multiple clips being applied to a single prim"""
         stage = Usd.Stage.Open('multiclip/root.usda')
@@ -769,6 +1446,11 @@ class TestUsdValueClips(unittest.TestCase):
         self.CheckValue(attr, time=5, expected=-5)
         self.CheckValue(attr, time=10, expected=-10)
         self.CheckValue(attr, time=15, expected=-15)
+        # we are at clip boundary at time=16, for pre-time(16) we will be in 
+        # clip1 and for ordinary value we will be extrapolating from first
+        # sample of clip2, ie. our ordinary value will be -23 but our pre-time
+        # will come from clip1 which is -15
+        self.CheckValue(attr, time=Usd.TimeCode.PreTime(16), expected=-15)
         self.CheckValue(attr, time=16, expected=-23)
         self.CheckValue(attr, time=19, expected=-23)
         self.CheckValue(attr, time=22, expected=-26)
@@ -854,15 +1536,27 @@ class TestUsdValueClips(unittest.TestCase):
         # The clip in the range [16, ...) has samples on frames 3, 6, 9 so
         # we expect time samples for this attribute at frames 19, 22, and 25.
         with InterpolationType(stage, Usd.InterpolationTypeHeld):
+            # We are at clip boundary at time=16, for pre-time(16) we will be in
+            # nosample_clip, and hence we will get None, which is same as a
+            # value block.
+            self.CheckValue(attr, time=Usd.TimeCode.PreTime(16), expected=None)
             self.CheckValue(attr, time=16, expected=-23.0)
             self.CheckValue(attr, time=17, expected=-23.0)
             self.CheckValue(attr, time=18, expected=-23.0)
             self.CheckValue(attr, time=19, expected=-23.0)
             self.CheckValue(attr, time=20, expected=-23.0)
             self.CheckValue(attr, time=21, expected=-23.0)
+            # We are at a sample boundary at time=22, with held interpolation,
+            # for pre-time(22), we will hold the value from previous sample,
+            # that is -23.0
+            self.CheckValue(attr, time=Usd.TimeCode.PreTime(22), expected=-23.0)
             self.CheckValue(attr, time=22, expected=-26.0)
             self.CheckValue(attr, time=23, expected=-26.0)
             self.CheckValue(attr, time=24, expected=-26.0)
+            # We are at a sample boundary at time=25, with held interpolation,
+            # for pre-time(25), we will hold the value from previous sample,
+            # that is -26.0
+            self.CheckValue(attr, time=Usd.TimeCode.PreTime(25), expected=-26.0)
             self.CheckValue(attr, time=25, expected=-29.0)
             self.CheckValue(attr, time=26, expected=-29.0)
             self.CheckValue(attr, time=27, expected=-29.0)
@@ -873,6 +1567,10 @@ class TestUsdValueClips(unittest.TestCase):
 
         # Repeat test with linear interpolation
         with InterpolationType(stage, Usd.InterpolationTypeLinear):
+            # We are at clip boundary at time=16, for pre-time(16) we will be in
+            # nosample_clip, and hence we will get None, which is same as a
+            # value block.
+            self.CheckValue(attr, time=Usd.TimeCode.PreTime(16), expected=None)
             self.CheckValue(attr, time=16, expected=-23.0)
             self.CheckValue(attr, time=17, expected=-23.0)
             self.CheckValue(attr, time=18, expected=-23.0)
@@ -920,20 +1618,36 @@ class TestUsdValueClips(unittest.TestCase):
             self.CheckValue(attr, time=0, expected=-23.0)
             self.CheckValue(attr, time=1, expected=-23.0)
             self.CheckValue(attr, time=2, expected=-23.0)
+            # We are at a sample boundary at time=3, with held interpolation,
+            # for pre-time(3), we will hold the value from previous sample,
+            # that is -23.0
+            self.CheckValue(attr, time=Usd.TimeCode.PreTime(3), expected=-23.0)
             self.CheckValue(attr, time=3, expected=-26.0)
 
+            # We are at clip boundary at time=4, for pre-time(4) we will be in 
+            # clip2, and its value will be held from the previous sample, that
+            # is -26.0
+            self.CheckValue(attr, time=Usd.TimeCode.PreTime(4), expected=-26.0)
+            self.CheckValue(attr, time=4, expected=None)
             # Middle clip with no samples. Since the middle clip has no 
             # time samples and there is no default value specified in the
             # manifest, we get a value of None.
-            self.CheckValue(attr, time=4, expected=None)
             self.CheckValue(attr, time=5, expected=None)
             self.CheckValue(attr, time=6, expected=None)
             self.CheckValue(attr, time=7, expected=None)
 
+            # We are at clip boundary at time=8, for pre-time(8) we will be in
+            # nosample_clip, and hence we will get None, which is same as a
+            # value block.
             # Last clip.
+            self.CheckValue(attr, time=Usd.TimeCode.PreTime(8), expected=None)
             self.CheckValue(attr, time=8, expected=-26.0)
             self.CheckValue(attr, time=9, expected=-26.0)
             self.CheckValue(attr, time=10, expected=-26.0)
+            # We are at a sample boundary at time=11, with held interpolation,
+            # for pre-time(11), we will hold the value from previous sample,
+            # that is -26.0
+            self.CheckValue(attr, time=Usd.TimeCode.PreTime(11), expected=-26.0)
             self.CheckValue(attr, time=11, expected=-29.0)
             self.CheckValue(attr, time=12, expected=-29.0)
 
@@ -946,6 +1660,10 @@ class TestUsdValueClips(unittest.TestCase):
             self.CheckValue(attr, time=2, expected=-25.0)
             self.CheckValue(attr, time=3, expected=-26.0)
 
+            # We are at clip boundary at time=4, for pre-time(4) we will be in
+            # clip2, and since clip times have 4 mapped to 7, we will get the
+            # value at 7, which is interpolated to -27.0
+            self.CheckValue(attr, time=Usd.TimeCode.PreTime(4), expected=-27.0)
             # Middle clip with no samples. Since the middle clip has no 
             # time samples and there is no default value specified in the
             # manifest, we get a value of None.
@@ -955,6 +1673,10 @@ class TestUsdValueClips(unittest.TestCase):
             self.CheckValue(attr, time=7, expected=None)
 
             # Last clip.
+            # We are at clip boundary at time=8, for pre-time(8) we will be in
+            # nosample_clip, and hence we will get None, which is same as a
+            # value block.
+            self.CheckValue(attr, time=Usd.TimeCode.PreTime(8), expected=None)
             self.CheckValue(attr, time=8, expected=-26.0)
             self.CheckValue(attr, time=9, expected=-27.0)
             self.CheckValue(attr, time=10, expected=-28.0)
@@ -986,7 +1708,11 @@ class TestUsdValueClips(unittest.TestCase):
         # start time.
         self.CheckValue(attr, time=1, expected=None)
         
+        # We are at clip boundary at time=2, for pre-time(2) we will be in
+        # nosample_clip, and hence we will get None, which is same as a
+        # value block.
         # Verify the time samples from the second clip.
+        self.CheckValue(attr, time=Usd.TimeCode.PreTime(2), expected=None)
         self.CheckValue(attr, time=2, expected=-23)
         self.CheckValue(attr, time=3, expected=-23)
         self.CheckValue(attr, time=6, expected=-26)
@@ -1011,9 +1737,39 @@ class TestUsdValueClips(unittest.TestCase):
         # independent of what clip is active. The active clip should then be
         # consulted at that clip time to retrieve the final value.
         self.CheckValue(attr, time=1, expected=100.0)
+        self.CheckValue(attr, time=1.5, expected=150.0)
         self.CheckValue(attr, time=2, expected=200.0)
+        self.CheckValue(attr, time=2.5, expected=250.0)
         self.CheckValue(attr, time=3, expected=300.0)
+        self.CheckValue(attr, time=3.5, expected=350.0)
         self.CheckValue(attr, time=4, expected=400.0)
+
+        self.assertEqual(attr.GetTimeSamples(), [1.0, 2.0, 3.0, 4.0])
+        self.assertEqual(attr.GetTimeSamplesInInterval(Gf.Interval(0, 3)), 
+                         [1.0, 2.0, 3.0])
+
+    def test_MultipleClipsWithTimesSpanningClipsWithDifferentTypes(self):
+        """Tests that clip time mappings that span multiple clips with different
+           attribute types specified in various clips work as expected"""
+        stage = Usd.Stage.Open('multiclip/root.usda')
+
+        model = stage.GetPrimAtPath(
+            '/ModelWithTimesSpanningClipsWithDifferentTypes')
+        attr = model.GetAttribute('size')
+
+        # The clip time mappings specified for this prim span a time range
+        # where two different clips are active. For a given stage time, the
+        # corresponding clip time should be determined from the mapping first,
+        # independent of what clip is active. The active clip should then be
+        # consulted at that clip time to retrieve the final value. The type of
+        # the attribute from the active clip should be respected as well.
+        self.CheckValue(attr, time=1, expected=100.0)
+        self.CheckValue(attr, time=1.5, expected=150.5)
+        self.CheckValue(attr, time=2, expected=201.0)
+        self.CheckValue(attr, time=2.5, expected=201.0)
+        self.CheckValue(attr, time=3, expected="three")
+        self.CheckValue(attr, time=3.5, expected="three")
+        self.CheckValue(attr, time=4, expected="four")
 
         self.assertEqual(attr.GetTimeSamples(), [1.0, 2.0, 3.0, 4.0])
         self.assertEqual(attr.GetTimeSamplesInInterval(Gf.Interval(0, 3)), 
@@ -1038,6 +1794,25 @@ class TestUsdValueClips(unittest.TestCase):
                          [100.5, 100.75, 101.0, 101.5, 101.75, 102.0])
         self.assertEqual(attr.GetTimeSamplesInInterval(Gf.Interval(101, 102)), 
                          [101.0, 101.5, 101.75, 102.0])
+
+        self.CheckTimeSamples(attr)
+
+    def test_MultipleClipsWithTimesSpanningClips3(self):
+        """Check behavior of multiple clips with a jump discontinuity
+        not on an active time boundary
+        """
+        stage = Usd.Stage.Open('multiclip/root.usda')
+
+        model = stage.GetPrimAtPath('/ModelWithTimesSpanningClips_3')
+        attr = model.GetAttribute('size')
+
+        self.CheckValue(attr, time=0, expected=105)
+        self.CheckValue(attr, time=5, expected=105)
+        self.CheckValue(attr, time=Usd.TimeCode.PreTime(10), expected=910)
+        self.CheckValue(attr, time=10, expected=910)
+        self.CheckValue(attr, time=Usd.TimeCode.PreTime(20), expected=920)
+        self.CheckValue(attr, time=20, expected=900)
+        self.CheckValue(attr, time=30, expected=910)
 
         self.CheckTimeSamples(attr)
 
@@ -1439,7 +2214,11 @@ class TestUsdValueClips(unittest.TestCase):
             attrNotInAnyClip.GetTimeSamplesInInterval(
                 Gf.Interval(0.0, 1.0)),
             [0.0])
-        self.assertFalse(
+        # XXX: The clips code always reports that there exists a time sample at
+        # the first time, and since we need to fetch the value type of the
+        # samples in the interval the first clip does get opened, but the other
+        # clips do not.
+        self.assertTrue(
             Sdf.Layer.Find('missingValueInterpolation/clip1.usda'))
         self.assertFalse(
             Sdf.Layer.Find('missingValueInterpolation/clip2.usda'))
@@ -1793,6 +2572,11 @@ class TestUsdValueClips(unittest.TestCase):
 
         # Note that the clip at t=2 does not have a value for this attribute,
         # and the manifest has no default value specified, so we get None.
+
+        # time=2 is at clip boundary, at pre-time(2.0), we will be in clip1,
+        # which will evaluate to -1.0
+        self.CheckValue(inManifestAndInClip, time=Usd.TimeCode.PreTime(2), 
+                        expected=-1.0)
         self.CheckValue(inManifestAndInClip, time=2, expected=None)
 
         self.assertEqual(inManifestAndInClip.GetTimeSamples(), 
@@ -1839,7 +2623,19 @@ class TestUsdValueClips(unittest.TestCase):
         fallbackInManifest = \
             stage.GetAttributeAtPath('/Model.fallbackInManifest')
         self.CheckValue(fallbackInManifest, time=0.0, expected=10.0)
+        # we are at clip boundary at time=2.0, for pre-time(2.0), we will be in
+        # clip1 with a jump discontinuity as well, so first time mapping @2 will
+        # be used.
+        self.CheckValue(fallbackInManifest, time=Usd.TimeCode.PreTime(2.0), 
+                        expected=14.0)
         self.CheckValue(fallbackInManifest, time=2.0, expected=50.0)
+        # we are at clip boundary at time=4.0, for pre-time(4.0), we will be in
+        # nosample clip, which doesn't provide any samples, so instead of using 
+        # the first time mapping @4, i.e. (4.0, 2.0) because of jump
+        # discontinuity, we we will look for fallback value in manifest, 
+        # which is 50.
+        self.CheckValue(fallbackInManifest, time=Usd.TimeCode.PreTime(4.0), 
+                        expected=50.0)
         self.CheckValue(fallbackInManifest, time=4.0, expected=20.0)
         self.assertEqual(fallbackInManifest.GetTimeSamples(),
                          [0.0, 1.0, 2.0 - Usd.TimeCode.SafeStep(), 2.0,
@@ -1849,7 +2645,17 @@ class TestUsdValueClips(unittest.TestCase):
         fallbackBlockInManifest = \
             stage.GetAttributeAtPath('/Model.fallbackBlockInManifest')
         self.CheckValue(fallbackBlockInManifest, time=0.0, expected=10.0)
+        # we are at clip boundary at time=2.0, for pre-time(2.0), we will be in
+        # clip1 with a jump discontinuity as well, so first time mapping @2 will
+        # be used.
+        self.CheckValue(fallbackBlockInManifest, time=Usd.TimeCode.PreTime(2.0), 
+                        expected=14.0)
         self.CheckValue(fallbackBlockInManifest, time=2.0, expected=None)
+        # we are at clip boundary at time=4.0, for pre-time(4.0), we will be in
+        # nosample clip, so we will look for fallback value in manifest, which
+        # has a block.
+        self.CheckValue(fallbackBlockInManifest, time=Usd.TimeCode.PreTime(4.0), 
+                        expected=None)
         self.CheckValue(fallbackBlockInManifest, time=4.0, expected=20.0)
         self.assertEqual(fallbackBlockInManifest.GetTimeSamples(),
                          [0.0, 1.0, 2.0 - Usd.TimeCode.SafeStep(), 2.0,
@@ -1861,7 +2667,17 @@ class TestUsdValueClips(unittest.TestCase):
         noFallbackInManifest =  \
             stage.GetAttributeAtPath('/Model.noFallbackInManifest')
         self.CheckValue(noFallbackInManifest, time=0.0, expected=10.0)
+        # we are at clip boundary at time=2.0, for pre-time(2.0), we will be in
+        # clip1, which has a jump discontinuity as well, so first time mapping 
+        # @2 will be used.
+        self.CheckValue(noFallbackInManifest, time=Usd.TimeCode.PreTime(2.0), 
+                        expected=14.0)
         self.CheckValue(noFallbackInManifest, time=2.0, expected=None)
+        # we are at clip boundary at time=4.0, for pre-time(4.0), we will be in
+        # nosample clip, so we will look for fallback value in manifest, which
+        # doesn't have a fallback therefore None, which is same as a block.
+        self.CheckValue(noFallbackInManifest, time=Usd.TimeCode.PreTime(4.0), 
+                        expected=None)
         self.CheckValue(noFallbackInManifest, time=4.0, expected=20.0)
         self.assertEqual(noFallbackInManifest.GetTimeSamples(),
                          [0.0, 1.0, 2.0 - Usd.TimeCode.SafeStep(), 2.0,
@@ -2408,6 +3224,10 @@ class TestUsdValueClips(unittest.TestCase):
 
         attr = stage.GetAttributeAtPath('/ClipInterpolationTest2.attr')
         self.CheckValue(attr, time=0, expected=10.0)
+        # We are at clip boundary at time=1, so we look at clip1 for pre-time(1)
+        # with a jump discontinuity @1, so first time mapping will be used @1.
+        self.CheckValue(attr, time=Usd.TimeCode.PreTime(1), 
+                        expected=100.0)
         self.CheckValue(attr, time=1, expected=20.0)
 
         # At t=0.5, we're beyond the last (and only) time sample in the first
@@ -2453,30 +3273,60 @@ class TestUsdValueClips(unittest.TestCase):
 
         attr = stage.GetAttributeAtPath('/Model.assetPath')
         _CheckAssetPathValue(
+            attr, time=Usd.TimeCode.PreTime(0),
+            expected=os.path.abspath('assetPathValues/clip1/clip1.usda'))
+        _CheckAssetPathValue(
             attr, time=0, 
+            expected=os.path.abspath('assetPathValues/clip1/clip1.usda'))
+        _CheckAssetPathValue(
+            attr, time=Usd.TimeCode.PreTime(1), 
             expected=os.path.abspath('assetPathValues/clip1/clip1.usda'))
         _CheckAssetPathValue(
             attr, time=1, 
             expected=os.path.abspath('assetPathValues/manifest/manifest.usda'))
         _CheckAssetPathValue(
+            attr, time=Usd.TimeCode.PreTime(2),
+            expected=os.path.abspath('assetPathValues/manifest/manifest.usda'))
+        _CheckAssetPathValue(
             attr, time=2,
+            expected=os.path.abspath('assetPathValues/clip2/clip2.usda'))
+        _CheckAssetPathValue(
+            attr, time=Usd.TimeCode.PreTime(3),
             expected=os.path.abspath('assetPathValues/clip2/clip2.usda'))
         _CheckAssetPathValue(
             attr, time=3,
             expected=os.path.abspath('assetPathValues/clip3/clip3.usda'))
+        _CheckAssetPathValue(
+            attr, time=Usd.TimeCode.PreTime(4),
+            expected=os.path.abspath('assetPathValues/clip3/clip3.usda'))
 
         attr = stage.GetAttributeAtPath('/Model.assetPathArray')
         _CheckAssetPathArrayValue(
+            attr, time=Usd.TimeCode.PreTime(0),
+            expected=[os.path.abspath('assetPathValues/clip1/clip1.usda')])
+        _CheckAssetPathArrayValue(
             attr, time=0, 
+            expected=[os.path.abspath('assetPathValues/clip1/clip1.usda')])
+        _CheckAssetPathArrayValue(
+            attr, time=Usd.TimeCode.PreTime(1),
             expected=[os.path.abspath('assetPathValues/clip1/clip1.usda')])
         _CheckAssetPathArrayValue(
             attr, time=1, 
             expected=[os.path.abspath('assetPathValues/manifest/manifest.usda')])
         _CheckAssetPathArrayValue(
+            attr, time=Usd.TimeCode.PreTime(2),
+            expected=[os.path.abspath('assetPathValues/manifest/manifest.usda')])
+        _CheckAssetPathArrayValue(
             attr, time=2,
             expected=[os.path.abspath('assetPathValues/clip2/clip2.usda')])
         _CheckAssetPathArrayValue(
+            attr, time=Usd.TimeCode.PreTime(3),
+            expected=[os.path.abspath('assetPathValues/clip2/clip2.usda')])
+        _CheckAssetPathArrayValue(
             attr, time=3,
+            expected=[os.path.abspath('assetPathValues/clip3/clip3.usda')])
+        _CheckAssetPathArrayValue(
+            attr, time=Usd.TimeCode.PreTime(4),
             expected=[os.path.abspath('assetPathValues/clip3/clip3.usda')])
 
     def test_ComputeClipAssetPaths(self):
@@ -2617,6 +3467,742 @@ class TestUsdValueClips(unittest.TestCase):
         _TestRemoveAndInsertNonEmptySublayer()
         _TestInsertAndRemoveEmptySublayer()
         _TestRemoveAndInsertEmptySublayer()
+
+    def _SetupClipNoticesStage(self, dirName):
+        """Write a stage to dirName with these value clip sets:
+          /Model    - explicit clip ./clip.usda and manifest ./manifest.usda.
+                      The clip's values also apply to /Model/Child.
+          /Other    - explicit clip ./other.usda and a generated manifest.
+          /Template - template clips ./tclip.#.usdc for times 1 and 2,
+                      introduced through a payload as in production
+                      assets. Reloading these crate files replaces their
+                      content without itemizing the changes.
+        Returns the path to the root layer."""
+        shutil.rmtree(dirName, ignore_errors=True)
+        os.makedirs(dirName)
+
+        _WriteClipFile(os.path.join(dirName, 'clip.usda'), {
+            '/Clip.a': {0: 1.0},
+            '/Clip.b': {0: 2.0},
+            '/Clip/Child.attr': {0: 3.0}})
+        _WriteClipFile(os.path.join(dirName, 'other.usda'), {
+            '/Clip.a': {0: 4.0}})
+        _WriteClipFile(os.path.join(dirName, 'tclip.1.usdc'), {
+            '/Clip.a': {1: 5.0}})
+        _WriteClipFile(os.path.join(dirName, 'tclip.2.usdc'), {
+            '/Clip.a': {2: 6.0}})
+
+        # The manifest deliberately omits /Clip.b so that tests can add it.
+        manifest = Sdf.Layer.CreateAnonymous('.usda')
+        Sdf.CreatePrimInLayer(manifest, '/Clip/Child')
+        Sdf.AttributeSpec(manifest.GetPrimAtPath('/Clip'), 'a',
+                          Sdf.ValueTypeNames.Double)
+        Sdf.AttributeSpec(manifest.GetPrimAtPath('/Clip/Child'), 'attr',
+                          Sdf.ValueTypeNames.Double)
+        manifest.Export(os.path.join(dirName, 'manifest.usda'))
+
+        def _DefineAttrs(layer, primPath, names):
+            prim = Sdf.CreatePrimInLayer(layer, primPath)
+            prim.specifier = Sdf.SpecifierDef
+            for name in names:
+                Sdf.AttributeSpec(prim, name, Sdf.ValueTypeNames.Double)
+            return prim
+
+        stage = Usd.Stage.CreateNew(os.path.join(dirName, 'payload.usda'))
+        _DefineAttrs(stage.GetRootLayer(), '/Template', ['a'])
+        clips = Usd.ClipsAPI(stage.GetPrimAtPath('/Template'))
+        clips.SetClipTemplateAssetPath('./tclip.#.usdc')
+        clips.SetClipPrimPath('/Clip')
+        clips.SetClipTemplateStartTime(1)
+        clips.SetClipTemplateEndTime(2)
+        clips.SetClipTemplateStride(1)
+        stage.GetRootLayer().Save()
+
+        rootPath = os.path.join(dirName, 'root.usda')
+        stage = Usd.Stage.CreateNew(rootPath)
+        root = stage.GetRootLayer()
+        _DefineAttrs(root, '/Model', ['a', 'b'])
+        _DefineAttrs(root, '/Model/Child', ['attr'])
+        _DefineAttrs(root, '/Other', ['a'])
+        _DefineAttrs(root, '/Template', []).payloadList.Prepend(
+            Sdf.Payload('./payload.usda', '/Template'))
+
+        clips = Usd.ClipsAPI(stage.GetPrimAtPath('/Model'))
+        clips.SetClipAssetPaths([Sdf.AssetPath('./clip.usda')])
+        clips.SetClipManifestAssetPath(Sdf.AssetPath('./manifest.usda'))
+        clips.SetClipPrimPath('/Clip')
+        clips.SetClipActive([(0, 0)])
+
+        clips = Usd.ClipsAPI(stage.GetPrimAtPath('/Other'))
+        clips.SetClipAssetPaths([Sdf.AssetPath('./other.usda')])
+        clips.SetClipPrimPath('/Clip')
+        clips.SetClipActive([(0, 0)])
+
+        stage.GetRootLayer().Save()
+        return rootPath
+
+    def _OpenClipNoticesStage(self, rootPath):
+        """Open the stage at rootPath and pull on every attribute that
+        gets values from clips, so that all clip layers are open."""
+        stage = Usd.Stage.Open(rootPath)
+        attrs = {
+            'a': stage.GetAttributeAtPath('/Model.a'),
+            'b': stage.GetAttributeAtPath('/Model.b'),
+            'child': stage.GetAttributeAtPath('/Model/Child.attr'),
+            'other': stage.GetAttributeAtPath('/Other.a'),
+            'template': stage.GetAttributeAtPath('/Template.a')}
+        self.assertTrue(all(attrs.values()))
+
+        self.CheckValue(attrs['a'], time=0, expected=1.0)
+        self.CheckValue(attrs['b'], time=0, expected=None)
+        self.CheckValue(attrs['child'], time=0, expected=3.0)
+        self.CheckValue(attrs['other'], time=0, expected=4.0)
+        self.CheckValue(attrs['template'], time=1, expected=5.0)
+        self.CheckValue(attrs['template'], time=2, expected=6.0)
+        return stage, attrs
+
+    def test_ClipLayerReloadNotices(self):
+        """Verifies that UsdStage::Reload sends ObjectsChanged notices for
+        objects whose values come from clip layers that changed on disk."""
+        rootPath = self._SetupClipNoticesStage('clipReloadNotices')
+        stage, attrs = self._OpenClipNoticesStage(rootPath)
+        objs = list(attrs.values())
+        dirName = os.path.dirname(rootPath)
+
+        # Rewrite an explicit clip.  The change must be reported for attributes
+        # on the clip prim and its descendants, but not for attributes that get
+        # values from other clip sets.  /Clip.b also changes, but since the
+        # manifest does not declare it /Model.b takes no values from the clip,
+        # so it is not reported.
+        _WriteClipFile(os.path.join(dirName, 'clip.usda'), {
+            '/Clip.a': {0: 10.0},
+            '/Clip.b': {0: 20.0},
+            '/Clip/Child.attr': {0: 30.0}})
+        with ObjectsChangedListener(stage, objs) as l:
+            stage.Reload()
+        self.CheckValue(attrs['a'], time=0, expected=10.0)
+        self.CheckValue(attrs['b'], time=0, expected=None)
+        self.CheckValue(attrs['child'], time=0, expected=30.0)
+        self.assertIn(attrs['a'].GetPath(), l.affectedPaths)
+        self.assertNotIn(attrs['b'].GetPath(), l.affectedPaths)
+        self.assertIn(attrs['child'].GetPath(), l.affectedPaths)
+        self.assertNotIn(attrs['other'].GetPath(), l.affectedPaths)
+        self.assertNotIn(attrs['template'].GetPath(), l.affectedPaths)
+
+        # Rewrite a clip that uses a generated manifest.
+        _WriteClipFile(os.path.join(dirName, 'other.usda'), {
+            '/Clip.a': {0: 40.0}})
+        with ObjectsChangedListener(stage, objs) as l:
+            stage.Reload()
+        self.CheckValue(attrs['other'], time=0, expected=40.0)
+        self.assertIn(attrs['other'].GetPath(), l.affectedPaths)
+        self.assertNotIn(attrs['a'].GetPath(), l.affectedPaths)
+
+        # Rewrite one clip of a template clip set brought in by a payload.
+        _WriteClipFile(os.path.join(dirName, 'tclip.2.usdc'), {
+            '/Clip.a': {2: 60.0}})
+        with ObjectsChangedListener(stage, objs) as l:
+            stage.Reload()
+        self.CheckValue(attrs['template'], time=1, expected=5.0)
+        self.CheckValue(attrs['template'], time=2, expected=60.0)
+        self.assertIn(attrs['template'].GetPath(), l.affectedPaths)
+        self.assertNotIn(attrs['a'].GetPath(), l.affectedPaths)
+
+        # Reloading when no clip changed on disk must not report clip
+        # objects as changed.
+        with ObjectsChangedListener(stage, objs) as l:
+            stage.Reload()
+        self.assertEqual(l.affectedPaths, set())
+
+    def test_ClipLayerEditNotices(self):
+        """Verifies that in-memory edits to clip layers send ObjectsChanged
+        notices for objects whose values come from those layers."""
+        rootPath = self._SetupClipNoticesStage('clipEditNotices')
+        stage, attrs = self._OpenClipNoticesStage(rootPath)
+        objs = list(attrs.values())
+        dirName = os.path.dirname(rootPath)
+
+        clip = Sdf.Layer.Find(os.path.join(dirName, 'clip.usda'))
+        self.assertTrue(clip)
+        with ObjectsChangedListener(stage, objs) as l:
+            clip.SetTimeSample('/Clip/Child.attr', 0, 300.0)
+        self.CheckValue(attrs['child'], time=0, expected=300.0)
+        self.assertIn(attrs['child'].GetPath(), l.affectedPaths)
+        self.assertNotIn(attrs['other'].GetPath(), l.affectedPaths)
+
+        tclip = Sdf.Layer.Find(os.path.join(dirName, 'tclip.1.usdc'))
+        self.assertTrue(tclip)
+        with ObjectsChangedListener(stage, objs) as l:
+            tclip.SetTimeSample('/Clip.a', 1, 500.0)
+        self.CheckValue(attrs['template'], time=1, expected=500.0)
+        self.assertIn(attrs['template'].GetPath(), l.affectedPaths)
+        self.assertNotIn(attrs['a'].GetPath(), l.affectedPaths)
+
+        # Edits to an explicit manifest change which attributes get values from
+        # clips.  /Clip.b is in the clip but not yet in the manifest.
+        manifest = Sdf.Layer.Find(os.path.join(dirName, 'manifest.usda'))
+        self.assertTrue(manifest)
+        with ObjectsChangedListener(stage, objs) as l:
+            Sdf.AttributeSpec(manifest.GetPrimAtPath('/Clip'), 'b',
+                              Sdf.ValueTypeNames.Double)
+        self.CheckValue(attrs['b'], time=0, expected=2.0)
+        self.assertIn(attrs['b'].GetPath(), l.affectedPaths)
+
+    def test_SharedClipLayerNotices(self):
+        """Verifies that edits to a clip layer used by several stages send
+        ObjectsChanged notices from each of those stages."""
+        rootPath = self._SetupClipNoticesStage('sharedClipNotices')
+        stage1, attrs1 = self._OpenClipNoticesStage(rootPath)
+        stage2, attrs2 = self._OpenClipNoticesStage(rootPath)
+        self.assertNotEqual(stage1, stage2)
+
+        clip = Sdf.Layer.Find(
+            os.path.join(os.path.dirname(rootPath), 'clip.usda'))
+        with ObjectsChangedListener(stage1, [attrs1['a']]) as l1, \
+             ObjectsChangedListener(stage2, [attrs2['a']]) as l2:
+            clip.SetTimeSample('/Clip.a', 0, 100.0)
+        self.CheckValue(attrs1['a'], time=0, expected=100.0)
+        self.CheckValue(attrs2['a'], time=0, expected=100.0)
+        self.assertEqual(l1.affectedPaths, {attrs1['a'].GetPath()})
+        self.assertEqual(l2.affectedPaths, {attrs2['a'].GetPath()})
+
+    def test_ClipLayerNoticesAfterRecompose(self):
+        """Verifies that clip layers are still tracked for change
+        notification after the prims using them are recomposed, including
+        clip layers that are first opened while recomposing."""
+        rootPath = self._SetupClipNoticesStage('clipRecomposeNotices')
+        stage, attrs = self._OpenClipNoticesStage(rootPath)
+        objs = list(attrs.values())
+        dirName = os.path.dirname(rootPath)
+        root = stage.GetRootLayer()
+
+        def _GeneratedManifests():
+            return set(l.identifier
+                       for l in stage.GetUsedLayers(includeClipLayers=True)
+                       if l.anonymous and 'generated_manifest' in l.identifier)
+
+        # Recompose /Model and /Other without changing their clips.  The clip
+        # sets are rebuilt from the layers kept alive during change processing,
+        # including the generated manifest for /Other.  /Other and /Template
+        # have generated manifests.
+        manifestsBefore = _GeneratedManifests()
+        self.assertEqual(len(manifestsBefore), 2)
+        with Sdf.ChangeBlock():
+            root.GetPrimAtPath('/Model').kind = 'component'
+            root.GetPrimAtPath('/Other').kind = 'component'
+        self.assertEqual(_GeneratedManifests(), manifestsBefore)
+
+        clip = Sdf.Layer.Find(os.path.join(dirName, 'clip.usda'))
+        with ObjectsChangedListener(stage, objs) as l:
+            clip.SetTimeSample('/Clip.a', 0, 10.0)
+        self.CheckValue(attrs['a'], time=0, expected=10.0)
+        self.assertEqual(l.affectedPaths, {attrs['a'].GetPath()})
+
+        other = Sdf.Layer.FindOrOpen(os.path.join(dirName, 'other.usda'))
+        with ObjectsChangedListener(stage, objs) as l:
+            other.SetTimeSample('/Clip.a', 0, 40.0)
+        self.CheckValue(attrs['other'], time=0, expected=40.0)
+        self.assertEqual(l.affectedPaths, {attrs['other'].GetPath()})
+
+        # Point /Other at a clip layer that is not open.  Generating the new
+        # manifest opens it while the stage is processing this change, so the
+        # stage starts listening to it during that round.
+        newClipPath = os.path.join(dirName, 'newClip.usda')
+        _WriteClipFile(newClipPath, {'/Clip.a': {0: 7.0}})
+        self.assertFalse(Sdf.Layer.Find(newClipPath))
+        with ObjectsChangedListener(stage, objs) as l:
+            Usd.ClipsAPI(stage.GetPrimAtPath('/Other')).SetClipAssetPaths(
+                [Sdf.AssetPath('./newClip.usda')])
+        self.assertIn(attrs['other'].GetPath(), l.affectedPaths)
+        newClip = Sdf.Layer.Find(newClipPath)
+        self.assertTrue(newClip)
+        self.CheckValue(attrs['other'], time=0, expected=7.0)
+
+        with ObjectsChangedListener(stage, objs) as l:
+            newClip.SetTimeSample('/Clip.a', 0, 70.0)
+        self.CheckValue(attrs['other'], time=0, expected=70.0)
+        self.assertEqual(l.affectedPaths, {attrs['other'].GetPath()})
+
+        # The stage no longer uses other.usda, so edits to it must not be
+        # reported.
+        with ObjectsChangedListener(stage, objs) as l:
+            other.SetTimeSample('/Clip.a', 0, 400.0)
+        self.assertEqual(l.affectedPaths, set())
+        self.CheckValue(attrs['other'], time=0, expected=70.0)
+
+        # Edit a clip layer in the same round as a change that recomposes the
+        # prim using it.
+        with ObjectsChangedListener(stage, objs) as l:
+            with Sdf.ChangeBlock():
+                clip.SetTimeSample('/Clip/Child.attr', 0, 30.0)
+                root.GetPrimAtPath('/Model').kind = 'group'
+        self.CheckValue(attrs['child'], time=0, expected=30.0)
+        self.assertIn(attrs['child'].GetPath(), l.affectedPaths)
+        self.assertNotIn(attrs['other'].GetPath(), l.affectedPaths)
+
+        # Clip layers are still tracked after that round.
+        with ObjectsChangedListener(stage, objs) as l:
+            clip.SetTimeSample('/Clip/Child.attr', 0, 300.0)
+        self.CheckValue(attrs['child'], time=0, expected=300.0)
+        self.assertEqual(l.affectedPaths, {attrs['child'].GetPath()})
+
+    def test_ClipLayerNoticesBeforeManifestOpened(self):
+        """Verifies that edits to a clip layer that was already open when the
+        stage was opened are not reported, and do not open the manifest,
+        before any value has been resolved from the clip set."""
+        rootPath = self._SetupClipNoticesStage('clipNoticesNoManifest')
+        dirName = os.path.dirname(rootPath)
+        manifestPath = os.path.join(dirName, 'manifest.usda')
+
+        clip = Sdf.Layer.FindOrOpen(os.path.join(dirName, 'clip.usda'))
+        self.assertTrue(clip)
+        stage = Usd.Stage.Open(rootPath)
+        attr = stage.GetAttributeAtPath('/Model.a')
+        self.assertTrue(attr)
+        self.assertFalse(Sdf.Layer.Find(manifestPath))
+
+        with ObjectsChangedListener(stage, [attr]) as l:
+            clip.SetTimeSample('/Clip.a', 0, 10.0)
+        self.assertEqual(l.affectedPaths, set())
+        self.assertFalse(Sdf.Layer.Find(manifestPath))
+
+        # Resolving a value opens the manifest, after which edits are
+        # reported.
+        self.CheckValue(attr, time=0, expected=10.0)
+        self.assertTrue(Sdf.Layer.Find(manifestPath))
+        with ObjectsChangedListener(stage, [attr]) as l:
+            clip.SetTimeSample('/Clip.a', 0, 20.0)
+        self.assertEqual(l.affectedPaths, {attr.GetPath()})
+        self.CheckValue(attr, time=0, expected=20.0)
+
+    def test_ExpectedAttributeFormat(self):
+        """Test syntax that results in "spline vs time samples" being expected
+        in cases when manifests are "explicitly authored" or
+        "generated at runtime".
+        """
+        stage = Usd.Stage.Open("dataFormat/root.usda")
+        model = stage.GetPrimAtPath("/Model")
+
+        def _CheckTimeSamples(attrName, expectedNumSamples):
+            """Checks the following expected characteristics for attrs that
+            resolve to time samples based on the manifest.
+            """
+            attr = model.GetAttribute(attrName)
+            if (expectedNumSamples > 1):
+                self.assertTrue(attr.ValueMightBeTimeVarying())
+            else:
+                self.assertFalse(attr.ValueMightBeTimeVarying())
+
+            self.assertFalse(attr.HasSpline())
+            self.assertIsNone(attr.Get())
+            self.assertEqual(len(attr.GetTimeSamples()), expectedNumSamples)
+            self.CheckTimeSamples(attr)
+        
+        def _CheckSpline(attrName, expectedNumKnots):
+            """Checks the following expected characteristics for attrs
+            that resolve to spline based on the manifest.
+            """
+            attr = model.GetAttribute(attrName)
+            self.assertTrue(attr.HasSpline())
+            self.assertTrue(attr.ValueMightBeTimeVarying())
+            self.assertIsNone(attr.Get())
+            spline = attr.GetSpline()
+            self.assertEqual(len(spline.GetKnots()), expectedNumKnots)
+            self.CheckSpline(attr)
+
+        def _TestAuthoredManifest():
+            """Data format should be determined purely from the manifest;
+            data authored in clips shouldn't be taken into account.
+
+            Choose "time samples" when an attribute in an authored
+            manifest doesn't author explicit "spline" or "time samples" syntax.
+
+            Note that UsdAttribute time sample getters insert a sample
+            at the starting active time of each clip if a sample is not already
+            present. Splines' knot counts are potentially more complicated and
+            documented in each case.
+            """
+            _CheckTimeSamples("aWithDefault", 1)
+            _CheckTimeSamples("aDeclared", 1)
+            _CheckTimeSamples("aTimeSamples", 1)
+            # Defined time samples are ignored in the manifest, but still
+            # resolves to time samples
+            _CheckTimeSamples("aDefinedTimeSamples", 1)
+            # Time samples "wins" over spline declaration when both are present
+            _CheckTimeSamples("aBothFormats", 1)
+            # Time samples with value blocks resolves to time samples
+            _CheckTimeSamples("aTimeSamplesSkipClipsAtTimes", 1)
+            # An additional sample is inserted at the clip start time if
+            # it doesn't already exist.
+            _CheckTimeSamples("aTimeSamplesNonEmptyClip", 2)
+            # The first clip's time samples are preserved in the interval
+            # (-inf, first clip's end time). This is also true for the last
+            # last clip and the interval [last clip's start time, +inf) 
+            _CheckTimeSamples("aTimeSamplesPreActiveTime", 3)
+
+            # One knot is inserted at the clip active time because the clip
+            # doesn't have an authored spline.
+            _CheckSpline("aSpline", 1)
+            # If there is a default, a knot is inserted at the beginning of
+            # each contiguous clip (potentially multiple-clip) region.
+            _CheckSpline("aSplineWithDefault", 1)
+            _CheckSpline("aSplineSkipClipsAtTimes", 1)
+            _CheckSpline("aSplineNonEmptyClip", 1)
+            # Analogue to "aTimeSamplesPreActiveTime"
+            _CheckSpline("aSplinePreActiveTime", 3)
+
+        def _TestGeneratedManifest():
+            """Data format is determined by parsing clip files.
+            Time samples "win" over splines if both are specified. Note that
+            empty time samples in clips *do not* cause resolution to time
+            samples, whereas empty splines do cause resolution to splines.
+            """
+            # Empty time samples in clips don't cause the overall attribute to
+            # register time samples.
+            _CheckTimeSamples("gEmptyTimeSamples", 0)
+            _CheckTimeSamples("gDefinedTimeSamples", 3)
+            # Defined timeSamples wins over defined spline (intra-clip)
+            _CheckTimeSamples("gBothFormats", 2)
+            # Defined timeSamples wins over defined spline (inter-clip)
+            _CheckTimeSamples("gBothFormatsAcrossClips", 2)
+            # Time samples that fall outside the active range don't directly
+            # contribute samples, but still cause clip value resolution to
+            # register the whole attribute as time samples.
+            _CheckTimeSamples("gTimeSamplesOutsideClipRange", 2)
+
+            # For the below splines, knots at the active time for the clip
+            # without values is generated to convey a "value block" because
+            # interpolateMissingClipValues=false
+
+            # Unlike time samples, an empty spline in clips is meaningful.
+            _CheckSpline("gSpline", 2)
+            # gDefinedSpline in the first clip contributes one knot.
+            _CheckSpline("gDefinedSpline", 2)
+            _CheckSpline("gSplineAcrossClips", 2)
+            # Splines win when time samples are empty (intra-clip)
+            _CheckSpline("gBothFormatsSplineWins", 1)
+            # Splines win when time samples are empty (inter-clip)
+            _CheckSpline("gBothFormatsSplineWinsAcrossClips", 1)
+
+        _TestAuthoredManifest()
+        _TestGeneratedManifest()
+
+    def test_ClipSplineTiming(self):
+        """Exercises clip retiming of splines via clipTimes metadata.
+
+        On a single clip, this checks:
+        - Offsetting clip times
+        - Spline behavior at jump discontinuities
+        - Slowed clip sections relative to stage time
+        - Sped-up clip sections relative to stage time
+        - Reversed clip sections
+        """
+        stage = Usd.Stage.Open("timingSpline/root.usda")
+        model = stage.GetPrimAtPath("/Model")
+        attr1 = model.GetAttribute('a')
+        self.CheckSpline(attr1)
+
+        # Test that splines are held outside of the clips time range
+        self.CheckValue(attr1, time=-5, expected=10)
+        self.CheckValue(attr1, time=0, expected=10)
+        # The expected value is 15 because there are knots in clip
+        # time at 12(value 12) and 20(value 18). The section is curved
+        # but exactly halfway at clip time 16, value is 15. This
+        # clip time is where the entire clip times metadata ends.
+        self.CheckValueClose(attr1, time=29.5, expected=15)
+        self.CheckValueClose(attr1, time=100, expected=15)
+
+        # Check jump discontinuity behavior
+        self.CheckValueClose(attr1, time=Usd.TimeCode.PreTime(10),
+                             expected=18)
+
+        # Check that the spline is stretched over ext time [10, 20)
+        self.CheckValue(attr1, time=10, expected=10)
+        self.CheckValue(attr1, time=12, expected=11)
+        self.CheckValue(attr1, time=14, expected=12)
+
+        # Check that the spline is shrunk over ext time [20, 25)
+        self.CheckValueClose(attr1, time=20.5, expected=15)
+        self.CheckValueClose(attr1, time=Usd.TimeCode.PreTime(22.5),
+                             expected=18)
+        self.CheckValueClose(attr1, time=22.5, expected=20)
+        self.CheckValueClose(attr1, time=25, expected=30)
+
+        # Check reversed section. Note that the expected preTime/time
+        # queries at time 27.5 are the reverse of those above at 22.5
+        self.CheckValueClose(attr1, time=25, expected=30)
+        self.CheckValueClose(attr1, time=Usd.TimeCode.PreTime(27.5),
+                             expected=20)
+        self.CheckValueClose(attr1, time=27.5, expected=18)
+        self.CheckValueClose(attr1, time=29.5, expected=15)
+
+        model2 = stage.GetPrimAtPath("/Model2")
+        attr2 = model2.GetAttribute("attr2")
+        self.CheckSpline(attr2)
+        self.CheckValue(attr2, time=10, expected=9)
+
+    def test_MultipleSplinesInClipsMissing(self):
+        """Test expected fallback behavior when clips are missing
+           in the following scenarios:
+            - attr has no manifest defaults
+            - attr has manifest defaults
+            - attr has no manifest defaults and
+                interpolateMissingClipValues=true
+        """
+        stage = Usd.Stage.Open("multiclipSpline/root.usda")
+
+        def _TestMissing(self, primPath, manifestDefault):
+            model = stage.GetPrimAtPath(primPath)
+            fallback = manifestDefault
+
+            missingAll = model.GetAttribute("missingAll")
+            self.CheckSpline(missingAll)
+            self.CheckValue(missingAll, time=-1, expected=fallback)
+            self.CheckValue(missingAll, time=2.5, expected=fallback)
+            self.CheckValue(missingAll, time=4, expected=fallback)
+
+            missingFirst = model.GetAttribute("missingFirst")
+            self.CheckSpline(missingFirst)
+            self.CheckValue(missingFirst, time=-1, expected=fallback)
+            self.CheckValue(missingFirst, time=0, expected=fallback)
+            self.CheckValue(missingFirst, time=1, expected=1.0)
+            self.CheckValue(missingFirst, time=4, expected=3.0)
+
+            missingMiddle = model.GetAttribute("missingMiddle")
+            self.CheckSpline(missingMiddle)
+            self.CheckValue(missingMiddle, time=-1, expected=0.0)
+            self.CheckValue(missingMiddle, time=0, expected=0.0)
+            self.CheckValue(missingMiddle, time=1, expected=fallback)
+            self.CheckValue(missingMiddle, time=Usd.TimeCode.PreTime(2),
+                            expected=fallback)
+            self.CheckValue(missingMiddle, time=2, expected=2.0)
+
+            missingLast = model.GetAttribute("missingLast")
+            self.CheckSpline(missingLast)
+            self.CheckValue(missingLast, time=-1, expected=0.0)
+            self.CheckValue(missingLast, time=Usd.TimeCode.PreTime(3),
+                            expected=2.0)
+            self.CheckValue(missingLast, time=3, expected=fallback)
+            self.CheckValue(missingLast, time=4, expected=fallback)
+
+            missingMiddle2 = model.GetAttribute("missingMiddle2")
+            self.CheckSpline(missingMiddle2)
+            self.CheckValue(missingMiddle2, time=Usd.TimeCode.PreTime(1),
+                            expected=0.0)
+            self.CheckValue(missingMiddle2, time=1, expected=fallback)
+            self.CheckValue(missingMiddle2, time=2.5, expected=fallback)
+            self.CheckValue(missingMiddle2, time=3, expected=3.0)
+
+            missingLast2 = model.GetAttribute("missingLast2")
+            self.CheckSpline(missingLast2)
+            self.CheckValue(missingLast2, time=Usd.TimeCode.PreTime(2),
+                            expected=1.0)
+            self.CheckValue(missingLast2, time=2, expected=fallback)
+            self.CheckValue(missingLast2, time=3, expected=fallback)
+            self.CheckValue(missingLast2, time=4, expected=fallback)
+
+            missingFirst2 = model.GetAttribute("missingFirst2")
+            self.CheckSpline(missingFirst2)
+            self.CheckValue(missingFirst2, time=-1, expected=fallback)
+            self.CheckValue(missingFirst2, time=0, expected=fallback)
+            self.CheckValue(missingFirst2, time=Usd.TimeCode.PreTime(2),
+                            expected=fallback)
+            self.CheckValue(missingFirst2, time=2, expected=2.0)
+
+        def _TestMissingWithInterpolation(self):
+            """Tests interpolation over missing splines in clips assuming
+               default stage linear interpolation"""
+            model = stage.GetPrimAtPath(
+                "/ModelMissingWithNoManifestDefaultsWithInterpolation")
+
+            missingAll = model.GetAttribute("missingAll")
+            self.CheckSpline(missingAll)
+            self.CheckValue(missingAll, time=-1, expected=None)
+            self.CheckValue(missingAll, time=2.5, expected=None)
+            self.CheckValue(missingAll, time=4, expected=None)
+
+            # missing_clip1's value for missingFirst is held back infinitely
+            missingFirst = model.GetAttribute("missingFirst")
+            self.CheckSpline(missingFirst)
+            self.CheckValue(missingFirst, time=-1, expected=1.0)
+            self.CheckValue(missingFirst, time=0, expected=1.0)
+            self.CheckValue(missingFirst, time=1, expected=1.0)
+            self.CheckValue(missingFirst, time=4, expected=3.0)
+
+            # Interpolate between missingMiddle values in clip0 and clip2
+            missingMiddle = model.GetAttribute("missingMiddle")
+            self.CheckSpline(missingMiddle)
+            self.CheckValue(missingMiddle, time=-1, expected=0.0)
+            self.CheckValue(missingMiddle, time=0, expected=0.0)
+            self.CheckValue(missingMiddle, time=1, expected=0.0)
+            self.CheckValue(missingMiddle, time=1.5, expected=1.0)
+            self.CheckValue(missingMiddle, time=1.75, expected=1.5)
+            self.CheckValue(missingMiddle, time=Usd.TimeCode.PreTime(2),
+                            expected=2.0)
+            self.CheckValue(missingMiddle, time=2, expected=2.0)
+
+            # Hold forward the knot at time 2 through the last missing clip;
+            # when only one side of the missing clip region to be interpolated
+            # contributes a value, that value is held through the missing
+            # clip region.
+            missingLast = model.GetAttribute("missingLast")
+            self.CheckSpline(missingLast)
+            self.CheckValue(missingLast, time=-1, expected=0.0)
+            self.CheckValue(missingLast, time=Usd.TimeCode.PreTime(3),
+                            expected=2.0)
+            self.CheckValue(missingLast, time=3, expected=2.0)
+            self.CheckValue(missingLast, time=4, expected=2.0)
+
+            # Interpolate between missingMiddle2 values in clip0 and clip3
+            missingMiddle2 = model.GetAttribute("missingMiddle2")
+            self.CheckSpline(missingMiddle2)
+            self.CheckValue(missingMiddle2, time=Usd.TimeCode.PreTime(1),
+                            expected=0.0)
+            self.CheckValue(missingMiddle2, time=1, expected=0.0)
+            self.CheckValue(missingMiddle2, time=2, expected=1.5)
+            self.CheckValue(missingMiddle2, time=2.5, expected=2.25)
+            self.CheckValue(missingMiddle2, time=3, expected=3.0)
+
+            # Hold forward the knot at time 1 through the last missing clip;
+            # when only one side of the missing clip region to be interpolated
+            # contributes a value, that value is held through the missing
+            # clip region.
+            missingLast2 = model.GetAttribute("missingLast2")
+            self.CheckSpline(missingLast2)
+            self.CheckValue(missingLast2, time=Usd.TimeCode.PreTime(2),
+                            expected=1.0)
+            self.CheckValue(missingLast2, time=2, expected=1.0)
+            self.CheckValue(missingLast2, time=3, expected=1.0)
+            self.CheckValue(missingLast2, time=4, expected=1.0)
+
+            # Hold backward the knot at time 2
+            missingFirst2 = model.GetAttribute("missingFirst2")
+            self.CheckSpline(missingFirst2)
+            self.CheckValue(missingFirst2, time=-1, expected=2.0)
+            self.CheckValue(missingFirst2, time=0, expected=2.0)
+            self.CheckValue(missingFirst2, time=Usd.TimeCode.PreTime(2),
+                            expected=2.0)
+            self.CheckValue(missingFirst2, time=2, expected=2.0)
+
+        _TestMissing(self, "/ModelMissingWithNoManifestDefaults", None)
+
+        # Note that manifest defaults are stronger than interpolation,
+        # so these two tests expect the same results.
+        _TestMissing(self, "/ModelMissingWithManifestDefaults", 10)
+        _TestMissing(self,
+            "/ModelMissingWithManifestDefaultsWithInterpolation", 10)
+
+        _TestMissingWithInterpolation(self)
+
+    def test_MultipleSplinesInClipsWithNoTimes(self):
+        """Test sequencing multiple clips together with no times metadata
+        to remap times."""
+        stage = Usd.Stage.Open("multiclipSpline/root.usda")
+        model = stage.GetPrimAtPath("/ModelWithNoTimes")
+
+        attr1 = model.GetAttribute("attrDualValuedBoundary")
+        self.CheckSpline(attr1)
+        self.CheckValue(attr1, time=Usd.TimeCode.PreTime(0), expected=None)
+        self.CheckValue(attr1, time=0, expected=0)
+        self.CheckValue(attr1, time=5, expected=0.5)
+        self.CheckValue(attr1, time=Usd.TimeCode.PreTime(10), expected=1)
+        # clip boundary here
+        self.CheckValueClose(attr1, time=10, expected=10)
+        self.CheckValue(attr1, time=Usd.TimeCode.PreTime(15), expected=15)
+        self.CheckValue(attr1, time=15, expected=None)
+        self.CheckValue(attr1, time=Usd.TimeCode.PreTime(20), expected=None)
+        # clip boundary here
+        self.CheckValue(attr1, time=20, expected=20)
+        self.CheckValue(attr1, time=25, expected=25)
+        self.CheckValue(attr1, time=30, expected=30)
+
+        attr2 = model.GetAttribute("attrTruncatedLooping")
+        self.CheckSpline(attr2)
+        self.assertEqual(attr2.GetSpline().GetPreExtrapolation().mode,
+                         Ts.ExtrapLoopRepeat)
+        self.CheckValue(attr2, time=-10, expected=5)
+        self.CheckValue(attr2, time=-5, expected=10)
+        self.CheckValue(attr2, time=0, expected=5)
+        self.CheckValue(attr2, time=5, expected=10)
+        self.CheckValue(attr2, time=Usd.TimeCode.PreTime(10), expected=5)
+        # clip boundary here
+        self.CheckValue(attr2, time=10, expected=0)
+        self.CheckValue(attr2, time=Usd.TimeCode.PreTime(15), expected=5)
+        self.CheckValue(attr2, time=15, expected=0)
+        self.CheckValue(attr2, time=Usd.TimeCode.PreTime(20), expected=5)
+        # clip boundary here
+        self.CheckValue(attr2, time=20, expected=20)
+        self.CheckValue(attr2, time=Usd.TimeCode.PreTime(25), expected=15)
+        self.CheckValue(attr2, time=25, expected=15)
+        self.CheckValue(attr2, time=30, expected=20)
+
+    def test_MultipleSplinesInClipsWithTimesSpanningClips(self):
+        """Tests that clip time mappings that span multiple splines in clips
+        work as expected"""
+        stage = Usd.Stage.Open("multiclipSpline/root.usda")
+        model = stage.GetPrimAtPath("/ModelWithTimesSpanningClips")
+
+        attr1 = model.GetAttribute("attr1")
+        self.CheckSpline(attr1)
+        # Note that stage time of -1 (or any time before 0) maps to clip time 0
+        # for this test
+        self.CheckValue(attr1, time=-1, expected=None)
+        self.CheckValue(attr1, time=Usd.TimeCode.PreTime(1), expected=None)
+        self.CheckValue(attr1, time=1, expected=3)
+        self.CheckValue(attr1, time=Usd.TimeCode.PreTime(5), expected=3)
+        self.CheckValue(attr1, time=5, expected=10)
+        self.CheckValue(attr1, time=Usd.TimeCode.PreTime(7), expected=10)
+        self.CheckValue(attr1, time=7, expected=11)
+        self.CheckValue(attr1, time=Usd.TimeCode.PreTime(10), expected=11)
+        # clip boundary here
+        self.CheckValueClose(attr1, time=10, expected=7.5)
+        self.CheckValue(attr1, time=Usd.TimeCode.PreTime(15), expected=10)
+        self.CheckValue(attr1, time=15, expected=10)
+        self.CheckValue(attr1, time=17.5, expected=5)
+        self.CheckValue(attr1, time=20, expected=10)
+        self.CheckValue(attr1, time=22.5, expected=10)
+        self.CheckValue(attr1, time=25, expected=10)
+
+        attr2 = model.GetAttribute("attr2")
+        self.CheckSpline(attr2)
+        self.CheckValue(attr2, time=-1, expected=None)
+        self.CheckValue(attr2, time=0, expected=None)
+        self.CheckValue(attr2, time=0.5, expected=0)
+        self.CheckValue(attr2, time=Usd.TimeCode.PreTime(2.5), expected=0)
+        # Note spanning_clip1's post extrapolation none kicks in at clip time 5
+        self.CheckValue(attr2, time=2.5, expected=None)
+        self.CheckValue(attr2, time=5, expected=None)
+        self.CheckValue(attr2, time=Usd.TimeCode.PreTime(10), expected=None)
+        # clip boundary here
+        self.CheckValue(attr2, time=10, expected=5)
+        self.CheckValue(attr2, time=Usd.TimeCode.PreTime(15), expected=5)
+        self.CheckValue(attr2, time=15, expected=None)
+        self.CheckValue(attr2, time=20, expected=None)
+        self.CheckValue(attr2, time=50, expected=None)
+
+        attr3 = model.GetAttribute("attr3")
+        self.CheckSpline(attr3)
+        self.CheckValue(attr3, time=-1, expected=None)
+        self.CheckValue(attr3, time=5, expected=None)
+        self.CheckValue(attr3, time=19, expected=None)
+        self.CheckValue(attr3, time=21, expected=None)
+
+        attr4 = model.GetAttribute("attr4")
+        self.CheckSpline(attr4)
+        self.CheckValue(attr4, time=-42, expected=5)
+        self.CheckValue(attr4, time=-1, expected=5)
+        self.CheckValue(attr4, time=0, expected=5)
+        self.CheckValue(attr4, time=Usd.TimeCode.PreTime(2.5), expected=10)
+        self.CheckValue(attr4, time=2.5, expected=5)
+        self.CheckValue(attr4, time=Usd.TimeCode.PreTime(5), expected=10)
+        self.CheckValue(attr4, time=5, expected=10)
+        self.CheckValue(attr4, time=Usd.TimeCode.PreTime(10), expected=12.5)
+        # clip boundary here
+        self.CheckValue(attr4, time=10, expected=7.5)
+        self.CheckValue(attr4, time=15, expected=10)
+        self.CheckValue(attr4, time=17.5, expected=5)
+        self.CheckValue(attr4, time=Usd.TimeCode.PreTime(20), expected=10)
+        self.CheckValue(attr4, time=20, expected=None)
 
 if __name__ == "__main__":
     unittest.main()

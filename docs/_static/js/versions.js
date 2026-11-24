@@ -6,7 +6,7 @@
   };
 
   function build_version_select(release, all_versions) {
-    var buf = ['<select id="version_select">'];
+    var buf = ['<select aria-label="Select doc version" id="version_select">'];
     var major_minor = release.split(".").slice(0, 2).join(".");
 
     $.each(all_versions, function(index, version_obj) {
@@ -98,6 +98,19 @@
     return entry;
   }
 
+  function is_newer_version(version, other_version) {
+    // Return true if version is "newer" than other_version, e.g. 
+    // is_newer_version("26.11", "26.08") == true.
+    var version_parts = version.split(".").map(Number);
+    var other_version_parts = other_version.split(".").map(Number);
+    if (version_parts[0] > other_version_parts[0] ||
+        (version_parts[0] == other_version_parts[0] && 
+         version_parts[1] > other_version_parts[1])) {
+      return true;
+    }
+    return false;
+  }
+
   $(document).ready(function() {
 
     // Dynamically build version selector from manifest of available versions
@@ -135,6 +148,9 @@
     // rather than relative to the page path, because pages can now be in 
     // various subdirs
     var jsFileLocation = $('script[src*=versions]').attr('src');
+    // strip URI parameters (e.g. "versions.js?v=blah") from location if any
+    jsFileLocation = jsFileLocation.split('?')[0]; 
+    // remove this script from path and append location to versions.json
     jsFileLocation = jsFileLocation.replace('versions.js', '');    
     $.getJSON(jsFileLocation + "../../../versions.json", function(data) {
       var dev_version, release_version
@@ -157,7 +173,8 @@
 
       if (DOCUMENTATION_OPTIONS.VERSION != release_version.version) {
         var warningMsg;
-        if (DOCUMENTATION_OPTIONS.VERSION == dev_version.version) {
+        if (DOCUMENTATION_OPTIONS.VERSION == dev_version.version || 
+            is_newer_version(DOCUMENTATION_OPTIONS.VERSION, release_version.version)) {
           warningMsg = "This document is for a version of USD that is under development."
         }
         else {

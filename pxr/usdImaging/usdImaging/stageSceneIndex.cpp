@@ -6,29 +6,57 @@
 //
 #include "pxr/usdImaging/usdImaging/stageSceneIndex.h"
 
-#include "pxr/usd/usd/primRange.h"
-
 #include "pxr/usdImaging/usdImaging/adapterManager.h"
 #include "pxr/usdImaging/usdImaging/apiSchemaAdapter.h"
 #include "pxr/usdImaging/usdImaging/dataSourceStage.h"
 #include "pxr/usdImaging/usdImaging/primAdapter.h"
 #include "pxr/usdImaging/usdImaging/tokens.h"
+#include "pxr/usdImaging/usdImaging/sceneIndexCreateArgsSchema.h"
 
-#include "pxr/imaging/hd/overlayContainerDataSource.h"
 #include "pxr/imaging/hd/dataSourceTypeDefs.h"
+#include "pxr/imaging/hd/overlayContainerDataSource.h"
+#include "pxr/imaging/hd/retainedDataSource.h"
+
+#include "pxr/usd/ar/resolverScopedCache.h"
+#include "pxr/usd/sdf/path.h"
+#include "pxr/usd/usd/attribute.h"
+#include "pxr/usd/usd/primFlags.h"
+#include "pxr/usd/usd/primRange.h"
+#include "pxr/usd/usdHydra/primAPI.h"
 
 #include "pxr/base/tf/denseHashSet.h"
+#include "pxr/base/tf/hash.h"
+
+#include <deque>
+#include <iterator>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
 PXR_NAMESPACE_OPEN_SCOPE
-
-TF_DEFINE_PUBLIC_TOKENS(UsdImagingStageSceneIndexTokens,
-                        USDIMAGING_STAGE_SCENE_INDEX_TOKENS);
 
 namespace
 {
 
+const char * const _subprimPrefix = "__";
+    
 using AdapterEntry = UsdImaging_AdapterManager::AdapterEntry;
 using AdapterEntries = UsdImaging_AdapterManager::AdapterEntries;
+
+TfToken
+_AddSubprimPrefix(const TfToken &name)
+{
+    return TfToken(_subprimPrefix + name.GetString());
+}
+
+SdfPath
+_SubPrimPath(const SdfPath &path, const TfToken subprim)
+{
+    if (subprim.IsEmpty()) {
+        return path;
+    }
+    return path.AppendChild(_AddSubprimPrefix(subprim));
+}
 
 bool
 _Contains(const TfTokenVector &vec, const TfToken &t)
@@ -187,15 +215,11 @@ _InvalidateImagingSubprim(
 }
 
 bool
-_GetIncludeUnloadedPrims(HdContainerDataSourceHandle const &inputArgs)
+_GetIncludeUnloadedPrims(HdContainerDataSourceHandle const &createArgs)
 {
-    if (!inputArgs) {
-        return false;
-    }
-    HdBoolDataSourceHandle const ds =
-        HdBoolDataSource::Cast(
-            inputArgs->Get(
-                UsdImagingStageSceneIndexTokens->includeUnloadedPrims));
+    const UsdImagingSceneIndexCreateArgsSchema schema =
+        UsdImagingSceneIndexCreateArgsSchema::GetFromParent(createArgs);
+    HdBoolDataSourceHandle const ds = schema.GetIncludeUnloadedPrims();
     if (!ds) {
         return false;
     }
@@ -207,16 +231,34 @@ _GetIncludeUnloadedPrims(HdContainerDataSourceHandle const &inputArgs)
 // ---------------------------------------------------------------------------
 
 UsdImagingStageSceneIndex::UsdImagingStageSceneIndex(
-        HdContainerDataSourceHandle const &inputArgs)
-  : _includeUnloadedPrims(_GetIncludeUnloadedPrims(inputArgs))
+        HdContainerDataSourceHandle const &createArgs)
+  : _includeUnloadedPrims(_GetIncludeUnloadedPrims(createArgs))
   , _adapterManager(std::make_unique<UsdImaging_AdapterManager>())
 {
 }
 
-UsdImagingStageSceneIndex::~UsdImagingStageSceneIndex()
-{
-    SetStage(nullptr);
-}
+// Note:
+// We don't emit notices on destruction.
+//
+// Let's take A -> B -> C as an example, with A being the stage scene
+// index, and -> representing "is an input to". So, C observes B observes A.
+// Also assume that we hold local references to A, B, and C.
+//
+// 1. Scenario: We reset the reference to A.
+//    Because B holds a reference to A, resetting a local reference to A will
+//    _not_ result in A being destroyed. It'll only decrement the ref count.
+//    Only when we reset C will ~A and then ~B be called.
+//
+// 2. Scenario: We reset references to C and B.
+//    At this point, A no longer has any observers.
+//
+// 3. Scenario: B is merging scene index.
+// We should invoke RemoveInputScene(A) to generate the appropriate notices.
+//
+// In each of these scenarios, it doesn't make sense to emit notices on
+// destruction.
+//
+UsdImagingStageSceneIndex::~UsdImagingStageSceneIndex() = default;
 
 // ---------------------------------------------------------------------------
 
@@ -235,28 +277,49 @@ UsdImagingStageSceneIndex::GetPrim(const SdfPath &path) const
         return { TfToken(), UsdImagingDataSourceStage::New(_stage) };
     }
 
-    const SdfPath primPath = path.GetPrimPath();
+    UsdPrim prim = _stage->GetPrimAtPath(path);
+    TfToken subprim;
 
-    const UsdPrim prim = _stage->GetPrimAtPath(primPath);
+    // If the prim doesn't exist, see if it's a subprim, e.g.
+    // /usdPrim/__subprimName where /usdPrim is a valid path.
     if (!prim) {
+        std::string nameToken = path.GetNameToken().GetString();
+        if (TfStringStartsWith(nameToken, _subprimPrefix)) {
+            subprim = TfToken(nameToken.substr(2));
+            prim = _stage->GetPrimAtPath(path.GetParentPath());
+        }
+
+        if (!prim) {
+            return s_emptyPrim;
+        }
+    }
+
+    if (prim.IsInstanceProxy()
+        && !UsdHydraPrimAPI::ShouldExpandInstancesForPrim(prim)) {
+        // Instance proxy prims are not reflected into the scene index
+        // unless hydra:expandInstances=1 is set on an ancestor.
         return s_emptyPrim;
     }
-    if (prim.IsInstanceProxy()) {
-        return s_emptyPrim;
-    }
+
     if (!_GetPrimPredicate()(prim)) {
         return s_emptyPrim;
     }
 
-    const TfToken subprim =
-        path.IsPropertyPath() ? path.GetNameToken() : TfToken();
-
     const AdapterEntries &entries =
         _adapterManager->LookupAdapters(prim).allAdapters;
 
+    HdContainerDataSourceHandle dataSource =
+        _GetImagingSubprimData(entries, prim, subprim, _stageGlobals);
+
+    if (subprim.IsEmpty() && !dataSource) {
+        static HdContainerDataSourceHandle const empty =
+            HdRetainedContainerDataSource::New();
+        dataSource = empty;
+    }
+
     return {
         _GetImagingSubprimType(entries, prim, subprim),
-        _GetImagingSubprimData(entries, prim, subprim, _stageGlobals)
+        dataSource
     };
 }
 
@@ -272,7 +335,6 @@ UsdImagingStageSceneIndex::GetChildPrimPaths(
         return {};
     }
 
-    // If this is a subprim path, treat it as a leaf.
     if (!path.IsAbsoluteRootOrPrimPath()) {
         return {};
     }
@@ -280,6 +342,18 @@ UsdImagingStageSceneIndex::GetChildPrimPaths(
     UsdPrim prim = _stage->GetPrimAtPath(path);
     if (!prim) {
         return {};
+    }
+
+    // Determine if we need to expand instances at this path.
+    bool expandInstances = false;
+    if (prim.IsInstance() || prim.IsInstanceProxy()) {
+        expandInstances = UsdHydraPrimAPI::ShouldExpandInstancesForPrim(prim);
+        if (!expandInstances) {
+            // This is an instance or instance proxy, but we are not
+            // expanding the instance, so there are no children in the
+            // Hydra scene index.
+            return {};
+        }
     }
 
     SdfPathVector result;
@@ -297,8 +371,11 @@ UsdImagingStageSceneIndex::GetChildPrimPaths(
     if (!(entry.primAdapter &&
             entry.primAdapter->GetPopulationMode() ==
                 UsdImagingPrimAdapter::RepresentsSelfAndDescendents)) {
-        UsdPrimSiblingRange range =
-            prim.GetFilteredChildren(_GetPrimPredicate());
+        Usd_PrimFlagsPredicate predicate = _GetPrimPredicate();
+        if (expandInstances) {
+            predicate.TraverseInstanceProxies(true);
+        }
+        UsdPrimSiblingRange range = prim.GetFilteredChildren(predicate);
         for (const UsdPrim &child: range) {
             result.push_back(child.GetPath());
         }
@@ -308,13 +385,15 @@ UsdImagingStageSceneIndex::GetChildPrimPaths(
     for (const TfToken &subprim : _GetImagingSubprims(
              prim, entry.allAdapters)) {
         if (!subprim.IsEmpty()) {
-            result.push_back(primPath.AppendProperty(subprim));
+            result.push_back(
+                primPath.AppendChild(
+                    _AddSubprimPrefix(subprim)));
         }
     }
 
     if (path.IsAbsoluteRootPath()) {
-        for (const UsdPrim &prim : _stage->GetPrototypes()) {
-            result.push_back(prim.GetPath());
+        for (const UsdPrim &protoPrim : _stage->GetPrototypes()) {
+            result.push_back(protoPrim.GetPath());
         }
     }
 
@@ -323,20 +402,19 @@ UsdImagingStageSceneIndex::GetChildPrimPaths(
 
 // ---------------------------------------------------------------------------
 
+void UsdImagingStageSceneIndex::SetTime(UsdTimeCode time)
+{
+    if (_stageGlobals.GetTime() != time) {
+        _SetTime(time);
+    }
+}
+
 void UsdImagingStageSceneIndex::SetTime(
     UsdTimeCode time,
     const bool forceDirtyingTimeDeps)
 {
-    TRACE_FUNCTION();
-
-    if (_stageGlobals.GetTime() == time && !forceDirtyingTimeDeps) {
-        return;
-    }
-
-    HdSceneIndexObserver::DirtiedPrimEntries dirtied;
-    _stageGlobals.SetTime(time, &dirtied);
-    if (!dirtied.empty()) {
-        _SendPrimsDirtied(dirtied);
+    if (_stageGlobals.GetTime() != time || forceDirtyingTimeDeps) {
+        _SetTime(time);
     }
 }
 
@@ -353,8 +431,11 @@ void UsdImagingStageSceneIndex::SetStage(UsdStageRefPtr stage)
 
     TRACE_FUNCTION();
 
+    ArResolverScopedCache resolverCache;
+
     if (_stage) {
         TF_DEBUG(USDIMAGING_POPULATION).Msg("[Population] Removing </>\n");
+        _populatedPaths.clear();
         _SendPrimsRemoved({SdfPath::AbsoluteRootPath()});
         _stageGlobals.Clear();
         TfNotice::Revoke(_objectsChangedNoticeKey);
@@ -372,39 +453,107 @@ void UsdImagingStageSceneIndex::SetStage(UsdStageRefPtr stage)
     _Populate();
 }
 
+void UsdImagingStageSceneIndex::_SetTime(UsdTimeCode time)
+{
+    TRACE_FUNCTION();
+
+    HdSceneIndexObserver::DirtiedPrimEntries dirtied;
+    _stageGlobals.SetTime(time, &dirtied);
+    if (!dirtied.empty()) {
+        _SendPrimsDirtied(dirtied);
+    }
+}
+
 void UsdImagingStageSceneIndex::_Populate()
 {
     if (!_stage) {
         return;
     }
 
-    _PopulateSubtree(_stage->GetPseudoRoot());
+    HdSceneIndexObserver::AddedPrimEntries addedPrims;
 
+    // Populate each subtree, building up a single list of AddedPrimEntries.
+    _PopulateSubtree(_stage->GetPseudoRoot(), &addedPrims);
     for (const UsdPrim &prim : _stage->GetPrototypes()) {
-        _PopulateSubtree(prim);
+        _PopulateSubtree(prim, &addedPrims);
+    }
+    for (const auto& entry: addedPrims) {
+        // We expect paths to be populated in namespace order, so
+        // we provide an insertion hint iterator.
+        _populatedPaths.insert(_populatedPaths.end(), entry.primPath);
     }
 
+    if (TfDebug::IsEnabled(USDIMAGING_POPULATION)) {
+        TF_DEBUG(USDIMAGING_POPULATION).Msg(
+            "[Population] Populating\n");
+        for (size_t i = 0; i < addedPrims.size(); ++i) {
+            TF_DEBUG(USDIMAGING_POPULATION).Msg("\t<%s> (type = %s)\n",
+                addedPrims[i].primPath.GetText(),
+                addedPrims[i].primType.GetText());
+        }
+    }
+
+    _SendPrimsAdded(addedPrims);
 }
 
-void UsdImagingStageSceneIndex::_PopulateSubtree(UsdPrim subtreeRoot)
+void UsdImagingStageSceneIndex::_PopulateSubtree(
+    UsdPrim subtreeRoot,
+    HdSceneIndexObserver::AddedPrimEntries *addedPrims)
 {
     TRACE_FUNCTION();
     if (!subtreeRoot) {
         return;
     }
 
-    HdSceneIndexObserver::AddedPrimEntries addedPrims;
-    size_t lastEnd = 0;
+    UsdPrimRange range(
+        subtreeRoot, UsdTraverseInstanceProxies(_GetPrimPredicate()));
 
-    UsdPrimRange range(subtreeRoot, _GetPrimPredicate());
+    // During traversal, keep track of whether we are expanding an instance.
+    // This will hold the root path of the instance being expanded, or
+    // otherwise hold an empty path.  This is used to minimize calls
+    // to ShouldExpandInstancesForPrim() during traversal.
+    SdfPath instanceExpansionRoot;
 
     for (auto it = range.begin(); it != range.end(); ++it) {
         const UsdPrim &prim = *it;
         if (prim.IsPseudoRoot()) {
             // XXX for now, we have to make sure the prim at the absolute root
             // path is "added"
-            addedPrims.emplace_back(SdfPath::AbsoluteRootPath(), TfToken());
+            addedPrims->emplace_back(SdfPath::AbsoluteRootPath(), TfToken());
             continue;
+        }
+
+        // Instance traversal.
+        if (!instanceExpansionRoot.IsEmpty()) {
+            // We have been expanding an instance.
+            // Check if we are still under the same instance root.
+            if (prim.GetPath().HasPrefix(instanceExpansionRoot)) {
+                // Still expanding the same instance.
+                // Continue traversing its proxy prims.
+            } else {
+                // No longer under the same instance.
+                // Reset instance root, and check below if we have
+                // entered a new instnace.
+                instanceExpansionRoot = SdfPath::EmptyPath();
+            }
+        }
+        // Check if we have reached a new instance to expand.
+        if (instanceExpansionRoot.IsEmpty() && prim.IsInstance()) {
+            // We do not need to includeAncestors when checking this prim
+            // for Hydra-expansion state because we are already keeping
+            // track of that in our recursive namespace traversal.
+            constexpr bool includeAncestors = false;
+            if (UsdHydraPrimAPI::ShouldExpandInstancesForPrim(
+                    prim, includeAncestors)) {
+                // We have reached a new instance and it is marked
+                // for expansion.
+                instanceExpansionRoot = prim.GetPath();
+            } else {
+                // We have reached a new instance but it is not marked
+                // for expansion, so skip its children.  Note that
+                // this is the expected common case for instances.
+                it.PruneChildren();
+            }
         }
 
         const UsdImaging_AdapterManager::AdaptersEntry &entry =
@@ -422,28 +571,11 @@ void UsdImagingStageSceneIndex::_PopulateSubtree(UsdPrim subtreeRoot)
             _GetImagingSubprims(prim, entry.allAdapters);
 
         for (TfToken const& subprim : subprims) {
-            const SdfPath subpath =
-                subprim.IsEmpty() ? primPath : primPath.AppendProperty(subprim);
-
-            addedPrims.emplace_back(subpath,
+            addedPrims->emplace_back(
+                _SubPrimPath(primPath, subprim),
                 _GetImagingSubprimType(entry.allAdapters, prim, subprim));
         }
-
-        if (TfDebug::IsEnabled(USDIMAGING_POPULATION)) {
-            TF_DEBUG(USDIMAGING_POPULATION).Msg(
-                "[Population] Populating <%s> (type = %s) ->\n",
-                primPath.GetText(),
-                prim.GetPrimTypeInfo().GetSchemaTypeName().GetText());
-            for (size_t i = lastEnd; i < addedPrims.size(); ++i) {
-                TF_DEBUG(USDIMAGING_POPULATION).Msg("\t<%s> (type = %s)\n",
-                    addedPrims[i].primPath.GetText(),
-                    addedPrims[i].primType.GetText());
-            }
-            lastEnd = addedPrims.size();
-        }
     }
-
-    _SendPrimsAdded(addedPrims);
 }
 
 Usd_PrimFlagsPredicate
@@ -506,6 +638,11 @@ UsdImagingStageSceneIndex::_OnUsdObjectsChanged(
             TF_DEBUG(USDIMAGING_CHANGES).Msg(
                     " - Property resync queued: %s\n",
                     it->GetText());
+            if (it->GetNameToken() == UsdHydraTokens->hydraExpandInstances) {
+                // Toggling hydra:expandInstances changes the topology of the
+                // scene index, so repopulate the affected subtree.
+                _usdPrimsToResync.push_back(it->GetPrimPath());
+            }
         }
 
         // Clear out recorded asset path dependencies since they are
@@ -515,7 +652,7 @@ UsdImagingStageSceneIndex::_OnUsdObjectsChanged(
         _stageGlobals.RemoveAssetPathDependentsUnder(*it);
     }
 
-    // These paths represent objects which have been modified in a 
+    // These paths represent objects which have been modified in a
     // non-structural way, for example setting a value. These paths may be paths
     // to prims or properties. Property invalidations flow into hydra as dirty
     // locators. Prim invalidations are promoted to resyncs or ignored.
@@ -542,6 +679,14 @@ UsdImagingStageSceneIndex::_OnUsdObjectsChanged(
                 }
             }
         } else if (it->IsPropertyPath()) {
+            if (it->GetNameToken() == UsdHydraTokens->hydraExpandInstances) {
+                // Toggling hydra:expandInstances changes the topology of the
+                // scene index, so repopulate the affected subtree.
+                _usdPrimsToResync.push_back(it->GetPrimPath());
+                TF_DEBUG(USDIMAGING_CHANGES).Msg(
+                        " - Resync queued due to expandInstances change: %s\n",
+                        it->GetText());
+            }
             _usdPropertiesToUpdate[it->GetPrimPath()]
                 .push_back(it->GetNameToken());
             TF_DEBUG(USDIMAGING_CHANGES).Msg(" - Property update queued: %s\n",
@@ -561,25 +706,67 @@ UsdImagingStageSceneIndex::_OnUsdObjectsChanged(
     }
 }
 
-UsdImagingStageSceneIndex::_PrimAdapterPair
-UsdImagingStageSceneIndex::_FindResponsibleAncestor(const UsdPrim &prim) const
+static
+auto
+_WalkResponsibleAncestors(
+    UsdImaging_AdapterManager &adapterManager,
+    const UsdPrim &prim,
+    const bool stopAtFirst)
 {
-    UsdPrim parentPrim = prim.GetParent();
-    while (parentPrim) {
+    std::deque<UsdPrim> parents { prim.GetParent() };
+    std::vector<std::pair<UsdPrim, UsdImagingPrimAdapterSharedPtr>> results;
+    std::unordered_set<SdfPath, TfHash> visited;
 
-        const UsdImagingPrimAdapterSharedPtr &primAdapter =
-            _adapterManager->LookupAdapters(parentPrim).primAdapter;
+    while (!parents.empty()) {
+        UsdPrim parentPrim = std::move(parents.front());
+        parents.pop_front();
+        while (parentPrim) {
 
-        if (primAdapter && primAdapter->GetPopulationMode() ==
+            if (!visited.insert(parentPrim.GetPath()).second) {
+                break;
+            }
+
+            const UsdImagingPrimAdapterSharedPtr& primAdapter =
+                adapterManager.LookupAdapters(parentPrim).primAdapter;
+
+            if (primAdapter && primAdapter->GetPopulationMode() ==
                 UsdImagingPrimAdapter::RepresentsSelfAndDescendents) {
 
-            return {parentPrim, primAdapter};
-        }
+                results.emplace_back(std::move(parentPrim), primAdapter);
+                if (stopAtFirst) {
+                    return results;
+                }
+                break;
+            }
 
-        parentPrim = parentPrim.GetParent();
+            if (parentPrim.IsPrototype()) {
+                std::vector<UsdPrim> instances = parentPrim.GetInstances();
+                parents.insert(
+                    parents.end(),
+                    std::make_move_iterator(instances.begin()),
+                    std::make_move_iterator(instances.end()));
+                break;
+            }
+
+            parentPrim = parentPrim.GetParent();
+        }
     }
 
-    return {UsdPrim(), nullptr};
+    return results;
+}
+
+UsdImagingStageSceneIndex::_PrimAdapterPairVec
+UsdImagingStageSceneIndex::_FindResponsibleAncestors(const UsdPrim &prim) const
+{
+    return _WalkResponsibleAncestors(
+        *_adapterManager, prim, /* stopAtFirst = */ false);
+}
+
+bool
+UsdImagingStageSceneIndex::_HasResponsibleAncestor(const UsdPrim &prim) const
+{
+    return !_WalkResponsibleAncestors(
+        *_adapterManager, prim, /* stopAtFirst = */ true).empty();
 }
 
 static
@@ -604,6 +791,9 @@ UsdImagingStageSceneIndex::_ApplyPendingResyncs()
         return;
     }
 
+    HdSceneIndexObserver::RemovedPrimEntries removedPrims;
+    HdSceneIndexObserver::AddedPrimEntries addedPrims;
+
     std::sort(_usdPrimsToResync.begin(), _usdPrimsToResync.end());
     size_t lastResynced = 0;
     for (size_t i = 0; i < _usdPrimsToResync.size(); ++i) {
@@ -621,7 +811,6 @@ UsdImagingStageSceneIndex::_ApplyPendingResyncs()
 
         UsdPrim prim = _stage->GetPrimAtPath(primPath);
 
-
         // For prims represented by an ancestor, we don't want to repopulate
         // (as they wouldn't have been populated in the first place) but instead
         // convert to an empty property name dirtying to be handled in
@@ -630,14 +819,12 @@ UsdImagingStageSceneIndex::_ApplyPendingResyncs()
         const UsdImagingPrimAdapterSharedPtr &primAdapter =
             _adapterManager->LookupAdapters(prim).primAdapter;
         if (primAdapter &&
-                primAdapter->GetPopulationMode() ==
+            primAdapter->GetPopulationMode() ==
                     UsdImagingPrimAdapter::RepresentedByAncestor) {
-            _PrimAdapterPair ancestor = _FindResponsibleAncestor(prim);
-            if (ancestor.second) {
+            if (_HasResponsibleAncestor(prim)) {
                 TF_DEBUG(USDIMAGING_CHANGES).Msg(
-                    "Invalidating <%s> due to resync of descendant <%s>\n",
-                        ancestor.first.GetPrimPath().GetText(),
-                        primPath.GetText());
+                    "Invalidating ancestors due to resync of "
+                    "descendant <%s>\n", primPath.GetText());
                 _usdPropertiesToResync[primPath] = {TfToken()};
                 continue;
             }
@@ -645,8 +832,15 @@ UsdImagingStageSceneIndex::_ApplyPendingResyncs()
 
         TF_DEBUG(USDIMAGING_CHANGES).Msg("[Population] Repopulating <%s>\n",
                                          primPath.GetText());
-        _SendPrimsRemoved({primPath});
-        _PopulateSubtree(prim);
+
+        removedPrims.emplace_back(primPath);
+        _PopulateSubtree(prim, &addedPrims);
+
+        if (primPath.IsAbsoluteRootPath()) {
+            for (const UsdPrim &protoPrim : _stage->GetPrototypes()) {
+                _PopulateSubtree(protoPrim, &addedPrims);
+            }
+        }
 
         // Prune property updates of resynced prims, which are redundant.
         _DeletePrefix(primPath, &_usdPropertiesToResync);
@@ -654,6 +848,57 @@ UsdImagingStageSceneIndex::_ApplyPendingResyncs()
     }
 
     _usdPrimsToResync.clear();
+
+    // Optimization: Rather than sending notifications to remove and then
+    // re-add the same prim, we first filter the list of removedPrims
+    // to remove any that exist in addedPrims.  A single PrimsAdded
+    // notification is sufficient to "re-sync" an existing prim.
+    {
+        // Build a hash-set of added prims.
+        using PathSet = std::unordered_set<SdfPath, TfHash>;
+        PathSet addedPaths;
+        for (const auto& entry: addedPrims) {
+            addedPaths.insert(entry.primPath);
+        }
+        // Filter out addedPrims from removedPrims.
+        HdSceneIndexObserver::RemovedPrimEntries filteredRemovedPrims;
+        for (const auto& entry: removedPrims) {
+            // A removedPrims entry indicates that every prim prefixed
+            // by that entry's primPath will implicitly be removed.
+            // Therefore, to elide a removedPrim entry, we require
+            // that every populated child prim is in addedPaths.
+            SdfPath const& removedPath = entry.primPath;
+            // Loop over all populated paths prefixed by removedPath.
+            for (SdfPathSet::const_iterator i =
+                 _populatedPaths.lower_bound(removedPath);
+                 i != _populatedPaths.end() && i->HasPrefix(removedPath);
+                 ++i)
+            {
+                if (addedPaths.find(*i) == addedPaths.end()) {
+                    // This path will be removed, and not re-added, so
+                    // make an entry for it specifically.
+                    //
+                    // XXX As a future refinement, we could detect the case
+                    // when all child paths are removed and use the original
+                    // entry.  Keep things simple for now and just explicitly
+                    // remove every path.
+                    filteredRemovedPrims.push_back({*i});
+                }
+            }
+        }
+        std::swap(removedPrims, filteredRemovedPrims);
+    }
+
+    // Update population list.
+    for (const auto& entry: removedPrims) {
+        _populatedPaths.erase(entry.primPath);
+    }
+    for (const auto& entry: addedPrims) {
+        _populatedPaths.insert(entry.primPath);
+    }
+
+    _SendPrimsRemoved(removedPrims);
+    _SendPrimsAdded(addedPrims);
 }
 
 void
@@ -670,6 +915,8 @@ UsdImagingStageSceneIndex::ApplyPendingUpdates()
     }
 
     TRACE_FUNCTION();
+
+    ArResolverScopedCache resolverCache;
 
     _ApplyPendingResyncs();
 
@@ -697,7 +944,7 @@ UsdImagingStageSceneIndex::ApplyPendingUpdates()
     if (!dirtiedPrims.empty()) {
         _SendPrimsDirtied(dirtiedPrims);
     }
-}    
+}
 
 void
 UsdImagingStageSceneIndex::_ComputeDirtiedEntries(
@@ -710,7 +957,7 @@ UsdImagingStageSceneIndex::_ComputeDirtiedEntries(
         const SdfPath &primPath = pair.first;
         const TfTokenVector &properties = pair.second;
         // XXX: We could sort/unique the properties here...
-        
+
         const UsdPrim prim = _stage->GetPrimAtPath(primPath);
 
         const UsdImaging_AdapterManager::AdaptersEntry &entry =
@@ -720,10 +967,13 @@ UsdImagingStageSceneIndex::_ComputeDirtiedEntries(
                 entry.primAdapter->GetPopulationMode()
                     == UsdImagingPrimAdapter::RepresentedByAncestor) {
 
-            _PrimAdapterPair ancestor = _FindResponsibleAncestor(prim);
-            if (ancestor.second) {
-                UsdPrim &parentPrim = ancestor.first;
-                UsdImagingPrimAdapterSharedPtr &parentAdapter = ancestor.second;
+            const _PrimAdapterPairVec& ancestors =
+                _FindResponsibleAncestors(prim);
+
+            for (const _PrimAdapterPair& ancestor : ancestors) {
+                const UsdPrim& parentPrim = ancestor.first;
+                const UsdImagingPrimAdapterSharedPtr& parentAdapter =
+                    ancestor.second;
 
                 // Give the parent adapter an opportunity to invalidate
                 // each of the subprims it declares itself. API schema
@@ -731,20 +981,20 @@ UsdImagingStageSceneIndex::_ComputeDirtiedEntries(
                 for (const TfToken &subprim :
                         parentAdapter->GetImagingSubprims(parentPrim)) {
 
-                     HdDataSourceLocatorSet dirtyLocators = 
+                    HdDataSourceLocatorSet dirtyLocators =
                         parentAdapter->
                             InvalidateImagingSubprimFromDescendent(
                                 parentPrim, prim, subprim,
                                 properties, invalidationType);
 
                     if (!dirtyLocators.IsEmpty()) {
-                        const SdfPath path = subprim.IsEmpty()
-                            ? parentPrim.GetPrimPath()
-                            : parentPrim.GetPrimPath().AppendProperty(subprim);
-                        dirtiedPrims->emplace_back(path, dirtyLocators);
+                        dirtiedPrims->emplace_back(
+                            _SubPrimPath(parentPrim.GetPrimPath(), subprim),
+                            dirtyLocators);
                     }
                 }
-
+            }
+            if (!ancestors.empty()) {
                 // we were handled by an ancestor prim and need not do the
                 // below invalidation on our own.
                 continue;
@@ -772,11 +1022,9 @@ UsdImagingStageSceneIndex::_ComputeDirtiedEntries(
                 if (dirtyLocators.Contains(repopulateLocator)) {
                     primPathsToResync->push_back(primPath);
                 } else {
-                    SdfPath const subpath =
-                        subprim.IsEmpty()
-                            ? primPath
-                            : primPath.AppendProperty(subprim);
-                    dirtiedPrims->emplace_back(subpath, dirtyLocators);
+                    dirtiedPrims->emplace_back(
+                        _SubPrimPath(primPath, subprim),
+                        dirtyLocators);
                 }
             }
         }

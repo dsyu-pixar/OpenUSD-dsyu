@@ -13,14 +13,11 @@
 #include "pxr/pxr.h"
 #include "pxr/external/boost/python/common.hpp"
 
-#ifndef PXR_USE_INTERNAL_BOOST_PYTHON
-#include <boost/python/converter/pytype_function.hpp>
-#else
-
 # include "pxr/external/boost/python/detail/prefix.hpp"
 # include "pxr/external/boost/python/converter/registered.hpp"
 #  include "pxr/external/boost/python/detail/unwind_type.hpp"
 #  include "pxr/external/boost/python/detail/type_traits.hpp"
+# include "pxr/external/boost/python/back_reference.hpp"
 #  include "pxr/external/boost/python/detail/mpl2/bool.hpp"
 
 
@@ -55,6 +52,12 @@ struct unwind_type_id_helper{
 
 template <class T>
 inline python::type_info unwind_type_id_(type<T>* = 0, python::detail::mpl2::false_ * =0)
+{
+    return PXR_BOOST_NAMESPACE::python::detail::unwind_type<unwind_type_id_helper, T> ();
+}
+
+template <class T>
+inline python::type_info unwind_type_id_(type<back_reference<T> >* = 0, python::detail::mpl2::false_ * =0)
 {
     return PXR_BOOST_NAMESPACE::python::detail::unwind_type<unwind_type_id_helper, T> ();
 }
@@ -143,5 +146,4 @@ struct to_python_target_type_direct
 
 }}} // namespace PXR_BOOST_NAMESPACE::python
 
-#endif // PXR_USE_INTERNAL_BOOST_PYTHON
 #endif // PXR_EXTERNAL_BOOST_PYTHON_CONVERTER_PYTYPE_FUNCTION_HPP

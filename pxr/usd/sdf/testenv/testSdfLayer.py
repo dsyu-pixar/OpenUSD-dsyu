@@ -19,7 +19,7 @@ Ar.SetPreferredResolver(preferredResolver)
 
 # Import other modules from pxr after Ar to ensure we don't pull on Ar
 # before the preferred resolver has been specified.
-from pxr import Sdf, Tf, Plug
+from pxr import Sdf, Tf, Plug, Vt
 
 class TestSdfLayer(unittest.TestCase):
     @classmethod
@@ -32,17 +32,17 @@ class TestSdfLayer(unittest.TestCase):
 
     def test_IdentifierWithArgs(self):
         paths = [
-            ("foo.sdf", 
-             "foo.sdf", 
+            ("foo.usda", 
+             "foo.usda", 
              {}),
-            ("foo.sdf1!@#$%^*()-_=+[{]}|;:',<.>", 
-             "foo.sdf1!@#$%^*()-_=+[{]}|;:',<.>", 
+            ("foo.usda1!@#$%^*()-_=+[{]}|;:',<.>", 
+             "foo.usda1!@#$%^*()-_=+[{]}|;:',<.>", 
              {}),
-            ("foo.sdf:SDF_FORMAT_ARGS:a=b&c=d", 
-             "foo.sdf",
+            ("foo.usda:SDF_FORMAT_ARGS:a=b&c=d", 
+             "foo.usda",
              {"a":"b", "c":"d"}),
-            ("foo.sdf?otherargs&evenmoreargs:SDF_FORMAT_ARGS:a=b&c=d", 
-             "foo.sdf?otherargs&evenmoreargs",
+            ("foo.usda?otherargs&evenmoreargs:SDF_FORMAT_ARGS:a=b&c=d", 
+             "foo.usda?otherargs&evenmoreargs",
              {"a":"b", "c":"d"}),
         ]
         
@@ -55,11 +55,11 @@ class TestSdfLayer(unittest.TestCase):
             self.assertEqual(identifier, joinedIdentifier)
 
     def test_SetIdentifier(self):
-        layer = Sdf.Layer.CreateAnonymous()
+        layer = Sdf.Layer.CreateAnonymous(".usda")
 
         # Can't change a layer's identifier if another layer with the same
         # identifier and resolved path exists.
-        existingLayer = Sdf.Layer.CreateNew("testSetIdentifier.sdf")
+        existingLayer = Sdf.Layer.CreateNew("testSetIdentifier.usda")
         with self.assertRaises(Tf.ErrorException):
             layer.identifier = existingLayer.identifier
 
@@ -71,32 +71,43 @@ class TestSdfLayer(unittest.TestCase):
         with self.assertRaises(Tf.ErrorException):
             layer.identifier = "anon:testing"
 
+    def test_SetIdentifierAnonymousLayer(self):
+        layer = Sdf.Layer.CreateAnonymous(".usda")
+        anonIdentifier = layer.identifier
+        nonAnonIdentifier = 'tmp_testSetIdentifierAnonymousLayer.usda'
+        layer.identifier = nonAnonIdentifier
+
+        layer = Sdf.Layer.FindOrOpen(nonAnonIdentifier)
+        self.assertTrue(layer)
+        anonLayer = Sdf.Layer.FindOrOpen(anonIdentifier)
+        self.assertFalse(anonLayer)
+
     def test_SetIdentifierWithArgs(self):
-        layer = Sdf.Layer.CreateAnonymous()
-        layer.Export("testSetIdentifierWithArgs.sdf")
+        layer = Sdf.Layer.CreateAnonymous(".usda")
+        layer.Export("testSetIdentifierWithArgs.usda")
 
         layer = Sdf.Layer.FindOrOpen(
-            "testSetIdentifierWithArgs.sdf", args={"a":"b"})
+            "testSetIdentifierWithArgs.usda", args={"a":"b"})
         self.assertTrue(layer)
 
         # Can't change arguments when setting a new identifier
         with self.assertRaises(Tf.ErrorException):
             layer.identifier = Sdf.Layer.CreateIdentifier(
-                "testSetIdentifierWithArgs.sdf", {"a":"c"})
+                "testSetIdentifierWithArgs.usda", {"a":"c"})
 
         with self.assertRaises(Tf.ErrorException):
             layer.identifier = Sdf.Layer.CreateIdentifier(
-                "testSetIdentifierWithArgs.sdf", {"b":"d"})
+                "testSetIdentifierWithArgs.usda", {"b":"d"})
 
         # Can change the identifier if we leave the args the same.
         layer.identifier = Sdf.Layer.CreateIdentifier(
-            "testSetIdentifierWithArgsNew.sdf", {"a":"b"})
+            "testSetIdentifierWithArgsNew.usda", {"a":"b"})
 
     def test_SaveWithArgs(self):
-        Sdf.Layer.CreateAnonymous().Export("testSaveWithArgs.sdf")
+        Sdf.Layer.CreateAnonymous(".usda").Export("testSaveWithArgs.usda")
 
         # Verify that a layer opened with file format arguments can be saved.
-        layer = Sdf.Layer.FindOrOpen("testSaveWithArgs.sdf", args={"a":"b"})
+        layer = Sdf.Layer.FindOrOpen("testSaveWithArgs.usda", args={"a":"b"})
         self.assertTrue("a=b" in layer.identifier)
         self.assertTrue("a" in layer.GetFileFormatArguments())
 
@@ -118,7 +129,7 @@ class TestSdfLayer(unittest.TestCase):
         fileFormat = Sdf.FileFormat.FindByExtension(".testexception")
         self.assertTrue(fileFormat)
 
-        layer = Sdf.Layer.CreateAnonymous()
+        layer = Sdf.Layer.CreateAnonymous(".usda")
         layer.Export("test.testexception")
 
         with self.assertRaises(Tf.ErrorException):
@@ -142,11 +153,11 @@ class TestSdfLayer(unittest.TestCase):
             self.assertFalse(Sdf.Layer.Find(layerId))
 
         _TestWithTag("")
-        _TestWithTag(".sdf")
+        _TestWithTag(".usda")
         _TestWithTag(".invalid")
         _TestWithTag("test")
         _TestWithTag("test.invalid")
-        _TestWithTag("test.sdf")
+        _TestWithTag("test.usda")
 
     def test_FindOrOpenWithAnonymousIdentifier(self):
         def _TestWithTag(tag):
@@ -162,30 +173,30 @@ class TestSdfLayer(unittest.TestCase):
             self.assertFalse(Sdf.Layer.FindOrOpen(layerId))
 
         _TestWithTag("")
-        _TestWithTag(".sdf")
+        _TestWithTag(".usda")
         _TestWithTag(".invalid")
         _TestWithTag("test")
         _TestWithTag("test.invalid")
-        _TestWithTag("test.sdf")
+        _TestWithTag("test.usda")
 
     def test_AnonymousIdentifiersDisplayName(self):
         # Ensure anonymous identifiers work as expected
 
-        ident = 'anonIdent.sdf'
+        ident = 'anonIdent.usda'
         l = Sdf.Layer.CreateAnonymous(ident)
         self.assertEqual(l.GetDisplayName(), ident)
 
-        identWithColons = 'anonIdent:afterColon.sdf'
+        identWithColons = 'anonIdent:afterColon.usda'
         l = Sdf.Layer.CreateAnonymous(identWithColons)
         self.assertEqual(l.GetDisplayName(), identWithColons)
 
-        l = Sdf.Layer.CreateAnonymous()
+        l = Sdf.Layer.CreateAnonymous("")
         self.assertEqual(l.GetDisplayName(), '')
 
     def test_UpdateAssetInfo(self):
         # Test that calling UpdateAssetInfo on a layer whose resolved
         # path hasn't changed doesn't cause notification to be sent.
-        layer = Sdf.Layer.CreateNew('TestUpdateAssetInfo.sdf')
+        layer = Sdf.Layer.CreateNew('TestUpdateAssetInfo.usda')
         self.assertTrue(layer)
 
         class _Listener:
@@ -207,29 +218,29 @@ class TestSdfLayer(unittest.TestCase):
         self.assertFalse(listener.receivedNotice)
 
     def test_UpdateCompositionAssetDependency(self):
-        srcLayer = Sdf.Layer.CreateAnonymous()
+        srcLayer = Sdf.Layer.CreateAnonymous(".usda")
         srcLayerStr = '''\
-#sdf 1.4.32
+#usda 1.0
 (
     subLayers = [
-        @sublayer_1.sdf@,
-        @sublayer_2.sdf@
+        @sublayer_1.usda@,
+        @sublayer_2.usda@
     ]
 )
 
 def "Root" (
-    payload = @payload_1.sdf@</Payload>
+    payload = @payload_1.usda@</Payload>
     references = [
-        @ref_1.sdf@</Ref>,
-        @ref_2.sdf@</Ref2>
+        @ref_1.usda@</Ref>,
+        @ref_2.usda@</Ref2>
     ]
 )
 {
     def "Child" (
-        payload = @payload_1.sdf@</Payload>
+        payload = @payload_1.usda@</Payload>
         references = [
-            @ref_1.sdf@</Ref>,
-            @ref_2.sdf@</Ref2>
+            @ref_1.usda@</Ref>,
+            @ref_2.usda@</Ref2>
         ]
     )
     {
@@ -238,22 +249,22 @@ def "Root" (
     variantSet "v" = {
         "x" (
             payload = [
-                @payload_1.sdf@</Payload>, 
-                @payload_2.sdf@</Payload2>
+                @payload_1.usda@</Payload>, 
+                @payload_2.usda@</Payload2>
             ]
             references = [
-                @ref_1.sdf@</Ref>,
-                @ref_2.sdf@</Ref2>
+                @ref_1.usda@</Ref>,
+                @ref_2.usda@</Ref2>
             ]
         ) {
             def "ChildInVariant" (
                 payload = [
-                    @payload_1.sdf@</Payload>, 
-                    @payload_2.sdf@</Payload2>
+                    @payload_1.usda@</Payload>, 
+                    @payload_2.usda@</Payload2>
                 ]
                 references = [
-                    @ref_1.sdf@</Ref>,
-                    @ref_2.sdf@</Ref2>
+                    @ref_1.usda@</Ref>,
+                    @ref_2.usda@</Ref2>
                 ]
             )
             {
@@ -273,18 +284,18 @@ def "Root" (
         # Calling UpdateCompositionAssetDependency with an asset path that does
         # not exist should result in no changes to the layer.
         self.assertTrue(srcLayer.UpdateCompositionAssetDependency(
-            "nonexistent.sdf", "foo.sdf"))
+            "nonexistent.usda", "foo.usda"))
         self.assertEqual(origLayer, srcLayer.ExportToString())
 
         # Test renaming / removing sublayers.
         self.assertTrue(srcLayer.UpdateCompositionAssetDependency(
-            "sublayer_1.sdf", "new_sublayer_1.sdf"))
+            "sublayer_1.usda", "new_sublayer_1.usda"))
         self.assertEqual(
-            srcLayer.subLayerPaths, ["new_sublayer_1.sdf", "sublayer_2.sdf"])
+            srcLayer.subLayerPaths, ["new_sublayer_1.usda", "sublayer_2.usda"])
 
         self.assertTrue(srcLayer.UpdateCompositionAssetDependency(
-            "sublayer_2.sdf", ""))
-        self.assertEqual(srcLayer.subLayerPaths, ["new_sublayer_1.sdf"])
+            "sublayer_2.usda", ""))
+        self.assertEqual(srcLayer.subLayerPaths, ["new_sublayer_1.usda"])
 
         # Test renaming / removing payloads.
         primsWithReferences = [
@@ -301,21 +312,21 @@ def "Root" (
         ]
 
         self.assertTrue(srcLayer.UpdateCompositionAssetDependency(
-            "payload_1.sdf", "new_payload_1.sdf"))
+            "payload_1.usda", "new_payload_1.usda"))
         for prim in primsWithSinglePayload:
             self.assertEqual(
                 prim.payloadList.explicitItems, 
-                [Sdf.Payload("new_payload_1.sdf", "/Payload")],
+                [Sdf.Payload("new_payload_1.usda", "/Payload")],
                 "Unexpected payloads {0} at {1}".format(prim.payloadList, prim.path))
         for prim in primsWithPayloadList:
             self.assertEqual(
                 prim.payloadList.explicitItems, 
-                [Sdf.Payload("new_payload_1.sdf", "/Payload"),
-                 Sdf.Payload("payload_2.sdf", "/Payload2")],
+                [Sdf.Payload("new_payload_1.usda", "/Payload"),
+                 Sdf.Payload("payload_2.usda", "/Payload2")],
                 "Unexpected payloads {0} at {1}".format(prim.payloadList, prim.path))
 
         self.assertTrue(srcLayer.UpdateCompositionAssetDependency(
-            "new_payload_1.sdf", ""))
+            "new_payload_1.usda", ""))
         for prim in primsWithSinglePayload:
             self.assertEqual(
                 prim.payloadList.explicitItems, [],
@@ -323,35 +334,35 @@ def "Root" (
         for prim in primsWithPayloadList:
             self.assertEqual(
                 prim.payloadList.explicitItems, 
-                [Sdf.Payload("payload_2.sdf", "/Payload2")],
+                [Sdf.Payload("payload_2.usda", "/Payload2")],
                 "Unexpected payloads {0} at {1}".format(prim.payloadList, prim.path))
 
         # Test renaming / removing references.
         self.assertTrue(srcLayer.UpdateCompositionAssetDependency(
-            "ref_1.sdf", "new_ref_1.sdf"))
+            "ref_1.usda", "new_ref_1.usda"))
         for prim in primsWithReferences:
             self.assertEqual(
                 prim.referenceList.explicitItems,
-                [Sdf.Reference("new_ref_1.sdf", "/Ref"),
-                 Sdf.Reference("ref_2.sdf", "/Ref2")],
+                [Sdf.Reference("new_ref_1.usda", "/Ref"),
+                 Sdf.Reference("ref_2.usda", "/Ref2")],
                 "Unexpected references {0} at {1}"
                 .format(prim.referenceList, prim.path))
 
         self.assertTrue(srcLayer.UpdateCompositionAssetDependency(
-            "ref_2.sdf", ""))
+            "ref_2.usda", ""))
         for prim in primsWithReferences:
             self.assertEqual(
                 prim.referenceList.explicitItems,
-                [Sdf.Reference("new_ref_1.sdf", "/Ref")],
+                [Sdf.Reference("new_ref_1.usda", "/Ref")],
                 "Unexpected references {0} at {1}"
                 .format(prim.referenceList, prim.path))
 
     def test_Traverse(self):
         ''' Tests Sdf.Layer.Traverse '''
 
-        srcLayer = Sdf.Layer.CreateAnonymous()
+        srcLayer = Sdf.Layer.CreateAnonymous(".usda")
         srcLayerStr = '''\
-#sdf 1.4.32
+#usda 1.0
 
 def "Root"
 {
@@ -393,7 +404,7 @@ def "Root"
         self.assertIn(Sdf.Path('/Root.myRel'), propPaths)
 
     def test_ExpiredLayerRepr(self):
-        l = Sdf.Layer.CreateAnonymous()
+        l = Sdf.Layer.CreateAnonymous(".usda")
         self.assertTrue(l)
         Sdf._TestTakeOwnership(l)
         self.assertFalse(l)
@@ -403,11 +414,11 @@ def "Root"
     def test_Import(self):
         # Create a test layer on disk to import and then verify that
         # we can import its contents into another layer.
-        newLayer = Sdf.Layer.CreateNew('TestLayerImport.sdf')
+        newLayer = Sdf.Layer.CreateNew('TestLayerImport.usda')
         Sdf.PrimSpec(newLayer, 'Root', Sdf.SpecifierDef)
         self.assertTrue(newLayer.Save())
 
-        anonLayer = Sdf.Layer.CreateAnonymous('TestLayerImport')
+        anonLayer = Sdf.Layer.CreateAnonymous('.usda')
         self.assertTrue(anonLayer)
         self.assertTrue(anonLayer.Import(newLayer.identifier))
 
@@ -418,7 +429,7 @@ def "Root"
         self.assertFalse(anonLayer.Import(''))
         self.assertEqual(newLayer.ExportToString(), anonLayer.ExportToString())
 
-        self.assertFalse(anonLayer.Import('bogus.sdf'))
+        self.assertFalse(anonLayer.Import('bogus.usda'))
         self.assertEqual(newLayer.ExportToString(), anonLayer.ExportToString())
 
     def test_LayersWithEquivalentPaths(self):
@@ -441,8 +452,8 @@ def "Root"
         i = 0
         for paths in itertools.permutations(testPaths):
             i += 1
-            testLayerName = "FindOrOpenEqPaths_{}.sdf".format(i)
-            testLayer = Sdf.Layer.CreateAnonymous()
+            testLayerName = "FindOrOpenEqPaths_{}.usda".format(i)
+            testLayer = Sdf.Layer.CreateAnonymous(".usda")
             Sdf.CreatePrimInLayer(testLayer, "/TestLayer_{}".format(i))
             self.assertTrue(testLayer.Export(testLayerName))
 
@@ -471,9 +482,9 @@ def "Root"
 
     def test_FindRelativeToLayer(self):
         with self.assertRaises(Tf.ErrorException):
-            Sdf.Layer.FindRelativeToLayer(None, 'foo.sdf')
+            Sdf.Layer.FindRelativeToLayer(None, 'foo.usda')
 
-        anchorLayer = Sdf.Layer.CreateNew('TestFindRelativeToLayer.sdf')
+        anchorLayer = Sdf.Layer.CreateNew('TestFindRelativeToLayer.usda')
         self.assertFalse(Sdf.Layer.FindRelativeToLayer(anchorLayer, ''))
 
         def _TestWithRelativePath(relLayerPath):
@@ -499,14 +510,14 @@ def "Root"
             self.assertTrue(Sdf.Layer.FindOrOpenRelativeToLayer(
                 anchorLayer, relLayerPath))
 
-        _TestWithRelativePath('FindRelativeLayer.sdf')
-        _TestWithRelativePath('subdir/FindRelativeLayer.sdf')
+        _TestWithRelativePath('FindRelativeLayer.usda')
+        _TestWithRelativePath('subdir/FindRelativeLayer.usda')
 
     def test_FindOrOpenRelativeToLayer(self):
         with self.assertRaises(Tf.ErrorException):
-            Sdf.Layer.FindOrOpenRelativeToLayer(None, 'foo.sdf')
+            Sdf.Layer.FindOrOpenRelativeToLayer(None, 'foo.usda')
 
-        anchorLayer = Sdf.Layer.CreateNew('TestFindOrOpenRelativeToLayer.sdf')
+        anchorLayer = Sdf.Layer.CreateNew('TestFindOrOpenRelativeToLayer.usda')
         self.assertFalse(Sdf.Layer.FindOrOpenRelativeToLayer(anchorLayer, ''))
 
         def _TestWithRelativePath(relLayerPath):
@@ -532,10 +543,10 @@ def "Root"
             self.assertTrue(Sdf.Layer.FindOrOpenRelativeToLayer(
                 anchorLayer, relLayerPath))
 
-        _TestWithRelativePath('FindOrOpenRelativeLayer.sdf')
-        _TestWithRelativePath('subdir/FindOrOpenRelativeLayer.sdf')
+        _TestWithRelativePath('FindOrOpenRelativeLayer.usda')
+        _TestWithRelativePath('subdir/FindOrOpenRelativeLayer.usda')
 
-        srcLayer = Sdf.Layer.CreateAnonymous()
+        srcLayer = Sdf.Layer.CreateAnonymous(".usda")
         assetPath = "test.usd:SDF_FORMAT_ARGS:order=100"
         self.assertEqual(Sdf.ComputeAssetPathRelativeToLayer(
             srcLayer, assetPath), assetPath)
@@ -547,35 +558,35 @@ def "Root"
         # Set up test directory structure by exporting layers. We
         # don't use Sdf.Layer.CreateNew here to avoid populating the
         # layer registry.
-        layerA_Orig = Sdf.Layer.CreateAnonymous()
+        layerA_Orig = Sdf.Layer.CreateAnonymous(".usda")
         Sdf.CreatePrimInLayer(layerA_Orig, "/LayerA")
-        layerA_Orig.Export("dir1/sub/searchPath.sdf")
+        layerA_Orig.Export("dir1/sub/searchPath.usda")
 
-        layerB_Orig = Sdf.Layer.CreateAnonymous()
+        layerB_Orig = Sdf.Layer.CreateAnonymous(".usda")
         Sdf.CreatePrimInLayer(layerB_Orig, "/LayerB")
-        layerB_Orig.Export("dir2/sub/searchPath.sdf")
+        layerB_Orig.Export("dir2/sub/searchPath.usda")
 
-        # This should fail since there is no searchPath.sdf layer in the
+        # This should fail since there is no searchPath.usda layer in the
         # current directory and no context is bound.
-        self.assertFalse(Sdf.Layer.FindOrOpen("sub/searchPath.sdf"))
+        self.assertFalse(Sdf.Layer.FindOrOpen("sub/searchPath.usda"))
 
         # Bind an Ar.DefaultResolverContext with dir1 as a search path.
-        # Now sub/searchPath.sdf should be discovered in dir1/.
+        # Now sub/searchPath.usda should be discovered in dir1/.
         ctx1 = Ar.DefaultResolverContext([os.path.abspath("dir1/")])
         with Ar.ResolverContextBinder(ctx1):
-            layerA = Sdf.Layer.FindOrOpen("sub/searchPath.sdf")
+            layerA = Sdf.Layer.FindOrOpen("sub/searchPath.usda")
             self.assertTrue(layerA)
             self.assertTrue(layerA.GetPrimAtPath("/LayerA"))
-            self.assertEqual(layerA.identifier, "sub/searchPath.sdf")
+            self.assertEqual(layerA.identifier, "sub/searchPath.usda")
 
         # Do the same as above, but with dir2 as the search path.
-        # Now sub/searchPath.sdf should be discovered in dir2/.
+        # Now sub/searchPath.usda should be discovered in dir2/.
         ctx2 = Ar.DefaultResolverContext([os.path.abspath("dir2/")])
         with Ar.ResolverContextBinder(ctx2):
-            layerB = Sdf.Layer.FindOrOpen("sub/searchPath.sdf")
+            layerB = Sdf.Layer.FindOrOpen("sub/searchPath.usda")
             self.assertTrue(layerB)
             self.assertTrue(layerB.GetPrimAtPath("/LayerB"))
-            self.assertEqual(layerB.identifier, "sub/searchPath.sdf")
+            self.assertEqual(layerB.identifier, "sub/searchPath.usda")
 
         # Note that layerB has the same identifier as layerA, but
         # different resolved paths.
@@ -583,23 +594,23 @@ def "Root"
         self.assertNotEqual(layerA.realPath, layerB.realPath)
 
         # Sdf.Layer.Find should fail since no context is bound.
-        self.assertFalse(Sdf.Layer.Find("sub/searchPath.sdf"))
+        self.assertFalse(Sdf.Layer.Find("sub/searchPath.usda"))
 
         # Binding the contexts from above will allow Sdf.Layer.Find
         # to find the right layers.
         with Ar.ResolverContextBinder(ctx1):
-            self.assertEqual(Sdf.Layer.Find("sub/searchPath.sdf"), layerA)
+            self.assertEqual(Sdf.Layer.Find("sub/searchPath.usda"), layerA)
 
         with Ar.ResolverContextBinder(ctx2):
-            self.assertEqual(Sdf.Layer.Find("sub/searchPath.sdf"), layerB)
+            self.assertEqual(Sdf.Layer.Find("sub/searchPath.usda"), layerB)
 
         # Anonymous layers should be discoverable regardless of context.
-        anonLayerA = Sdf.Layer.CreateAnonymous()
+        anonLayerA = Sdf.Layer.CreateAnonymous(".usda")
         with Ar.ResolverContextBinder(ctx1):
             self.assertEqual(Sdf.Layer.Find(anonLayerA.identifier), anonLayerA)
 
         with Ar.ResolverContextBinder(ctx2):
-            anonLayerB = Sdf.Layer.CreateAnonymous()
+            anonLayerB = Sdf.Layer.CreateAnonymous(".usda")
         self.assertEqual(Sdf.Layer.Find(anonLayerB.identifier), anonLayerB)
 
     def test_FindOrOpenNoAssetAnonLayers(self):
@@ -616,11 +627,11 @@ def "Root"
         # read any assets and instead creates a simple layer with a pseudoroot
         # and optionally a single prim spec at the root with a name defined by
         # the file format argument "rootName" if the arg is provided.
-        fileFormat = Sdf.FileFormat.FindByExtension(".testsdfnoasset")
+        fileFormat = Sdf.FileFormat.FindByExtension(".testusdanoasset")
         self.assertTrue(fileFormat)
 
         # Example anonymous layer identifier of our file format type
-        layerId = "anon:placeholder:.testsdfnoasset"
+        layerId = "anon:placeholder:.testusdanoasset"
         self.assertTrue(Sdf.Layer.IsAnonymousLayerIdentifier(layerId))
 
         # Layer find should not find this layer.
@@ -674,7 +685,7 @@ def "Root"
         # Open another anonymous layer with a different identifier but the 
         # same file format arguments. This is a new layer because the identifier
         # is different
-        layer5 = Sdf.Layer.FindOrOpen("anon:placeholder:other.testsdfnoasset", 
+        layer5 = Sdf.Layer.FindOrOpen("anon:placeholder:other.testusdanoasset", 
                                       layerArgs)
         self.assertNotEqual(layer2, layer5)
         self.assertTrue(layer5.anonymous)
@@ -724,7 +735,7 @@ def "Root"
         # anything.
 
         # Create an anonymous layer with no arguments. It generates no prims.
-        layer7 = Sdf.Layer.CreateAnonymous(".testsdfnoasset")
+        layer7 = Sdf.Layer.CreateAnonymous(".testusdanoasset")
         self.assertTrue(layer7)
         self.assertTrue(layer7.anonymous)
         self.assertFalse(layer7.rootPrims)
@@ -733,8 +744,8 @@ def "Root"
         # layer2 in Sdf.Layer.FindOrOpen. Both layers will still have no 
         # root prims because we don't "read" the anonymous layer and so don't
         # generate the layer contents.
-        layer8 = Sdf.Layer.CreateAnonymous(".testsdfnoasset", layerArgs)
-        layer9 = Sdf.Layer.CreateAnonymous(".testsdfnoasset", layerArgs)
+        layer8 = Sdf.Layer.CreateAnonymous(".testusdanoasset", layerArgs)
+        layer9 = Sdf.Layer.CreateAnonymous(".testusdanoasset", layerArgs)
         self.assertTrue(layer8)
         self.assertTrue(layer9)
         self.assertFalse(layer8.rootPrims)
@@ -760,7 +771,7 @@ def "Root"
                          list(["Generated"]))
 
     def test_CreatePrimInLayer(self):
-        layer = Sdf.Layer.CreateAnonymous()
+        layer = Sdf.Layer.CreateAnonymous(".usda")
         self.assertFalse(layer.GetPrimAtPath("/root"))
         rootSpec = Sdf.CreatePrimInLayer(layer, '/root')
         # Must return new prim spec
@@ -779,7 +790,7 @@ def "Root"
         self.assertTrue(len(rootSpec.variantSetNameList.addedItems) == 0)
 
     def test_CreatePropertyInLayer(self):
-        layer = Sdf.Layer.CreateAnonymous()
+        layer = Sdf.Layer.CreateAnonymous(".usda")
 
         # Test creating attribute in layer
         attr = Sdf.CreatePrimAttributeInLayer(layer=layer,
@@ -849,7 +860,7 @@ def "Root"
         self.assertEqual(prim.properties[0].custom, False)
 
     def test_ReloadAfterSetIdentifier(self):
-        layer = Sdf.Layer.CreateNew('TestReloadAfterSetIdentifier.sdf')
+        layer = Sdf.Layer.CreateNew('TestReloadAfterSetIdentifier.usda')
         
         # CreateNew creates a new empty layer on disk. Modifying it and
         # then reloading should reset the layer back to its original
@@ -862,14 +873,347 @@ def "Root"
         # save the layer under its new filename. Because of that, there's
         # nothing for Reload to reload from, so it does nothing.
         prim = Sdf.CreatePrimInLayer(layer, '/test')
-        layer.identifier = 'TestReloadAfterSetIdentifier_renamed.sdf'
+        layer.identifier = 'TestReloadAfterSetIdentifier_renamed.usda'
         self.assertFalse(layer.Reload())
         self.assertTrue(prim)
 
+    def test_DirtinessAfterSetIdentifier(self):
+        for ext in ['usda', 'usdc']:
+            origName = 'TestDirtinessAfterSetIdentifier.' + ext
+            newName = 'TestDirtinessAfterSetIdentifier-renamed.' + ext
+
+            for filename in [origName, newName]:
+                if os.path.isfile(filename):
+                    os.remove(filename)
+
+            def _TestWithPrim(primPath):
+                # Create a new layer with the specified prim and verify that we
+                # can save it out to disk.
+                layer = Sdf.Layer.CreateNew(origName)
+                prim = Sdf.CreatePrimInLayer(layer, primPath)
+                self.assertTrue(layer.Save())
+                self.assertTrue(os.path.exists(origName))
+                self.assertFalse(layer.dirty)
+
+                # Now change the layer's identifier and verify that we can
+                # save it out to its new location even though the contents have
+                # not changed.
+                layer.identifier = newName
+                self.assertTrue(layer.dirty)
+                self.assertTrue(layer.Save())
+                self.assertTrue(os.path.exists(newName))
+
+                self.assertEqual(
+                    layer.ExportToString(),
+                    Sdf.Layer.OpenAsAnonymous(newName).ExportToString())
+
+            # This function will create a layer with the specified prim, change
+            # its identifier, then write the layer out to the new location.
+            # The first time through, there will be no file on disk at the
+            # new location.
+            _TestWithPrim('/test')
+
+            # The layer written out at the new location now exists for the
+            # second time through. This verifies that saving the layer still
+            # works as expected even if a file already exists at intended
+            # location.
+            _TestWithPrim('/test_2')
+
+    def test_SaveUnreadContentAfterSetIdentifier(self):
+        # A layer whose data streams -- in practice a crate layer -- holds
+        # values it has not read yet as offsets into the asset it was opened
+        # from. Saving after SetIdentifier() must write those values to the new
+        # asset rather than assume the new asset already contains them.
+        #
+        # The values must be arrays: small scalars and strings are rewritten
+        # from memory regardless, so a test using only those passes even when
+        # saving is broken.
+        arrayValue = Vt.FloatArray([float(1000 + i) for i in range(4000)])
+        sampleValue = Vt.FloatArray([float(5000 + i) for i in range(4000)])
+
+        origName = 'TestSaveUnreadContentAfterSetIdentifier.usdc'
+        newName = 'TestSaveUnreadContentAfterSetIdentifier-renamed.usdc'
+
+        def _Author(path, primPath, value, sample):
+            layer = Sdf.Layer.CreateNew(path)
+            prim = Sdf.CreatePrimInLayer(layer, primPath)
+            prim.specifier = Sdf.SpecifierDef
+            attr = Sdf.AttributeSpec(prim, 'points', Sdf.ValueTypeNames.FloatArray)
+            attr.default = value
+            if sample is not None:
+                layer.SetTimeSample(attr.path, 2.0, sample)
+            self.assertTrue(layer.Save())
+            del layer
+
+        def _TestWithPrim(primPath, createTarget):
+            for filename in [origName, newName]:
+                if os.path.isfile(filename):
+                    os.remove(filename)
+
+            _Author(origName, primPath, arrayValue, sampleValue)
+
+            if createTarget:
+                # Author the target with a much smaller value region, so that
+                # saving the offsets from origName into it would read the wrong
+                # bytes rather than happening to land on equivalent ones.
+                _Author(newName, '/other',
+                        Vt.FloatArray([float(7 + i) for i in range(8)]), None)
+
+            # Open the layer fresh so that no value has been read; each is
+            # still just an offset into origName.
+            layer = Sdf.Layer.FindOrOpen(origName)
+            self.assertTrue(layer)
+            streamsData = layer.StreamsData()
+            isDetached = layer.IsDetached()
+
+            layer.identifier = newName
+            self.assertTrue(layer.Save())
+            self.assertTrue(os.path.exists(newName))
+            self.assertFalse(layer.dirty)
+
+            # Saving moves the backing store but must not change whether the
+            # layer streams or is detached.
+            self.assertEqual(layer.StreamsData(), streamsData)
+            self.assertEqual(layer.IsDetached(), isDetached)
+
+            # Verify the content that landed on disk, reading it through a
+            # separate layer so we do not see this layer's in-memory state.
+            onDisk = Sdf.Layer.OpenAsAnonymous(newName)
+            attrPath = Sdf.Path(primPath).AppendProperty('points')
+            self.assertEqual(onDisk.GetAttributeAtPath(attrPath).default,
+                             arrayValue)
+            self.assertEqual(onDisk.QueryTimeSample(attrPath, 2.0), sampleValue)
+
+        # Nothing exists at the new location.
+        _TestWithPrim('/test', createTarget=False)
+
+        # A different layer already exists at the new location. Saving must
+        # replace it wholesale rather than write only part of the layer over it.
+        _TestWithPrim('/test_2', createTarget=True)
+
+    # Saving a crate layer back to the asset it was read from updates that asset
+    # in place, which the filesystem resolver implements by reopening the file
+    # "rb+" (TfSafeOutputFile::Update) rather than writing a sibling temporary
+    # file and renaming it over the destination (TfSafeOutputFile::Replace).  So
+    # the destination's inode is preserved by an incremental save and replaced by
+    # a complete rewrite, which is the only externally visible difference between
+    # the two -- both produce correct content.
+    #
+    # This couples the test to the resolver's write modes, so it is only run for
+    # a filesystem-backed resolver on a platform where inodes are meaningful.
+    @unittest.skipIf(platform.system() == 'Windows', 'inodes are POSIX-specific')
+    def test_SaveToBackingAssetIsIncremental(self):
+        arrayValue = Vt.FloatArray([float(1000 + i) for i in range(4000)])
+
+        # Both extensions must be covered: a .usd layer reaches crate through
+        # SdfUsdFileFormat, which has to forward the in-place save on rather than
+        # fall back to writing a complete file.
+        for ext in ['usdc', 'usd']:
+            path = 'TestSaveToBackingAssetIsIncremental.' + ext
+            if os.path.isfile(path):
+                os.remove(path)
+
+            layer = Sdf.Layer.CreateNew(path)
+            prim = Sdf.CreatePrimInLayer(layer, '/test')
+            prim.specifier = Sdf.SpecifierDef
+            attr = Sdf.AttributeSpec(prim, 'points',
+                                     Sdf.ValueTypeNames.FloatArray)
+            attr.default = arrayValue
+            self.assertTrue(layer.Save())
+            del layer, prim, attr
+
+            # Reopen so the array is still an offset into the file rather than a
+            # value we hold in memory, then dirty the layer and save it back to
+            # the same asset.
+            layer = Sdf.Layer.FindOrOpen(path)
+            self.assertTrue(layer)
+            inodeBefore = os.stat(path).st_ino
+
+            Sdf.CreatePrimInLayer(layer, '/test2').specifier = Sdf.SpecifierDef
+            self.assertTrue(layer.dirty)
+            self.assertTrue(layer.Save())
+            self.assertFalse(layer.dirty)
+
+            self.assertEqual(os.stat(path).st_ino, inodeBefore,
+                             'saving %s back to its own asset rewrote the whole '
+                             'file instead of updating it in place' % path)
+
+            # The incremental save must still produce correct content.
+            del layer
+            onDisk = Sdf.Layer.OpenAsAnonymous(path)
+            self.assertTrue(onDisk.GetPrimAtPath('/test2'))
+            self.assertEqual(
+                onDisk.GetAttributeAtPath('/test.points').default, arrayValue)
+
+    @unittest.skipIf(platform.system() == 'Windows', 'inodes are POSIX-specific')
+    def test_SaveAfterSetIdentifierIsCompleteRewrite(self):
+        # The complement of test_SaveToBackingAssetIsIncremental: once
+        # SetIdentifier has moved the destination away from the asset the layer
+        # reads from, the save must write a complete new file. See the comment
+        # there for why the inode is what distinguishes the two.
+        arrayValue = Vt.FloatArray([float(1000 + i) for i in range(4000)])
+
+        origName = 'TestSaveAfterSetIdentifierRewrite.usdc'
+        newName = 'TestSaveAfterSetIdentifierRewrite-renamed.usdc'
+        for filename in [origName, newName]:
+            if os.path.isfile(filename):
+                os.remove(filename)
+
+        def _Author(path, primPath, value):
+            layer = Sdf.Layer.CreateNew(path)
+            prim = Sdf.CreatePrimInLayer(layer, primPath)
+            prim.specifier = Sdf.SpecifierDef
+            attr = Sdf.AttributeSpec(prim, 'points',
+                                     Sdf.ValueTypeNames.FloatArray)
+            attr.default = value
+            self.assertTrue(layer.Save())
+
+        _Author(origName, '/test', arrayValue)
+
+        # Pre-create the destination with a much smaller value region. Without
+        # this, offsets written from origName could land on equivalent bytes and
+        # the content check below would pass even for an in-place save.
+        _Author(newName, '/other',
+                Vt.FloatArray([float(7 + i) for i in range(8)]))
+
+        layer = Sdf.Layer.FindOrOpen(origName)
+        self.assertTrue(layer)
+        inodeBefore = os.stat(newName).st_ino
+
+        layer.identifier = newName
+        self.assertTrue(layer.Save())
+
+        self.assertNotEqual(os.stat(newName).st_ino, inodeBefore,
+                            'saving to a renamed layer updated the destination '
+                            'in place instead of replacing it')
+
+        del layer
+        onDisk = Sdf.Layer.OpenAsAnonymous(newName)
+        self.assertTrue(onDisk.GetPrimAtPath('/test'))
+        self.assertFalse(onDisk.GetPrimAtPath('/other'))
+        self.assertEqual(
+            onDisk.GetAttributeAtPath('/test.points').default, arrayValue)
+
+    def test_SaveStreamingFormatWithoutSaveToFile(self):
+        # A streaming format that overrides only WriteToFile inherits
+        # SdfFileFormat::SaveToFile, which forwards there, so it writes a
+        # complete file on every save. That is correct whether or not the
+        # destination is where the layer was read from; only a format that
+        # reuses bytes already at the destination has to tell those apart.
+        path = 'TestSaveStreamingFormat.test_streaming_format'
+        if os.path.isfile(path):
+            os.remove(path)
+
+        layer = Sdf.Layer.CreateNew(path)
+        self.assertTrue(layer)
+        self.assertTrue(layer.StreamsData())
+        self.assertTrue(layer.Save(force=True))
+        self.assertTrue(os.path.exists(path))
+
+        # Same again once the layer has been read rather than created, and with
+        # the destination moved out from under it.
+        del layer
+        layer = Sdf.Layer.FindOrOpen(path)
+        self.assertTrue(layer)
+
+        renamed = 'TestSaveStreamingFormat-renamed.test_streaming_format'
+        if os.path.isfile(renamed):
+            os.remove(renamed)
+        layer.identifier = renamed
+        self.assertTrue(layer.Save())
+        self.assertTrue(os.path.exists(renamed))
+
+    def test_SetIdentifierCannotChangeFileFormat(self):
+        # SetIdentifier does not change the layer's file format, so a Save()
+        # afterwards writes the layer's current format under the new name. If
+        # the new name would be read as a different format, that file could not
+        # be read back, so SetIdentifier rejects it. Export() is the way to
+        # write a layer in a different format.
+        def _Author(path, args=None):
+            layer = (Sdf.Layer.CreateNew(path, args) if args
+                     else Sdf.Layer.CreateNew(path))
+            Sdf.CreatePrimInLayer(layer, '/test').specifier = Sdf.SpecifierDef
+            self.assertTrue(layer.Save())
+            return layer
+
+        def _Cleanup(*paths):
+            for path in paths:
+                if os.path.isfile(path):
+                    os.remove(path)
+
+        def _HasTestPrim(path):
+            # Hold the layer while querying it: spec handles go dormant once
+            # their layer is destroyed, so chaining off OpenAsAnonymous() would
+            # report a missing prim even when the file is correct.
+            onDisk = Sdf.Layer.OpenAsAnonymous(path)
+            return bool(onDisk) and bool(onDisk.GetPrimAtPath('/test'))
+
+        # Text and crate cannot be renamed to each other's extension.
+        for fromExt, toExt in [('usda', 'usdc'), ('usdc', 'usda')]:
+            src = 'TestSetIdentifierFormat.' + fromExt
+            dst = 'TestSetIdentifierFormat-renamed.' + toExt
+            _Cleanup(src, dst)
+
+            layer = _Author(src)
+            originalIdentifier = layer.identifier
+            with self.assertRaises(Tf.ErrorException):
+                layer.identifier = dst
+
+            # The layer is unchanged and still saveable under its own name.
+            self.assertEqual(layer.identifier, originalIdentifier)
+            self.assertEqual(layer.GetFileFormat().formatId, fromExt)
+            self.assertTrue(layer.Save(force=True))
+            self.assertFalse(os.path.exists(dst))
+            del layer
+
+        # .usd reads both text and crate, so retargeting to .usd is allowed in
+        # either direction, and the result must be readable.
+        for fromExt in ['usda', 'usdc']:
+            src = 'TestSetIdentifierToUsd.' + fromExt
+            dst = 'TestSetIdentifierToUsd-renamed.usd'
+            _Cleanup(src, dst)
+
+            layer = _Author(src)
+            layer.identifier = dst
+            self.assertTrue(layer.Save())
+            self.assertTrue(_HasTestPrim(dst))
+            del layer
+
+        # A .usd layer written as text may be retargeted to .usda, but not to
+        # .usdc: what matters is the encoding on disk, not the extension.
+        src = 'TestSetIdentifierUsdAsText.usd'
+        _Cleanup(src, 'TestSetIdentifierUsdAsText-renamed.usda',
+                 'TestSetIdentifierUsdAsText-renamed.usdc')
+
+        layer = _Author(src, {'format': 'usda'})
+        with self.assertRaises(Tf.ErrorException):
+            layer.identifier = 'TestSetIdentifierUsdAsText-renamed.usdc'
+        layer.identifier = 'TestSetIdentifierUsdAsText-renamed.usda'
+        self.assertTrue(layer.Save())
+        self.assertTrue(_HasTestPrim('TestSetIdentifierUsdAsText-renamed.usda'))
+
+        # An anonymous layer has no file to inspect, so the check falls back to
+        # the formats' claimed extensions. Giving an anonymous crate layer a
+        # .usda identifier would otherwise write crate content to a .usda file
+        # and report success.
+        _Cleanup('TestSetIdentifierAnonCrate.usda')
+        anon = Sdf.Layer.CreateAnonymous('.usdc')
+        Sdf.CreatePrimInLayer(anon, '/test').specifier = Sdf.SpecifierDef
+        with self.assertRaises(Tf.ErrorException):
+            anon.identifier = 'TestSetIdentifierAnonCrate.usda'
+        self.assertFalse(os.path.exists('TestSetIdentifierAnonCrate.usda'))
+
+        # Same format is still fine, which is the common case for naming an
+        # anonymous layer (see test_SetIdentifierAnonymousLayer).
+        _Cleanup('TestSetIdentifierAnonCrate.usdc')
+        anon.identifier = 'TestSetIdentifierAnonCrate.usdc'
+        self.assertTrue(anon.Save())
+        self.assertTrue(_HasTestPrim('TestSetIdentifierAnonCrate.usdc'))
+
     def test_VariantInertness(self):
-        layer = Sdf.Layer.CreateAnonymous()
+        layer = Sdf.Layer.CreateAnonymous(".usda")
         layer.ImportFromString(
-'''#sdf 1.4.32
+'''#usda 1.0
 over "test"
 {
     variantSet "vars" = {
@@ -985,7 +1329,7 @@ over "test"
 
     def test_OpenCloseThreadSafety(self):
         import concurrent.futures
-        PATH = "testSdfLayer_OpenCloseThreadSafety.sdf"
+        PATH = "testSdfLayer_OpenCloseThreadSafety.usda"
         OPENS = 25
         WORKERS = 16
         ITERATIONS = 10
@@ -1005,7 +1349,7 @@ over "test"
             self.assertEqual(completed, OPENS)
     
     def test_DefaultPrim(self):
-        layer = Sdf.Layer.CreateAnonymous()
+        layer = Sdf.Layer.CreateAnonymous(".usda")
         
         # Set defaultPrim
         layer.defaultPrim = '/foo'
@@ -1034,6 +1378,59 @@ over "test"
         self.assertTrue(layer.HasDefaultPrim())
         layer.ClearDefaultPrim()
         self.assertFalse(layer.HasDefaultPrim())
+
+        # Test static defaultPrim token to path conversion functions
+        
+        # Absolute path string tokens 
+        self.assertEqual(
+            Sdf.Layer.ConvertDefaultPrimTokenToPath('/foo'), 
+            Sdf.Path('/foo'))
+        self.assertEqual(
+            Sdf.Layer.ConvertDefaultPrimTokenToPath('/foo/bar'), 
+            Sdf.Path('/foo/bar'))
+
+        # Relative path string tokens
+        self.assertEqual(
+            Sdf.Layer.ConvertDefaultPrimTokenToPath('foo'), 
+            Sdf.Path('/foo'))
+        self.assertEqual(
+            Sdf.Layer.ConvertDefaultPrimTokenToPath('foo/bar'), 
+            Sdf.Path('/foo/bar'))
+        
+        # Invalid non-prim path tokens
+        self.assertEqual(
+            Sdf.Layer.ConvertDefaultPrimTokenToPath('/foo.prop'), 
+            Sdf.Path())
+        self.assertEqual(
+            Sdf.Layer.ConvertDefaultPrimTokenToPath('/'), 
+            Sdf.Path())
+
+        # Test static defaultPrim path to token conversion functions
+
+        # Absolute paths. Roots paths convert to just name token. Non-root
+        # paths convert to absolute path token.
+        self.assertEqual(
+            Sdf.Layer.ConvertDefaultPrimPathToToken(Sdf.Path('/foo')), 
+            'foo')
+        self.assertEqual(
+            Sdf.Layer.ConvertDefaultPrimPathToToken(Sdf.Path('/foo/bar')), 
+            '/foo/bar')
+
+        # Relative paths. Produce the exact same tokens as absolute paths.
+        self.assertEqual(
+            Sdf.Layer.ConvertDefaultPrimPathToToken(Sdf.Path('foo')), 
+            'foo')
+        self.assertEqual(
+            Sdf.Layer.ConvertDefaultPrimPathToToken(Sdf.Path('foo/bar')), 
+            '/foo/bar')
+        
+        # Non-prim paths produce empty tokens.
+        self.assertEqual(
+            Sdf.Layer.ConvertDefaultPrimPathToToken(Sdf.Path('/foo.prop')), 
+            '')
+        self.assertEqual(
+            Sdf.Layer.ConvertDefaultPrimPathToToken(Sdf.Path.absoluteRootPath), 
+            '')
 
 if __name__ == "__main__":
     unittest.main()

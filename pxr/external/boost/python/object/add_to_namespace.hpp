@@ -13,10 +13,6 @@
 #include "pxr/pxr.h"
 #include "pxr/external/boost/python/common.hpp"
 
-#ifndef PXR_USE_INTERNAL_BOOST_PYTHON
-#include <boost/python/object/add_to_namespace.hpp>
-#else
-
 # include "pxr/external/boost/python/object_fwd.hpp"
 
 namespace PXR_BOOST_NAMESPACE { namespace python { namespace objects { 
@@ -30,7 +26,8 @@ PXR_BOOST_PYTHON_DECL void add_to_namespace(
 PXR_BOOST_PYTHON_DECL void add_to_namespace(
     object const& name_space, char const* name, object const& attribute, char const* doc);
 
+PXR_BOOST_PYTHON_DECL object const& add_doc(object const& attribute, char const* doc);
+
 }}} // namespace PXR_BOOST_NAMESPACE::python::objects
 
-#endif // PXR_USE_INTERNAL_BOOST_PYTHON
 #endif // PXR_EXTERNAL_BOOST_PYTHON_OBJECT_ADD_TO_NAMESPACE_HPP

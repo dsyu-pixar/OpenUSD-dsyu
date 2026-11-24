@@ -75,6 +75,7 @@ HdSt_PipelineDrawBatch::HdSt_PipelineDrawBatch(
     , _bufferArraysHash(0)
     , _barElementOffsetsHash(0)
     , _numVisibleItems(0)
+    , _numVisibleItemsPostCull(0)
     , _numTotalVertices(0)
     , _numTotalElements(0)
     /* The following two values are set before draw by
@@ -131,8 +132,10 @@ HdSt_PipelineDrawBatch::_Init(HdStDrawItemInstance * drawItemInstance)
         _useGpuCulling && IsEnabledGPUInstanceFrustumCulling();
 
     if (_useGpuCulling) {
-        _cullingProgram.Initialize(
-            _useDrawIndexed, _useInstanceCulling, _bufferArraysHash);
+        if (_cullingProgram.Initialize(
+                _useDrawIndexed, _useInstanceCulling, _bufferArraysHash)) {
+            _dirtyCullingProgram = true;
+        }
     }
 
     TF_DEBUG(HDST_DRAW_BATCH).Msg(
@@ -634,6 +637,7 @@ HdSt_PipelineDrawBatch::_CompileBatch(
     // Count the number of visible items. We may actually draw fewer
     // items than this when GPU frustum culling is active.
     _numVisibleItems = 0;
+    _numVisibleItemsPostCull = 0;
     _numTotalElements = 0;
     _numTotalVertices = 0;
 
@@ -666,7 +670,12 @@ HdSt_PipelineDrawBatch::_CompileBatch(
             drawItem->GetGeometricShader()->GetPrimitiveIndexSize();
 
         uint32_t const baseVertex = vertexDC;
-        uint32_t const vertexCount = _GetElementCount(dc.vertexBar);
+        
+        // Query fallback vertex count from geometric shader if the vertex bar
+        // is empty
+        uint32_t const vertexCount = dc.vertexBar ?
+                    _GetElementCount(dc.vertexBar) : 
+                    drawItem->GetGeometricShader()->GetVertexCountFallback();
 
         // if delegate fails to get vertex primvars, it could be empty.
         // skip the drawitem to prevent drawing uninitialized vertices.
@@ -930,6 +939,17 @@ HdSt_PipelineDrawBatch::Validate(bool deepValidation)
             return ValidationResult::RebuildBatch;
         }
 
+        // Check if the geometric shader has been updated; even if
+        // everything still aggregates, a geometric shader update can
+        // change dispatch buffer layout (e.g. if we switch from tris to
+        // patches...)
+        if (_GeometricShaderChanged()) {
+             TF_DEBUG(HDST_DRAW_BATCH).Msg(
+                "   Deep validation: Geometric shader changed."
+                "   Rebuilding batch.\n");
+            return ValidationResult::RebuildBatch;
+        }
+
     }
 
     TF_DEBUG(HDST_DRAW_BATCH).Msg(
@@ -941,7 +961,8 @@ bool
 HdSt_PipelineDrawBatch::_HasNothingToDraw() const
 {
     return ( _useDrawIndexed && _numTotalElements == 0) ||
-           (!_useDrawIndexed && _numTotalVertices == 0);
+           (!_useDrawIndexed && _numTotalVertices == 0) ||
+           (_numVisibleItems == 0);
 }
 
 void
@@ -977,6 +998,8 @@ HdSt_PipelineDrawBatch::PrepareDraw(
         // may still require multiple command buffer submissions.
         _ExecuteFrustumCull(updateBufferData,
                             renderPassState, resourceRegistry);
+    } else {
+        _numVisibleItemsPostCull = _numVisibleItems;
     }
 }
 
@@ -1057,6 +1080,9 @@ _BindingState::GetBindingsForViewTransformation(
     binder.GetInterleavedBufferArrayBindingDesc(
         bindingsDesc, constantBar, _tokens->constantPrimvars);
 
+    binder.GetInterleavedBufferArrayBindingDesc(
+        bindingsDesc, topVisBar, HdTokens->topologyVisibility);
+
     // Bind the instance buffers to support instance transformations.
     if (instanceIndexBar) {
         for (size_t level = 0; level < instancePrimvarBars.size(); ++level) {
@@ -1076,9 +1102,6 @@ _BindingState::GetBindingsForDrawing(
     GetBindingsForViewTransformation(bindingsDesc);
 
     bindingsDesc->debugName = "PipelineDrawBatch.Drawing";
-
-    binder.GetInterleavedBufferArrayBindingDesc(
-        bindingsDesc, topVisBar, HdTokens->topologyVisibility);
 
     binder.GetBufferArrayBindingDesc(bindingsDesc, indexBar);
     if (!geometricShader->IsPrimTypePoints()) {
@@ -1174,32 +1197,34 @@ _GetVertexBuffersForDrawing(_BindingState const & state)
     HgiVertexBufferDescVector vertexBufferDescVector =
         _GetVertexBuffersForViewTransformation(state);
 
-    for (auto const & namedResource : state.vertexBar->GetResources()) {
-        HdStBinding const binding =
-                                state.binder.GetBinding(namedResource.first);
-        HdStBufferResourceSharedPtr const & resource = namedResource.second;
-        HdTupleType const tupleType = resource->GetTupleType();
+    if (state.vertexBar) {
+        for (auto const & namedResource : state.vertexBar->GetResources()) {
+            HdStBinding const binding =
+                                    state.binder.GetBinding(namedResource.first);
+            HdStBufferResourceSharedPtr const & resource = namedResource.second;
+            HdTupleType const tupleType = resource->GetTupleType();
 
-        if (binding.GetType() == HdStBinding::VERTEX_ATTR) {
-            HgiVertexAttributeDesc attrDesc;
-            attrDesc.format =
-                HdStHgiConversions::GetHgiVertexFormat(tupleType.type);
-            attrDesc.offset = resource->GetOffset(),
-            attrDesc.shaderBindLocation = binding.GetLocation();
+            if (binding.GetType() == HdStBinding::VERTEX_ATTR) {
+                HgiVertexAttributeDesc attrDesc;
+                attrDesc.format =
+                    HdStHgiConversions::GetHgiVertexFormat(tupleType.type);
+                attrDesc.offset = resource->GetOffset(),
+                attrDesc.shaderBindLocation = binding.GetLocation();
 
-            // Each vertexBar resource is sourced from a distinct buffer.
-            HgiVertexBufferDesc bufferDesc;
-            bufferDesc.bindingIndex = vertexBufferDescVector.size();
-            bufferDesc.vertexAttributes = {attrDesc};
-            if (state.geometricShader->GetUseMetalTessellation()) {
-                bufferDesc.vertexStepFunction =
-                    HgiVertexBufferStepFunctionPerPatchControlPoint;
-            } else {
-                bufferDesc.vertexStepFunction =
-                    HgiVertexBufferStepFunctionPerVertex;
+                // Each vertexBar resource is sourced from a distinct buffer.
+                HgiVertexBufferDesc bufferDesc;
+                bufferDesc.bindingIndex = vertexBufferDescVector.size();
+                bufferDesc.vertexAttributes = {attrDesc};
+                if (state.geometricShader->GetUseMetalTessellation()) {
+                    bufferDesc.vertexStepFunction =
+                        HgiVertexBufferStepFunctionPerPatchControlPoint;
+                } else {
+                    bufferDesc.vertexStepFunction =
+                        HgiVertexBufferStepFunctionPerVertex;
+                }
+                bufferDesc.vertexStride = HdDataSizeOfTupleType(tupleType);
+                vertexBufferDescVector.push_back(bufferDesc);
             }
-            bufferDesc.vertexStride = HdDataSizeOfTupleType(tupleType);
-            vertexBufferDescVector.push_back(bufferDesc);
         }
     }
 
@@ -1230,16 +1255,18 @@ _GetVertexBufferBindingsForDrawing(
     uint32_t nextBinding = // continue binding subsequent locations
         _GetVertexBufferBindingsForViewTransformation(bindings, state);
 
-    for (auto const & namedResource : state.vertexBar->GetResources()) {
-        HdStBinding const binding =
-                                state.binder.GetBinding(namedResource.first);
-        HdStBufferResourceSharedPtr const & resource = namedResource.second;
+    if (state.vertexBar) {
+        for (auto const & namedResource : state.vertexBar->GetResources()) {
+            HdStBinding const binding =
+                                    state.binder.GetBinding(namedResource.first);
+            HdStBufferResourceSharedPtr const & resource = namedResource.second;
 
-        if (binding.GetType() == HdStBinding::VERTEX_ATTR) {
-            bindings->emplace_back(resource->GetHandle(),
-                                   static_cast<uint32_t>(resource->GetOffset()),
-                                   nextBinding);
-            nextBinding++;
+            if (binding.GetType() == HdStBinding::VERTEX_ATTR) {
+                bindings->emplace_back(resource->GetHandle(),
+                                    static_cast<uint32_t>(resource->GetOffset()),
+                                    nextBinding);
+                nextBinding++;
+            }
         }
     }
 
@@ -1283,6 +1310,7 @@ _GetDrawPipeline(
 
         pipeDesc.shaderProgram = state.glslProgram->GetProgram();
         pipeDesc.vertexBuffers = _GetVertexBuffersForDrawing(state);
+        pipeDesc.debugName = "Draw Pipeline";
 
         Hgi* hgi = resourceRegistry->GetHgi();
         HgiGraphicsPipelineHandle pso = hgi->CreateGraphicsPipeline(pipeDesc);
@@ -1329,6 +1357,7 @@ _GetPTCSPipeline(
         pipeDesc.vertexBuffers = _GetVertexBuffersForDrawing(state);
         pipeDesc.tessellationState.tessFactorMode =
             HgiTessellationState::TessControl;
+        pipeDesc.debugName = "PTCS Pipeline";
 
         Hgi* hgi = resourceRegistry->GetHgi();
         HgiGraphicsPipelineHandle pso = hgi->CreateGraphicsPipeline(pipeDesc);
@@ -1428,7 +1457,7 @@ HdSt_PipelineDrawBatch::ExecuteDraw(
     }
 
     HD_PERF_COUNTER_INCR(HdPerfTokens->drawCalls);
-    HD_PERF_COUNTER_ADD(HdTokens->itemsDrawn, _numVisibleItems);
+    HD_PERF_COUNTER_ADD(HdTokens->itemsDrawn, _numVisibleItemsPostCull);
 }
 
 void
@@ -1551,7 +1580,7 @@ _GetCullPipeline(
         // Create a points primitive, vertex shader only pipeline that uses
         // a uniform block data for the 'cullParams' in the shader.
         HgiComputePipelineDesc pipeDesc;
-        pipeDesc.debugName = "FrustumCulling";
+        pipeDesc.debugName = "FrustumCulling Pipeline";
         pipeDesc.shaderProgram = programHandle;
         pipeDesc.shaderConstantsDesc.byteSize = byteSizeUniforms;
 
@@ -1758,7 +1787,10 @@ HdSt_PipelineDrawBatch::_ExecuteFrustumCull(
     computeCmds->PopDebugGroup();
 
     if (IsEnabledGPUCountVisibleInstances()) {
-        _EndGPUCountVisibleInstances(resourceRegistry, &_numVisibleItems);
+        _EndGPUCountVisibleInstances(resourceRegistry,
+            &_numVisibleItemsPostCull);
+    } else {
+        _numVisibleItemsPostCull = _numVisibleItems;
     }
 
     hgi->DestroyResourceBindings(&resourceBindings);
@@ -1971,28 +2003,29 @@ HdSt_PipelineDrawBatch::_CreateCullingProgram(
         _cullingProgram.SetGeometricShader(cullShader);
 
         _cullingProgram.CompileShader(_drawItemInstances.front()->GetDrawItem(),
-                                      resourceRegistry);
+                                      resourceRegistry,
+                                      _LogShaderCacheLookup());
 
         _dirtyCullingProgram = false;
     }
 }
 
-void
+bool
 HdSt_PipelineDrawBatch::_CullingProgram::Initialize(
     bool useDrawIndexed,
     bool useInstanceCulling,
     size_t bufferArrayHash)
 {
-    if (useDrawIndexed     != _useDrawIndexed     ||
-        useInstanceCulling != _useInstanceCulling ||
-        bufferArrayHash    != _bufferArrayHash) {
-        // reset shader
-        Reset();
+    if (useDrawIndexed     == _useDrawIndexed     &&
+        useInstanceCulling == _useInstanceCulling &&
+        bufferArrayHash    == _bufferArrayHash) {
+        return false;
     }
 
     _useDrawIndexed = useDrawIndexed;
     _useInstanceCulling = useInstanceCulling;
     _bufferArrayHash = bufferArrayHash;
+    return true;
 }
 
 /* virtual */

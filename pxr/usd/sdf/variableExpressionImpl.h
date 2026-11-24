@@ -121,6 +121,7 @@ public:
     {
         std::string content;
         bool isVariable = false;
+        std::unique_ptr<Node> fallback;
     };
 
     StringNode(std::vector<Part>&& parts);
@@ -136,11 +137,12 @@ class VariableNode
     : public Node
 {
 public:
-    VariableNode(std::string&& var);
+    VariableNode(std::string&& var, std::unique_ptr<Node>&& fallback);
     EvalResult Evaluate(EvalContext* ctx) const override;
 
 private:
     std::string _var;
+    std::unique_ptr<Node> _fallback;
 };
 
 /// \class ConstantNode
@@ -351,6 +353,27 @@ public:
 private:
     std::unique_ptr<Node> _searchIn;
     std::unique_ptr<Node> _searchFor;
+};
+
+/// \class MatchesRegexNode
+/// Expression node for function that performs basic regular expression pattern
+/// matching with strings or list of strings. The extended POSIX regular
+/// expression grammar is supported. 
+class MatchesRegexNode
+    : public FunctionWithNArgsNode<2>
+{
+public:
+    static const char* GetFunctionName();
+
+    MatchesRegexNode(
+        std::unique_ptr<Node>&& searchIn,
+        std::unique_ptr<Node>&& _pattern);
+
+    EvalResult Evaluate(EvalContext* ctx) const override;
+
+private:
+    std::unique_ptr<Node> _searchIn;
+    std::unique_ptr<Node> _pattern;
 };
 
 /// \class AtNode

@@ -20,27 +20,6 @@ set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
 find_package(Threads REQUIRED)
 set(PXR_THREAD_LIBS "${CMAKE_THREAD_LIBS_INIT}")
 
-if((PXR_ENABLE_PYTHON_SUPPORT AND PXR_USE_BOOST_PYTHON) OR PXR_ENABLE_OPENVDB_SUPPORT)
-    # Find Boost package before getting any boost specific components as we need to
-    # disable boost-provided cmake config, based on the boost version found.
-    find_package(Boost REQUIRED)
-
-    # Boost provided cmake files (introduced in boost version 1.70) result in 
-    # inconsistent build failures on different platforms, when trying to find boost 
-    # component dependencies like python, etc. Refer some related
-    # discussions:
-    # https://github.com/boostorg/python/issues/262#issuecomment-483069294
-    # https://github.com/boostorg/boost_install/issues/12#issuecomment-508683006
-    #
-    # Hence to avoid issues with Boost provided cmake config, Boost_NO_BOOST_CMAKE
-    # is enabled by default for boost version 1.70 and above. If a user explicitly 
-    # set Boost_NO_BOOST_CMAKE to Off, following will be a no-op.
-    option(Boost_NO_BOOST_CMAKE "Disable boost-provided cmake config" ON)
-    if (Boost_NO_BOOST_CMAKE)
-      message(STATUS "Disabling boost-provided cmake config")
-    endif()
-endif()
-
 if(PXR_ENABLE_PYTHON_SUPPORT)
     # 1--Python.
     macro(setup_python_package package)
@@ -52,14 +31,6 @@ if(PXR_ENABLE_PYTHON_SUPPORT)
         set(PYTHON_INCLUDE_DIRS "${${package}_INCLUDE_DIRS}")
         set(PYTHON_VERSION_MAJOR "${${package}_VERSION_MAJOR}")
         set(PYTHON_VERSION_MINOR "${${package}_VERSION_MINOR}")
-
-        # Convert paths to CMake path format on Windows to avoid string parsing
-        # issues when we pass PYTHON_EXECUTABLE or PYTHON_INCLUDE_DIRS to
-        # pxr_library or other functions.
-        if(WIN32)
-            file(TO_CMAKE_PATH ${PYTHON_EXECUTABLE} PYTHON_EXECUTABLE)
-            file(TO_CMAKE_PATH ${PYTHON_INCLUDE_DIRS} PYTHON_INCLUDE_DIRS)
-        endif()
 
         # PXR_PY_UNDEFINED_DYNAMIC_LOOKUP might be explicitly set when 
         # packaging wheels, or when cross compiling to a Python environment 
@@ -83,10 +54,11 @@ if(PXR_ENABLE_PYTHON_SUPPORT)
             endif()
         endif()
 
-        # This option indicates that we don't want to explicitly link to the
-        # python libraries. See BUILDING.md for details.
+        # This option indicates that we don't want libraries to explicitly link
+        # to the Python libraries. However, executables must link to the Python
+        # libraries to avoid missing symbol errors. See BUILDING.md for details.
         if(PXR_PY_UNDEFINED_DYNAMIC_LOOKUP AND NOT WIN32)
-            set(PYTHON_LIBRARIES "")
+            set(PYTHON_LIBRARIES "$<$<STREQUAL:$<TARGET_PROPERTY:TYPE>,EXECUTABLE>:${package}::Python>")
         else()
             set(PYTHON_LIBRARIES "${package}::Python")
         endif()
@@ -95,33 +67,26 @@ if(PXR_ENABLE_PYTHON_SUPPORT)
     # USD builds only work with Python3
     setup_python_package(Python3)
 
-    if(PXR_USE_BOOST_PYTHON)
-        if(WIN32 AND PXR_USE_DEBUG_PYTHON)
-            set(Boost_USE_DEBUG_PYTHON ON)
-        endif()
-
-        # Manually specify VS2022, 2019, and 2017 as USD's supported compiler versions
+    # Set the default Python bindings install directory if the user has not
+    # provided an explicit value. The default is "lib/pythonX.Y/site-packages"
+    # relative to the install prefix, matching the directory where the USD
+    # shared libraries are installed. On Windows the convention is simply
+    # "Lib/site-packages" (no version component).
+    if(NOT PXR_PYTHON_INSTALL_DIR)
         if(WIN32)
-            set(Boost_COMPILER "-vc143;-vc142;-vc141")
+            set(_pxr_default_python_install_dir "Lib/site-packages")
+        else()
+            set(_pxr_default_python_install_dir
+                "lib/python${PYTHON_VERSION_MAJOR}.${PYTHON_VERSION_MINOR}/site-packages")
         endif()
-
-        # As of boost 1.67 the boost_python component name includes the
-        # associated Python version (e.g. python27, python36). 
-        # XXX: After boost 1.73, boost provided config files should be able to 
-        # work without specifying a python version!
-        # https://github.com/boostorg/boost_install/blob/master/BoostConfig.cmake
-
-        # Find the component under the versioned name and then set the generic
-        # Boost_PYTHON_LIBRARY variable so that we don't have to duplicate this
-        # logic in each library's CMakeLists.txt.
-        set(python_version_nodot "${PYTHON_VERSION_MAJOR}${PYTHON_VERSION_MINOR}")
-        find_package(Boost
-            COMPONENTS
-            python${python_version_nodot}
-            REQUIRED
-        )
-        set(Boost_PYTHON_LIBRARY "${Boost_PYTHON${python_version_nodot}_LIBRARY}")
+        set(PXR_PYTHON_INSTALL_DIR "${_pxr_default_python_install_dir}"
+            CACHE STRING
+            "Directory for installing Python bindings."
+            FORCE)
+        unset(_pxr_default_python_install_dir)
     endif()
+
+    message(STATUS "Installing Python bindings to ${PXR_PYTHON_INSTALL_DIR}")
 
     # --Jinja2
     find_package(Jinja2)
@@ -137,10 +102,38 @@ else()
     endif()
 endif()
 
+# Convert paths to CMake path format on Windows to avoid string parsing
+# issues when we pass PYTHON_EXECUTABLE or PYTHON_INCLUDE_DIRS to
+# pxr_library or other functions.
+if(WIN32)
+    if(PYTHON_EXECUTABLE)
+        file(TO_CMAKE_PATH ${PYTHON_EXECUTABLE} PYTHON_EXECUTABLE)
+    endif()
+
+    if(PYTHON_INCLUDE_DIRS)
+        file(TO_CMAKE_PATH ${PYTHON_INCLUDE_DIRS} PYTHON_INCLUDE_DIRS)
+    endif()
+endif()
 
 # --TBB
-find_package(TBB REQUIRED COMPONENTS tbb)
-add_definitions(${TBB_DEFINITIONS})
+if (DEFINED PXR_FIND_TBB_IN_CONFIG)
+    if (PXR_FIND_TBB_IN_CONFIG)
+        find_package(TBB CONFIG REQUIRED COMPONENTS tbb)
+    else()
+        find_package(TBB REQUIRED COMPONENTS tbb)
+    endif()
+else()
+    # Set PXR_FIND_TBB_IN_CONFIG appropriately so that downstream
+    # pxrConfig knows how TBB was found and appropriately encodes the 
+    # dependency.
+    find_package(TBB CONFIG COMPONENTS tbb)
+    if (TBB_FOUND)
+        set(PXR_FIND_TBB_IN_CONFIG ON)
+    else()
+        find_package(TBB REQUIRED COMPONENTS tbb)
+        set(PXR_FIND_TBB_IN_CONFIG OFF)
+    endif()
+endif()
 
 # --math
 if(WIN32)
@@ -188,16 +181,25 @@ endif()
 if (PXR_BUILD_IMAGING)
     # --OpenImageIO
     if (PXR_BUILD_OPENIMAGEIO_PLUGIN)
-        set(REQUIRES_Imath TRUE)
-        find_package(OpenImageIO REQUIRED)
+        find_package(OpenImageIO 3 REQUIRED CONFIG OPTIONAL_COMPONENTS idiff)
         add_definitions(-DPXR_OIIO_PLUGIN_ENABLED)
-        if (OIIO_idiff_BINARY)
-            set(IMAGE_DIFF_TOOL ${OIIO_idiff_BINARY} CACHE STRING "Uses idiff for image diffing")
+    elseif(PXR_BUILD_TESTS AND NOT IMAGE_DIFF_TOOL)
+        find_package(OpenImageIO 3 CONFIG OPTIONAL_COMPONENTS idiff)
+    endif()
+    if (PXR_BUILD_TESTS)
+        if (IMAGE_DIFF_TOOL)
+            message(STATUS "Resolved IMAGE_DIFF_TOOL to $IMAGE_DIFF_TOOL")
+        elseif (TARGET OpenImageIO::idiff)
+            message(STATUS "Found idiff in OpenImageIO package")
+        else()
+            message(WARN
+                    "Tests were enabled, but OpenImageIO was built "
+                    "without idiff and IMAGE_DIFF_TOOL was unset.")
         endif()
     endif()
     # --OpenColorIO
     if (PXR_BUILD_OPENCOLORIO_PLUGIN)
-        find_package(OpenColorIO REQUIRED)
+        find_package(OpenColorIO REQUIRED CONFIG)
         add_definitions(-DPXR_OCIO_PLUGIN_ENABLED)
     endif()
     # --OpenGL
@@ -217,24 +219,8 @@ if (PXR_BUILD_IMAGING)
     if (PXR_ENABLE_VULKAN_SUPPORT)
         message(STATUS "Enabling experimental feature Vulkan support")
         if (EXISTS $ENV{VULKAN_SDK})
-            # Prioritize the VULKAN_SDK includes and packages before any system
-            # installed headers. This is to prevent linking against older SDKs
-            # that may be installed by the OS.
-            # XXX This is fixed in cmake 3.18+
-            include_directories(BEFORE SYSTEM $ENV{VULKAN_SDK} $ENV{VULKAN_SDK}/include $ENV{VULKAN_SDK}/lib $ENV{VULKAN_SDK}/source)
-            set(ENV{PATH} "$ENV{VULKAN_SDK}:$ENV{VULKAN_SDK}/include:$ENV{VULKAN_SDK}/lib:$ENV{VULKAN_SDK}/source:$ENV{PATH}")
-            find_package(Vulkan REQUIRED)
-            list(APPEND VULKAN_LIBS Vulkan::Vulkan)
-
-            # Find the extra vulkan libraries we need
-            set(EXTRA_VULKAN_LIBS shaderc_combined)
-            if (WIN32 AND CMAKE_BUILD_TYPE STREQUAL "Debug")
-                set(EXTRA_VULKAN_LIBS shaderc_combinedd)
-            endif()
-            foreach(EXTRA_LIBRARY ${EXTRA_VULKAN_LIBS})
-                find_library("${EXTRA_LIBRARY}_PATH" NAMES "${EXTRA_LIBRARY}" PATHS $ENV{VULKAN_SDK}/lib)
-                list(APPEND VULKAN_LIBS "${${EXTRA_LIBRARY}_PATH}")
-            endforeach()
+            find_package(Vulkan REQUIRED COMPONENTS shaderc_combined)
+            list(APPEND VULKAN_LIBS Vulkan::Vulkan Vulkan::shaderc_combined)
 
             # Find the OS specific libs we need
             if (UNIX AND NOT APPLE)
@@ -250,8 +236,21 @@ if (PXR_BUILD_IMAGING)
         endif()
     endif()
     # --Opensubdiv
-    set(OPENSUBDIV_USE_GPU ${PXR_BUILD_GPU_SUPPORT})
-    find_package(OpenSubdiv 3 REQUIRED)
+    find_package(OpenSubdiv 3.6...<4 REQUIRED CONFIG)
+    # First check the shared, then the static library, just like find_library() in FindOpenSubdiv.cmake.
+    foreach(postfix "" "_static")
+        if(NOT TARGET OpenSubdiv::osdCPU${postfix})
+            continue()
+        endif()
+        set(OPENSUBDIV_LIBRARIES OpenSubdiv::osdCPU${postfix})
+        if(${PXR_BUILD_GPU_SUPPORT})
+            list(APPEND OPENSUBDIV_LIBRARIES OpenSubdiv::osdGPU${postfix})
+        endif()
+        break()
+    endforeach()
+    list(GET OPENSUBDIV_LIBRARIES 0 OPENSUBDIV_OSDCPU_LIBRARY)
+    # TODO: Remove in a future version. Nothing internal depends on it anymore.
+    set(PXR_FIND_OPENSUBDIV_IN_CONFIG ON)
     # --Ptex
     if (PXR_ENABLE_PTEX_SUPPORT)
         find_package(PTex REQUIRED)
@@ -259,7 +258,6 @@ if (PXR_BUILD_IMAGING)
     endif()
     # --OpenVDB
     if (PXR_ENABLE_OPENVDB_SUPPORT)
-        set(REQUIRES_Imath TRUE)
         find_package(OpenVDB REQUIRED)
         add_definitions(-DPXR_OPENVDB_SUPPORT_ENABLED)
     endif()
@@ -270,7 +268,8 @@ if (PXR_BUILD_IMAGING)
     endif()
     # --Embree
     if (PXR_BUILD_EMBREE_PLUGIN)
-        find_package(Embree REQUIRED)
+        find_package(Embree 4 REQUIRED CONFIG)
+        add_library(Embree::embree ALIAS embree)
     endif()
 endif()
 
@@ -314,21 +313,14 @@ if(PXR_ENABLE_OSL_SUPPORT)
     add_definitions(-DPXR_OSL_SUPPORT_ENABLED)
 endif()
 
-if (PXR_BUILD_ANIMX_TESTS)
-    find_package(AnimX REQUIRED)
+if (PXR_BUILD_PMC_PLUGIN)
+    find_package(Pmc REQUIRED)
 endif()
 
-# ----------------------------------------------
-
-# Try and find Imath or fallback to OpenEXR
-# Use ImathConfig.cmake, 
-# Refer: https://github.com/AcademySoftwareFoundation/Imath/blob/main/docs/PortingGuide2-3.md#openexrimath-3x-only
+# Try and find Imath
+# Use ImathConfig.cmake
 if(REQUIRES_Imath)
-    find_package(Imath CONFIG)
-    if (NOT Imath_FOUND)
-        MESSAGE(STATUS "Imath not found. Looking for OpenEXR instead.")
-        find_package(OpenEXR REQUIRED)
-    endif()
+    find_package(Imath CONFIG REQUIRED)
 endif()
 
 set(BUILD_SHARED_LIBS "${build_shared_libs}")

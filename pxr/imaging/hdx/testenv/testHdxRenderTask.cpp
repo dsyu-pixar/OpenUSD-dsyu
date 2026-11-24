@@ -17,6 +17,8 @@
 #include "pxr/imaging/hgi/hgi.h"
 #include "pxr/imaging/hgi/tokens.h"
 
+#include "pxr/base/tf/errorMark.h"
+
 #include <iostream>
 
 PXR_NAMESPACE_USING_DIRECTIVE
@@ -28,6 +30,8 @@ TF_DEFINE_PRIVATE_TOKENS(
 
 int main(int argc, char *argv[])
 {
+    TfErrorMark mark;
+
     HdPerfLog& perfLog = HdPerfLog::GetInstance();
     perfLog.Enable();
 
@@ -55,45 +59,9 @@ int main(int argc, char *argv[])
     delegate->AddRenderTask(renderTask1);
 
     // setup AOVs
-    const SdfPath colorAovId = SdfPath("/aov_color");
-    const SdfPath depthAovId = SdfPath("/aov_depth");
-    HdRenderPassAovBindingVector aovBindings;
-
-    // color AOV
-    {
-        HdRenderPassAovBinding colorAovBinding;
-        const HdAovDescriptor colorAovDesc = 
-            renderDelegate.GetDefaultAovDescriptor(HdAovTokens->color);
-        colorAovBinding.aovName = HdAovTokens->color;
-        colorAovBinding.clearValue = VtValue(GfVec4f(0.1f, 0.1f, 0.1f, 1.0f));
-        colorAovBinding.renderBufferId = colorAovId;
-        colorAovBinding.aovSettings = colorAovDesc.aovSettings;
-        aovBindings.push_back(std::move(colorAovBinding));
-
-        HdRenderBufferDescriptor colorRbDesc;
-        colorRbDesc.dimensions = GfVec3i(512, 512, 1);
-        colorRbDesc.format = colorAovDesc.format;
-        colorRbDesc.multiSampled = false;
-        delegate->AddRenderBuffer(colorAovId, colorRbDesc);
-    }
-
-    // depth AOV
-    {
-        HdRenderPassAovBinding depthAovBinding;
-        const HdAovDescriptor depthAovDesc = 
-            renderDelegate.GetDefaultAovDescriptor(HdAovTokens->depth);
-        depthAovBinding.aovName = HdAovTokens->depth;
-        depthAovBinding.clearValue = VtValue(1.f);
-        depthAovBinding.renderBufferId = depthAovId;
-        depthAovBinding.aovSettings = depthAovDesc.aovSettings;
-        aovBindings.push_back(std::move(depthAovBinding));
-
-        HdRenderBufferDescriptor depthRbDesc;
-        depthRbDesc.dimensions = GfVec3i(512, 512, 1);
-        depthRbDesc.format = depthAovDesc.format;
-        depthRbDesc.multiSampled = false;
-        delegate->AddRenderBuffer(depthAovId, depthRbDesc);
-    }
+    const HdRenderPassAovBindingVector aovBindings =
+        delegate->AddAovBindings(GfVec2i(512, 512));
+    const SdfPath colorAovId = aovBindings[0].renderBufferId;
 
     // update viewport param (defaults to (0,0,512,512) otherwise)
     {
@@ -128,7 +96,6 @@ int main(int argc, char *argv[])
     delegate->WriteRenderBufferToFile(colorAovId, "color2.png");
 
     // update collection
-    index->GetChangeTracker().AddCollection(_tokens->testCollection);
     HdRprimCollection collection(_tokens->testCollection,
         HdReprSelector(HdReprTokens->wire));
     delegate->SetTaskParam(renderTask1, HdTokens->collection, VtValue(collection));
@@ -137,5 +104,11 @@ int main(int argc, char *argv[])
     engine.Execute(index.get(), &tasks);
     delegate->WriteRenderBufferToFile(colorAovId, "color3.png");
 
-    std::cout << "OK" << std::endl;
+    if (mark.IsClean()) {
+        std::cout << "OK" << std::endl;
+        return EXIT_SUCCESS;
+    } else {
+        std::cout << "FAILED" << std::endl;
+        return EXIT_FAILURE;
+    }
 }

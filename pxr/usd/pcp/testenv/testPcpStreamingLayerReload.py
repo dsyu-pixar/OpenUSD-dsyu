@@ -5,7 +5,6 @@
 # Licensed under the terms set forth in the LICENSE.txt file available at
 # https://openusd.org/license.
 
-from __future__ import print_function
 
 from pxr import Sdf, Pcp, Plug, Vt
 import os, unittest
@@ -47,12 +46,12 @@ class TestPcpStreamingLayerReload(unittest.TestCase):
         primIndex, errors = cache.ComputePrimIndex('/torus1/mesh_0')
         self.assertEqual(primIndex.primStack, [])
 
-        # Load up asset.sdf, and replace l's content with it.  This only changes
+        # Load up asset.usda, and replace l's content with it.  This only changes
         # the sublayer list, which pcp should recognize and blow layer stacks.
         # Since l's underlying data implementation returns true for
         # "StreamsData()" this exercises a different code-path in Pcp's change
         # processing.
-        assetLayer = Sdf.Layer.FindOrOpen('asset.sdf')
+        assetLayer = Sdf.Layer.FindOrOpen('asset.usda')
         self.assertTrue(assetLayer)
         with Pcp._TestChangeProcessor(cache):
             l.TransferContent(assetLayer)

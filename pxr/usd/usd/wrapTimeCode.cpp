@@ -39,11 +39,18 @@ static string __repr__(const UsdTimeCode &self)
 {
     string tail = ".Default()";
     if (self.IsNumeric()) {
-        if (self.IsEarliestTime()) {
-            tail = ".EarliestTime()";
+        if (self.IsPreTime()) {
+            tail = self.IsEarliestTime() ?
+                TfStringPrintf(".PreTime(%sTimeCode.EarliestTime().GetValue())",
+                               TF_PY_REPR_PREFIX.c_str()) :
+                TfStringPrintf(".PreTime(%s)", TfPyRepr(self.GetValue()).c_str());
         } else {
-            tail = self.GetValue() == 0.0 ? string("()") :
-                TfStringPrintf("(%s)", TfPyRepr(self.GetValue()).c_str());
+            if (self.IsEarliestTime()) {
+                tail = ".EarliestTime()";
+            } else {
+                tail = self.GetValue() == 0.0 ? "()" :
+                    TfStringPrintf("(%s)", TfPyRepr(self.GetValue()).c_str());
+            }
         }
     }
     return TF_PY_REPR_PREFIX + "TimeCode" + tail;
@@ -55,8 +62,14 @@ void wrapUsdTimeCode()
 {
     scope s = class_<UsdTimeCode>("TimeCode")
         .def(init<double>())
-        .def(init<SdfTimeCode>())
+        .def(init<GfTimeCode>())
         .def(init<UsdTimeCode>())
+
+        .def("PreTime", static_cast<UsdTimeCode(*)(double)>(
+            &UsdTimeCode::PreTime), (arg("value")))
+        .def("PreTime", static_cast<UsdTimeCode(*)(const GfTimeCode&)>(
+            &UsdTimeCode::PreTime), (arg("timeCode")))
+        .staticmethod("PreTime")
 
         .def("EarliestTime", &UsdTimeCode::EarliestTime)
         .staticmethod("EarliestTime")
@@ -68,6 +81,7 @@ void wrapUsdTimeCode()
              (arg("maxValue")=1e6, arg("maxCompression")=10.0))
         .staticmethod("SafeStep")
 
+        .def("IsPreTime", &UsdTimeCode::IsPreTime)
         .def("IsEarliestTime", &UsdTimeCode::IsEarliestTime)
         .def("IsDefault", &UsdTimeCode::IsDefault)
         .def("IsNumeric", &UsdTimeCode::IsNumeric)
@@ -79,6 +93,9 @@ void wrapUsdTimeCode()
         .def(self <= self)
         .def(self > self)
         .def(self >= self)
+
+
+        .def(other<SdfLayerOffset>() * self)
 
         .def("__hash__", __hash__)
         .def("__repr__", __repr__)
@@ -101,5 +118,5 @@ void wrapUsdTimeCode()
     TF_PY_WRAP_PUBLIC_TOKENS("Tokens", UsdTimeCodeTokens, USD_TIME_CODE_TOKENS);
 
     implicitly_convertible<double, UsdTimeCode>();
-    implicitly_convertible<SdfTimeCode, UsdTimeCode>();
+    implicitly_convertible<GfTimeCode, UsdTimeCode>();
 }

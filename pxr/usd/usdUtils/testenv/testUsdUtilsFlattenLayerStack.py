@@ -5,7 +5,6 @@
 # Licensed under the terms set forth in the LICENSE.txt file available at
 # https://openusd.org/license.
 
-from __future__ import print_function
 
 from pxr import UsdUtils, Sdf, Usd, Ar, Gf, Vt
 import os, unittest
@@ -181,7 +180,9 @@ class TestUsdUtilsFlattenLayerStack(unittest.TestCase):
 
         prim = result_stage.GetPrimAtPath(
             '/materials/usdpreviewsurface1/usduvtexture1')
-        attr = prim.GetAttribute('inputs:file')
+        # We do not use inputs:file here because it has type asset,
+        # not asset[].
+        attr = prim.GetAttribute('testAssetArrayAttr')
         time_samples = attr.GetTimeSamples()
         for time_sample in time_samples:
             time_sample_array_value = attr.Get(Usd.TimeCode(time_sample))

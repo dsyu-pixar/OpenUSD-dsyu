@@ -22,12 +22,14 @@ TF_DEFINE_ENV_SETTING(HGIGL_ENABLE_BINDLESS_BUFFER, false,
                       "Use GL bindless buffer extension");
 TF_DEFINE_ENV_SETTING(HGIGL_ENABLE_MULTI_DRAW_INDIRECT, true,
                       "Use GL multi draw indirect extension");
-TF_DEFINE_ENV_SETTING(HGIGL_ENABLE_BUILTIN_BARYCENTRICS, false,
+TF_DEFINE_ENV_SETTING(HGIGL_ENABLE_BUILTIN_BARYCENTRICS, true,
                       "Use GL built in barycentric coordinates");
 TF_DEFINE_ENV_SETTING(HGIGL_ENABLE_SHADER_DRAW_PARAMETERS, true,
                       "Use GL shader draw params if available (OpenGL 4.5+)");
 TF_DEFINE_ENV_SETTING(HGIGL_ENABLE_BINDLESS_TEXTURE, false,
                       "Use GL bindless texture extension");
+TF_DEFINE_ENV_SETTING(HGIGL_ENABLE_NATIVE_ROUND_POINTS, false,
+                      "Use GL builtin smooth points");
 TF_DEFINE_ENV_SETTING(HGIGL_GLSL_VERSION, 0,
                       "GLSL version");
 
@@ -62,6 +64,7 @@ HgiGLCapabilities::_LoadCapabilities()
     bool builtinBarycentricsEnabled   = false;
     bool shaderDrawParametersEnabled  = false;
     bool conservativeRasterEnabled    = false;
+    bool nativeRoundPointsEnabled     = true;
 
     const char *glVendorStr = (const char*)glGetString(GL_VENDOR);
     const char *glRendererStr = (const char*)glGetString(GL_RENDERER);
@@ -101,6 +104,11 @@ HgiGLCapabilities::_LoadCapabilities()
     GLint maxClipDistances = 0;
     glGetIntegerv(GL_MAX_CLIP_PLANES, &maxClipDistances);
     _maxClipDistances = maxClipDistances;
+
+    // GL has combined texture/sampler units
+    GLint maxSamplersPerShaderStage = 0;
+    glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &maxSamplersPerShaderStage);
+    _maxSamplersPerShaderStage = maxSamplersPerShaderStage;
 
     // initialize by Core versions
     if (_glVersion >= 310) {
@@ -163,6 +171,9 @@ HgiGLCapabilities::_LoadCapabilities()
     if (!TfGetEnvSetting(HGIGL_ENABLE_SHADER_DRAW_PARAMETERS)) {
         shaderDrawParametersEnabled = false;
     }
+    if (!TfGetEnvSetting(HGIGL_ENABLE_NATIVE_ROUND_POINTS)) {
+        nativeRoundPointsEnabled = false;
+    }
 
     // For debugging and unit testing
     if (TfGetEnvSetting(HGIGL_GLSL_VERSION) > 0) {
@@ -191,6 +202,9 @@ HgiGLCapabilities::_LoadCapabilities()
         true);
     _SetFlag(HgiDeviceCapabilitiesBitsCustomDepthRange,
         true);
+    _SetFlag(HgiDeviceCapabilitiesBitsRoundPoints,
+        nativeRoundPointsEnabled);
+    _SetFlag(HgiDeviceCapabilitiesForceEarlyFragmentTest, true);
 
     if (TfDebug::IsEnabled(HGI_DEBUG_DEVICE_CAPABILITIES)) {
         std::cout

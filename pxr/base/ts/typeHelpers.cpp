@@ -10,26 +10,16 @@
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-template <>
-TfType Ts_GetType<double>()
-{
-    static const TfType tfType = TfType::Find<double>();
-    return tfType;
+#define _MAKE_CLAUSE(unused, tuple)                                     \
+template <>                                                             \
+TfType Ts_GetType<TS_SPLINE_VALUE_CPP_TYPE(tuple)>()                    \
+{                                                                       \
+    static const TfType tfType =                                        \
+        TfType::Find<TF_PP_TUPLE_ELEM(1, tuple)>();                     \
+    return tfType;                                                      \
 }
-
-template <>
-TfType Ts_GetType<float>()
-{
-    static const TfType tfType = TfType::Find<float>();
-    return tfType;
-}
-
-template <>
-TfType Ts_GetType<GfHalf>()
-{
-    static const TfType tfType = TfType::Find<GfHalf>();
-    return tfType;
-}
+TF_PP_SEQ_FOR_EACH(_MAKE_CLAUSE, ~, TS_SPLINE_SUPPORTED_VALUE_TYPES)
+#undef _MAKE_CLAUSE
 
 TfType Ts_GetTypeFromTypeName(const std::string &typeName)
 {
@@ -44,6 +34,14 @@ TfType Ts_GetTypeFromTypeName(const std::string &typeName)
     if (typeName == "half")
     {
         return Ts_GetType<GfHalf>();
+    }
+    if (typeName == "timecode")
+    {
+        return Ts_GetType<GfTimeCode>();
+    }
+    if (typeName == "duration")
+    {
+        return Ts_GetType<GfDuration>();
     }
     return TfType();
 }
@@ -62,6 +60,14 @@ std::string Ts_GetTypeNameFromType(const TfType valueType)
     {
         return "half";
     }
+    if (valueType == Ts_GetType<GfTimeCode>())
+    {
+        return "timecode";
+    }
+    if (valueType == Ts_GetType<GfDuration>())
+    {
+        return "duration";
+    }
     return "";
 }
 
@@ -69,6 +75,18 @@ template <>
 bool Ts_IsFinite(const GfHalf value)
 {
     return value.isFinite();
+}
+
+template <>
+bool Ts_IsFinite(const GfTimeCode value)
+{
+    return std::isfinite(value.GetValue());
+}
+
+template <>
+bool Ts_IsFinite(const GfDuration value)
+{
+    return std::isfinite(value.GetValue());
 }
 
 

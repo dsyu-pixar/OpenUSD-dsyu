@@ -26,7 +26,6 @@ TF_REGISTRY_FUNCTION(TfType)
     // Other.
     TfType::Define<SdfDictionaryProxy>();
     TfType::Define<SdfVariantSelectionProxy>();
-    TfType::Define<SdfRelocatesMapProxy>();
 
     TfType::Define<SdfInheritsProxy>()
         .Alias(TfType::GetRoot(), "SdfInheritsProxy")
@@ -41,6 +40,18 @@ TF_REGISTRY_FUNCTION(TfType)
 
 template <class P>
 struct Sdf_ListEditorProxyTraits {
+};
+
+template <>
+struct Sdf_ListEditorProxyTraits<SdfNameEditorProxy> {
+    typedef SdfNameEditorProxy::TypePolicy TypePolicy;
+
+    static std::shared_ptr<Sdf_ListEditor<TypePolicy> > GetListEditor(
+        const SdfSpecHandle& o, const TfToken& n)
+    {
+        return std::shared_ptr<Sdf_ListEditor<TypePolicy> >(
+            new Sdf_ListOpListEditor<SdfNameKeyPolicy>(o, n));
+    }
 };
 
 template <>
@@ -94,6 +105,12 @@ Proxy SdfGetListEditorProxy(const SdfSpecHandle& o, const TfToken & n)
 {
     typedef Sdf_ListEditorProxyTraits<Proxy> Traits;
     return Proxy(Traits::GetListEditor(o, n));
+}
+
+SdfNameEditorProxy
+SdfGetNameEditorProxy(const SdfSpecHandle& o, const TfToken & n)
+{
+    return SdfGetListEditorProxy<SdfNameEditorProxy>(o, n);
 }
 
 SdfPathEditorProxy

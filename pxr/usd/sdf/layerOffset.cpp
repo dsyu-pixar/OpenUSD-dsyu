@@ -9,7 +9,6 @@
 
 #include "pxr/pxr.h"
 #include "pxr/usd/sdf/layerOffset.h"
-#include "pxr/usd/sdf/timeCode.h"
 #include "pxr/base/gf/math.h"
 
 #include "pxr/base/tf/hash.h"
@@ -27,23 +26,6 @@ PXR_NAMESPACE_OPEN_SCOPE
 TF_REGISTRY_FUNCTION(TfType) {
     TfType::Define<SdfLayerOffset>();
     TfType::Define<std::vector<SdfLayerOffset>>();
-}
-
-bool 
-SdfLayerOffset::IsIdentity() const
-{
-    // Construct a static instance to avoid a default construction on every call
-    // to SdfLayerOffset::IsIdentity().
-    static SdfLayerOffset identityOffset;
-
-    // Use operator==() for fuzzy compare (i.e. GfIsClose).
-    return *this == identityOffset;
-}
-
-SdfLayerOffset::SdfLayerOffset(double offset, double scale) :
-    _offset(offset),
-    _scale(scale)
-{
 }
 
 bool
@@ -80,19 +62,31 @@ SdfLayerOffset::operator*(double rhs) const
     return ( rhs * _scale + _offset );
 }
 
-SdfTimeCode
-SdfLayerOffset::operator*(const SdfTimeCode &rhs) const
+GfTimeCode
+SdfLayerOffset::operator*(const GfTimeCode &rhs) const
 {
-    return SdfTimeCode( (*this) * double(rhs) );
+    return ( rhs * _scale + _offset );
+}
+
+GfDuration
+SdfLayerOffset::operator*(const GfDuration &rhs) const
+{
+    // Only _scale is applied to duration values, not _offset.
+    return ( rhs * _scale );
 }
 
 bool
 SdfLayerOffset::operator==(const SdfLayerOffset &rhs) const
 {
-    // Use EPSILON so that 0 == -0, for example.
-    return (!IsValid() && !rhs.IsValid()) ||
-           (GfIsClose(_offset, rhs._offset, EPSILON) &&
-            GfIsClose(_scale, rhs._scale, EPSILON));
+    const bool lhsIsValid = IsValid();
+    const bool rhsIsValid = rhs.IsValid();
+
+    if (lhsIsValid && rhsIsValid) {
+        return
+            GfIsClose(_offset, rhs._offset, EPSILON) &&
+            GfIsClose(_scale, rhs._scale, EPSILON);
+    }
+    return !lhsIsValid && !rhsIsValid;
 }
 
 bool

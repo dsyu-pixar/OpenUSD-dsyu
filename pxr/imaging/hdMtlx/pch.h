@@ -16,7 +16,6 @@
 #include <sys/mount.h>
 #include <sys/param.h>
 #include <unistd.h>
-#include <mach/mach_time.h>
 #endif
 #if defined(ARCH_OS_LINUX)
 #include <glob.h>
@@ -24,7 +23,6 @@
 #include <sys/param.h>
 #include <sys/statfs.h>
 #include <unistd.h>
-#include <x86intrin.h>
 #endif
 #if defined(ARCH_OS_WINDOWS)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -34,13 +32,14 @@
 #include <Windows.h>
 #include <intrin.h>
 #include <io.h>
-#include <stringapiset.h>
 #endif
 #include <algorithm>
 #include <any>
 #include <atomic>
+#include <chrono>
 #include <cinttypes>
 #include <cmath>
+#include <complex>
 #include <cstdarg>
 #include <cstddef>
 #include <cstdint>
@@ -52,6 +51,7 @@
 #include <functional>
 #include <initializer_list>
 #include <iosfwd>
+#include <iostream>
 #include <iterator>
 #include <limits>
 #include <list>
@@ -63,6 +63,8 @@
 #include <new>
 #include <numeric>
 #include <optional>
+#include <ostream>
+#include <regex>
 #include <set>
 #include <sstream>
 #include <stdarg.h>
@@ -82,25 +84,13 @@
 #include <vector>
 #ifdef PXR_MATERIALX_SUPPORT_ENABLED
 #include <MaterialXCore/Document.h>
+#include <MaterialXCore/Generated.h>
 #include <MaterialXCore/Library.h>
 #include <MaterialXCore/Node.h>
+#include <MaterialXFormat/Environ.h>
 #include <MaterialXFormat/Util.h>
 #include <MaterialXFormat/XmlIo.h>
 #endif // PXR_MATERIALX_SUPPORT_ENABLED
-#if defined(PXR_PYTHON_SUPPORT_ENABLED) && !defined(PXR_USE_INTERNAL_BOOST_PYTHON)
-#include "pxr/external/boost/python/common.hpp"
-#include <boost/python/dict.hpp>
-#include <boost/python/extract.hpp>
-#include <boost/python/handle.hpp>
-#include <boost/python/object.hpp>
-#include <boost/python/object_fwd.hpp>
-#include <boost/python/object_operators.hpp>
-#include <boost/python/type_id.hpp>
-#if defined(__APPLE__) // Fix breakage caused by Python's pyport.h.
-#undef tolower
-#undef toupper
-#endif
-#endif // PXR_PYTHON_SUPPORT_ENABLED && !PXR_USE_INTERNAL_BOOST_PYTHON
 #include <tbb/cache_aligned_allocator.h>
 #include <tbb/concurrent_queue.h>
 #include <tbb/spin_mutex.h>

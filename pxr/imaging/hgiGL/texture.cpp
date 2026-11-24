@@ -7,9 +7,12 @@
 #include "pxr/imaging/garch/glApi.h"
 
 #include "pxr/imaging/hgi/sampler.h"
+#include "pxr/imaging/hgiGL/contextArena.h"
 #include "pxr/imaging/hgiGL/diagnostic.h"
 #include "pxr/imaging/hgiGL/conversions.h"
 #include "pxr/imaging/hgiGL/texture.h"
+
+#include "pxr/imaging/hf/perfLog.h"
 
 #include <algorithm>
 
@@ -25,6 +28,8 @@ _GlTextureStorageND(
     const GfVec3i &dimensions,
     const GLsizei layerCount)
 {
+    HF_MALLOC_TAG("GL Driver Texture Storage");
+
     switch(textureType) {
     case HgiTextureType1D:
         glTextureStorage1D(texture,
@@ -43,6 +48,12 @@ _GlTextureStorageND(
                            levels,
                            internalformat,
                            dimensions[0], dimensions[1], dimensions[2]);
+        break;
+    case HgiTextureTypeCubemap:
+        glTextureStorage2D(texture,
+                           levels,
+                           internalformat,
+                           dimensions[0], dimensions[1]);
         break;
     case HgiTextureType1DArray:
         glTextureStorage2D(texture,
@@ -99,6 +110,15 @@ _GlTextureSubImageND(
                             level,
                             offsets[0], offsets[1], offsets[2],
                             dimensions[0], dimensions[1], dimensions[2],
+                            format,
+                            type,
+                            pixels);
+        break;
+    case HgiTextureTypeCubemap:
+        glTextureSubImage3D(texture,
+                            level,
+                            offsets[0], offsets[1], offsets[2],
+                            dimensions[0], dimensions[1], layerCount,
                             format,
                             type,
                             pixels);
@@ -166,34 +186,6 @@ _GlCompressedTextureSubImageND(
     }
 }
 
-static
-bool _IsValidCompression(HgiTextureDesc const & desc)
-{
-    switch(desc.type) {
-    case HgiTextureType2D:
-        if ( desc.dimensions[0] % 4 != 0 ||
-             desc.dimensions[1] % 4 != 0) {
-            TF_CODING_ERROR("Compressed texture with width or height "
-                            "not a multiple of 4");
-            return false;
-        }
-        return true;
-    case HgiTextureType3D:
-        if ( desc.dimensions[0] % 4 != 0 ||
-             desc.dimensions[1] % 4 != 0 ||
-             desc.dimensions[2] % 4 != 0) {
-            TF_CODING_ERROR("Compressed texture with width, height or depth"
-                            "not a multiple of 4");
-            return false;
-        }
-        return true;
-    default:
-        TF_CODING_ERROR("Compression not supported for given texture "
-                        "type");
-        return false;
-    }
-}
-
 HgiGLTexture::HgiGLTexture(HgiTextureDesc const & desc)
     : HgiTexture(desc)
     , _textureId(0)
@@ -208,11 +200,6 @@ HgiGLTexture::HgiGLTexture(HgiTextureDesc const & desc)
         &glFormat,
         &glPixelType,
         &glInternalFormat);
-
-    const bool isCompressed = HgiIsCompressed(desc.format);
-    if (isCompressed && !_IsValidCompression(desc)) {
-        return;
-    }
 
     if (desc.sampleCount == HgiSampleCount1) {
         glCreateTextures(
@@ -291,7 +278,7 @@ HgiGLTexture::HgiGLTexture(HgiTextureDesc const & desc)
             for (size_t mip = 0; mip < mipLevels; mip++) {
                 const HgiMipInfo &mipInfo = mipInfos[mip];
 
-                if (isCompressed) {
+                if (HgiIsCompressed(desc.format)) {
                     _GlCompressedTextureSubImageND(
                         desc.type,
                         _textureId,
@@ -403,6 +390,12 @@ HgiGLTexture::HgiGLTexture(HgiTextureViewDesc const & desc)
 
 HgiGLTexture::~HgiGLTexture()
 {
+    for (auto& entry : _framebuffers) {
+        if (std::shared_ptr<FramebufferCacheItem> item = entry.first.lock()) {
+            entry.second->InvalidateCacheItem(item);
+        }
+    }
+
     if (_textureId > 0) {
         glDeleteTextures(1, &_textureId);
         _textureId = 0;
@@ -440,10 +433,18 @@ HgiGLTexture::GetBindlessHandle()
     return _bindlessHandle;
 }
 
-void 
+HgiTextureUsage
 HgiGLTexture::SubmitLayoutChange(HgiTextureUsage newLayout)
 {
-    return;
+    return 0;
+}
+
+void
+HgiGLTexture::AddFramebuffer(
+    std::weak_ptr<FramebufferCacheItem> cacheItem,
+    HgiGLContextArena* arena)
+{
+    _framebuffers.emplace_back(cacheItem, arena);
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE

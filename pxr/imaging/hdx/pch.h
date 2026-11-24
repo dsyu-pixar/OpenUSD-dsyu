@@ -16,7 +16,6 @@
 #include <sys/mount.h>
 #include <sys/param.h>
 #include <unistd.h>
-#include <mach/mach_time.h>
 #endif
 #if defined(ARCH_OS_LINUX)
 #include <glob.h>
@@ -24,7 +23,6 @@
 #include <sys/param.h>
 #include <sys/statfs.h>
 #include <unistd.h>
-#include <x86intrin.h>
 #endif
 #if defined(ARCH_OS_WINDOWS)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -34,15 +32,16 @@
 #include <Windows.h>
 #include <intrin.h>
 #include <io.h>
-#include <stringapiset.h>
 #endif
 #include <algorithm>
 #include <any>
 #include <array>
 #include <atomic>
 #include <cfloat>
+#include <chrono>
 #include <cinttypes>
 #include <cmath>
+#include <complex>
 #include <condition_variable>
 #include <cstdarg>
 #include <cstddef>
@@ -72,6 +71,7 @@
 #include <optional>
 #include <ostream>
 #include <set>
+#include <shared_mutex>
 #include <sstream>
 #include <stdarg.h>
 #include <stddef.h>
@@ -88,6 +88,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <variant>
 #include <vector>
 #ifdef PXR_MATERIALX_SUPPORT_ENABLED
 #include <MaterialXCore/Library.h>
@@ -95,15 +96,6 @@
 #ifdef PXR_OCIO_PLUGIN_ENABLED
 #include <OpenColorIO/OpenColorIO.h>
 #endif // PXR_OCIO_PLUGIN_ENABLED
-#if defined(PXR_PYTHON_SUPPORT_ENABLED) && !defined(PXR_USE_INTERNAL_BOOST_PYTHON)
-#include "pxr/external/boost/python/common.hpp"
-#include <boost/python/object_fwd.hpp>
-#include <boost/python/object_operators.hpp>
-#if defined(__APPLE__) // Fix breakage caused by Python's pyport.h.
-#undef tolower
-#undef toupper
-#endif
-#endif // PXR_PYTHON_SUPPORT_ENABLED && !PXR_USE_INTERNAL_BOOST_PYTHON
 #include <tbb/blocked_range.h>
 #include <tbb/cache_aligned_allocator.h>
 #include <tbb/concurrent_hash_map.h>
@@ -113,9 +105,11 @@
 #include <tbb/enumerable_thread_specific.h>
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_for_each.h>
+#include <tbb/parallel_reduce.h>
+#include <tbb/parallel_sort.h>
 #include <tbb/spin_mutex.h>
-#include <tbb/spin_rw_mutex.h>
 #include <tbb/task.h>
+#include <tbb/task_arena.h>
 #include <tbb/task_group.h>
 #ifdef PXR_PYTHON_SUPPORT_ENABLED
 #include "pxr/base/tf/pySafePython.h"

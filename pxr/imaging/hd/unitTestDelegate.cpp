@@ -510,6 +510,24 @@ HdUnitTestDelegate::RebindMaterial(SdfPath const &rprimId,
     tracker.MarkRprimDirty(rprimId, HdChangeTracker::DirtyMaterialId);
 }
 
+void 
+HdUnitTestDelegate::SetUseSceneMaterials(bool useSceneMaterials)
+{
+    if (!useSceneMaterials) {
+        // Update material resource to the fallback
+        for (const auto& [path, resource] : _materials) {
+            // store the scene materials
+            _sceneMaterials[path] = resource;
+            UpdateMaterialResource(path, VtValue());
+        }
+    } else {
+        // update the material resource to the scene material
+        for (const auto& [path, resource] : _sceneMaterials) {
+            UpdateMaterialResource(path, resource);
+        }
+    }
+}
+
 void
 HdUnitTestDelegate::HideRprim(SdfPath const& id) 
 {
@@ -1237,6 +1255,78 @@ HdUnitTestDelegate::AddCube(SdfPath const &id, GfMatrix4f const &transform, bool
 }
 
 void
+HdUnitTestDelegate::AddCube(SdfPath const &id, GfMatrix4f const &transform,
+                            bool guide, SdfPath const &instancerId,
+                            TfToken const &scheme, VtValue const &color,
+                            HdInterpolation colorInterpolation,
+                            VtValue const &opacity,
+                            HdInterpolation opacityInterpolation)
+{
+    GfVec3f points[] = {
+        GfVec3f( 1.0f, 1.0f, 1.0f ),
+        GfVec3f(-1.0f, 1.0f, 1.0f ),
+        GfVec3f(-1.0f,-1.0f, 1.0f ),
+        GfVec3f( 1.0f,-1.0f, 1.0f ),
+        GfVec3f(-1.0f,-1.0f,-1.0f ),
+        GfVec3f(-1.0f, 1.0f,-1.0f ),
+        GfVec3f( 1.0f, 1.0f,-1.0f ),
+        GfVec3f( 1.0f,-1.0f,-1.0f ),
+    };
+
+    if (scheme == PxOsdOpenSubdivTokens->loop) {
+        int numVerts[] = { 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3 };
+        int verts[] = {
+            0, 1, 2, 0, 2, 3,
+            4, 5, 6, 4, 6, 7,
+            0, 6, 5, 0, 5, 1,
+            4, 7, 3, 4, 3, 2,
+            0, 3, 7, 0, 7, 6,
+            4, 2, 1, 4, 1, 5,
+        };
+        AddMesh(
+            id,
+            transform,
+            _BuildArray(points, sizeof(points)/sizeof(points[0])),
+            _BuildArray(numVerts, sizeof(numVerts)/sizeof(numVerts[0])),
+            _BuildArray(verts, sizeof(verts)/sizeof(verts[0])),
+            /*holes*/VtIntArray(),
+            PxOsdSubdivTags(),
+            color,
+            colorInterpolation,
+            opacity,
+            opacityInterpolation,
+            guide,
+            instancerId,
+            scheme);
+    } else {
+        int numVerts[] = { 4, 4, 4, 4, 4, 4 };
+        int verts[] = {
+            0, 1, 2, 3,
+            4, 5, 6, 7,
+            0, 6, 5, 1,
+            4, 7, 3, 2,
+            0, 3, 7, 6,
+            4, 2, 1, 5,
+        };
+        AddMesh(
+            id,
+            transform,
+            _BuildArray(points, sizeof(points)/sizeof(points[0])),
+            _BuildArray(numVerts, sizeof(numVerts)/sizeof(numVerts[0])),
+            _BuildArray(verts, sizeof(verts)/sizeof(verts[0])),
+            /*holes*/VtIntArray(),
+            PxOsdSubdivTags(),
+            color,
+            colorInterpolation,
+            opacity,
+            opacityInterpolation,
+            guide,
+            instancerId,
+            scheme);
+    }
+}
+
+void
 HdUnitTestDelegate::AddPolygons(
     SdfPath const &id, GfMatrix4f const &transform,
     HdInterpolation colorInterp,
@@ -1408,9 +1498,9 @@ HdUnitTestDelegate::AddGrid(SdfPath const &id, int nx, int ny,
 
     AddMesh(id,
             transform,
-            _BuildArray(&points[0], points.size()),
-            _BuildArray(&numVerts[0], numVerts.size()),
-            _BuildArray(&verts[0], verts.size()),
+            _BuildArray(points.data(), points.size()),
+            _BuildArray(numVerts.data(), numVerts.size()),
+            _BuildArray(verts.data(), verts.size()),
             false,
             instancerId,
             PxOsdOpenSubdivTokens->catmullClark,
@@ -1436,9 +1526,9 @@ HdUnitTestDelegate::AddGridWithCustomColor(SdfPath const &id, int nx, int ny,
 
     AddMesh(id,
             transform,
-            _BuildArray(&points[0], points.size()),
-            _BuildArray(&numVerts[0], numVerts.size()),
-            _BuildArray(&verts[0], verts.size()),
+            _BuildArray(points.data(), points.size()),
+            _BuildArray(numVerts.data(), numVerts.size()),
+            _BuildArray(verts.data(), verts.size()),
             holes,
             subdivTags,
             color,
@@ -1474,9 +1564,9 @@ HdUnitTestDelegate::AddGridWithFaceColor(SdfPath const &id, int nx, int ny,
 
     AddMesh(id,
             transform,
-            _BuildArray(&points[0], points.size()),
-            _BuildArray(&numVerts[0], numVerts.size()),
-            _BuildArray(&verts[0], verts.size()),
+            _BuildArray(points.data(), points.size()),
+            _BuildArray(numVerts.data(), numVerts.size()),
+            _BuildArray(verts.data(), verts.size()),
             holes,
             subdivTags,
             VtValue(colorArray),
@@ -1512,9 +1602,9 @@ HdUnitTestDelegate::AddGridWithVertexColor(SdfPath const &id, int nx, int ny,
 
     AddMesh(id,
             transform,
-            _BuildArray(&points[0], points.size()),
-            _BuildArray(&numVerts[0], numVerts.size()),
-            _BuildArray(&verts[0], verts.size()),
+            _BuildArray(points.data(), points.size()),
+            _BuildArray(numVerts.data(), numVerts.size()),
+            _BuildArray(verts.data(), verts.size()),
             holes,
             subdivTags,
             VtValue(colorArray),
@@ -1550,9 +1640,9 @@ HdUnitTestDelegate::AddGridWithFaceVaryingColor(SdfPath const &id, int nx, int n
 
     AddMesh(id,
             transform,
-            _BuildArray(&points[0], points.size()),
-            _BuildArray(&numVerts[0], numVerts.size()),
-            _BuildArray(&verts[0], verts.size()),
+            _BuildArray(points.data(), points.size()),
+            _BuildArray(numVerts.data(), numVerts.size()),
+            _BuildArray(verts.data(), verts.size()),
             holes,
             subdivTags,
             VtValue(colorArray),

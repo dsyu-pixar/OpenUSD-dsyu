@@ -9,10 +9,8 @@ if (NOT ${PXR_BUILD_GPU_SUPPORT} OR NOT ${PXR_ENABLE_GL_SUPPORT})
     return()
 endif()
 
-set (optionalCppFiles "")
 if (PXR_BUILD_OPENCOLORIO_PLUGIN)
-    list(APPEND optionalLibs ${OCIO_LIBRARIES})
-    list(APPEND optionalIncludeDirs ${OCIO_INCLUDE_DIRS})
+    list(APPEND optionalLibs OpenColorIO::OpenColorIO)
 endif()
 
 pxr_library(hdx
@@ -32,9 +30,6 @@ pxr_library(hdx
         cameraUtil
         sdf
         ${optionalLibs}
-
-    INCLUDE_DIRS
-        ${optionalIncludeDirs}
 
     PUBLIC_CLASSES
         aovInputTask
@@ -63,9 +58,11 @@ pxr_library(hdx
         selectionTracker
         shadowTask
         simpleLightTask
+        stormCheck
         skydomeTask
         task
         taskController
+        taskControllerSceneIndex
         tokens
         types
         visualizeAovTask
@@ -92,9 +89,6 @@ pxr_library(hdx
         shaders/outline.glslfx
         shaders/renderPass.glslfx
         shaders/renderPassColorShader.glslfx
-        shaders/renderPassColorAndSelectionShader.glslfx
-        shaders/renderPassColorWithOccludedSelectionShader.glslfx
-        shaders/renderPassIdShader.glslfx
         shaders/renderPassPickingShader.glslfx
         shaders/renderPassOitShader.glslfx
         shaders/renderPassOitOpaqueShader.glslfx
@@ -110,7 +104,7 @@ pxr_library(hdx
         overview.dox
 )
 
-if (X11_FOUND OR APPLE)
+if (X11_FOUND OR APPLE OR WIN32)
 pxr_build_test(testHdxRenderTask
     LIBRARIES
         hdx
@@ -135,9 +129,20 @@ pxr_build_test(testHdxLightAndShadow
     CPPFILES
         testenv/testHdxLightAndShadow.cpp
 )
-endif()
+pxr_build_test(testHdxNoResourceBindings
+    LIBRARIES
+        hdx
+        hd
+        hdSt
+        sdf
+        glf
+        garch
+        arch
+        tf
+    CPPFILES
+        testenv/testHdxNoResourceBindings.cpp
+)
 
-if (X11_FOUND)
 pxr_build_test(testHdxIdRender
     LIBRARIES
         hdx
@@ -151,26 +156,12 @@ pxr_build_test(testHdxIdRender
     CPPFILES
         testenv/testHdxIdRender.cpp
 )
-pxr_build_test(testHdxPickAndHighlight
-    LIBRARIES
-        hdx
-        hd
-        hdSt
-        sdf
-        glf
-        garch
-        arch
-        tf
-    CPPFILES
-        unitTestUtils.cpp
-        testenv/testHdxPickAndHighlight.cpp
-)
 pxr_build_test(testHdxCameraAndLight
     LIBRARIES
         hdx
         hd
         sdf
-        glf
+        garch
         arch
         tf
     CPPFILES
@@ -232,50 +223,38 @@ pxr_build_test(testHdxPickResolveMode
         unitTestUtils.cpp
         testenv/testHdxPickResolveMode.cpp
 )
+pxr_build_test(testHdxPresentTask
+    LIBRARIES
+        hdx
+        hd
+        hdSt
+        sdf
+        glf
+        garch
+        arch
+        tf
+    CPPFILES
+        testenv/testHdxPresentTask.cpp
+)
+pxr_build_test(testHdxOitShaderRetention
+    LIBRARIES
+        hdx
+        hd
+        hdSt
+        sdf
+        glf
+        garch
+        arch
+        tf
+    CPPFILES
+        testenv/testHdxOitShaderRetention.cpp
+)
 endif()
 
 if (${PXR_HEADLESS_TEST_MODE})
     message(STATUS "Skipping ${PXR_PACKAGE} tests because PXR_HEADLESS_TEST_MODE is ON")
     return()
 endif()
-
-if (APPLE)
-    message(STATUS "Skipping ${PXR_PACKAGE} tests because they are currently unsupported on macOS")
-    return()
-endif()
-
-if (WIN32)
-    message(STATUS "Skipping ${PXR_PACKAGE} tests because they are currently unsupported on Windows")
-    return()
-endif()
-
-#
-# Install tests
-#
-pxr_install_test_dir(
-    SRC testenv/testHdxLightAndShadow
-    DEST testHdxLightAndShadow
-)
-pxr_install_test_dir(
-    SRC testenv/testHdxPickAndHighlight
-    DEST testHdxPickAndHighlight
-)
-pxr_install_test_dir(
-    SRC testenv/testHdxPickTarget
-    DEST testHdxPickTarget
-)
-pxr_install_test_dir(
-    SRC testenv/testHdxPickingWithReprAndRefineChanges
-    DEST testHdxPickingWithReprAndRefineChanges
-)
-pxr_install_test_dir(
-    SRC testenv/testHdxRenderTask
-    DEST testHdxRenderTask
-)
-pxr_install_test_dir(
-    SRC testenv/testHdxUnpickablesAsOccluders
-    DEST testHdxUnpickablesAsOccluders
-)
 
 #
 # Register tests
@@ -294,8 +273,14 @@ pxr_register_test(testHdxIdRender_Refined
     COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testHdxIdRender --offscreen --repr refined --refineLevel 2"
     EXPECTED_RETURN_CODE 0
 )
+if (NOT APPLE)
+pxr_register_test(testHdxPresentTask
+    COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testHdxPresentTask"
+    EXPECTED_RETURN_CODE 0
+)
 pxr_register_test(testHdxLightAndShadow
     COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testHdxLightAndShadow"
+    TESTENV testenv/testHdxLightAndShadow
     EXPECTED_RETURN_CODE 0
     IMAGE_DIFF_COMPARE
         color1.png
@@ -308,28 +293,16 @@ pxr_register_test(testHdxLightAndShadow
     ENV
         TF_DEBUG=HD_SAFE_MODE
 )
-pxr_register_test(testHdxPickAndHighlight
-    COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testHdxPickAndHighlight --offscreen"
-    EXPECTED_RETURN_CODE 0
-    IMAGE_DIFF_COMPARE
-        color1_unselected.png
-        color2_select.png
-        color3_select.png
-        color4_locate.png
-        color5_locate.png
-        color6_select_all_instances.png
-    FAIL 1
-    FAIL_PERCENT 1
-    PERCEPTUAL
-)
 pxr_register_test(testHdxPickResolveMode
     COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testHdxPickResolveMode --offscreen"
     EXPECTED_RETURN_CODE 0
     ENV
         TF_DEBUG="HDX_SELECTION_SETUP HD_SELECTION_UPDATE"
 )
+endif()
 pxr_register_test(testHdxPickTarget
     COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testHdxPickTarget --offscreen"
+    TESTENV testenv/testHdxPickTarget
     EXPECTED_RETURN_CODE 0
     IMAGE_DIFF_COMPARE
         color1_unselected.png
@@ -350,6 +323,7 @@ pxr_register_test(testHdxPickTarget
 )
 pxr_register_test(testHdxPickingWithReprAndRefineChanges
     COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testHdxPickingWithReprAndRefineChanges --offscreen"
+    TESTENV testenv/testHdxPickingWithReprAndRefineChanges
     EXPECTED_RETURN_CODE 0
     IMAGE_DIFF_COMPARE
         color1_unselected.png
@@ -364,6 +338,7 @@ pxr_register_test(testHdxPickingWithReprAndRefineChanges
 )
 pxr_register_test(testHdxRenderTask
     COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testHdxRenderTask"
+    TESTENV testenv/testHdxRenderTask
     EXPECTED_RETURN_CODE 0
     IMAGE_DIFF_COMPARE
         color1.png
@@ -375,8 +350,15 @@ pxr_register_test(testHdxRenderTask
     ENV
         TF_DEBUG=HD_SAFE_MODE
 )
+pxr_register_test(testHdxOitShaderRetention
+    COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testHdxOitShaderRetention"
+    EXPECTED_RETURN_CODE 0
+    ENV
+        HDX_ENABLE_OIT=1
+)
 pxr_register_test(testHdxUnpickablesAsOccluders
     COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testHdxUnpickablesAsOccluders --offscreen"
+    TESTENV testenv/testHdxUnpickablesAsOccluders
     EXPECTED_RETURN_CODE 0
     IMAGE_DIFF_COMPARE
         color1_unselected.png
@@ -386,7 +368,15 @@ pxr_register_test(testHdxUnpickablesAsOccluders
     FAIL_PERCENT 1
     PERCEPTUAL
 )
-
+pxr_register_test(testHdxNoResourceBindings
+    COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testHdxNoResourceBindings"
+    TESTENV testenv/testHdxNoResourceBindings
+    EXPECTED_RETURN_CODE 0
+    IMAGE_DIFF_COMPARE
+        color.png
+    FAIL 0.01
+    FAIL_PERCENT 0.01
+)
 # Certain tests use plugins that require shared libraries.
 if (TARGET shared_libs)
 
@@ -395,18 +385,16 @@ pxr_build_test(testHdxDrawTarget
         hdx
         hd
         sdf
-        glf
+        garch
         arch
         tf
     CPPFILES
         testenv/testHdxDrawTarget.cpp
 )
-pxr_install_test_dir(
-    SRC testenv/testHdxDrawTarget
-    DEST testHdxDrawTarget
-)
+if (NOT APPLE)
 pxr_register_test(testHdxDrawTarget
     COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testHdxDrawTarget"
+    TESTENV testenv/testHdxDrawTarget
     EXPECTED_RETURN_CODE 0
     IMAGE_DIFF_COMPARE
         color1.png
@@ -415,6 +403,66 @@ pxr_register_test(testHdxDrawTarget
     PERCEPTUAL
     ENV
         TF_DEBUG=HD_SAFE_MODE
+)
+endif()
+
+# testHdxPickAndHighlight needs SdrGlslfxParserPlugin
+pxr_build_test(testHdxPickAndHighlight
+    LIBRARIES
+        hdx
+        hd
+        hdSt
+        hio
+        sdr
+        sdf
+        glf
+        garch
+        arch
+        tf
+    CPPFILES
+        unitTestUtils.cpp
+        testenv/testHdxPickAndHighlight.cpp
+)
+pxr_register_test(testHdxPickAndHighlight
+    COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testHdxPickAndHighlight --offscreen"
+    TESTENV testenv/testHdxPickAndHighlight
+    EXPECTED_RETURN_CODE 0
+    IMAGE_DIFF_COMPARE
+        color1_unselected.png
+        color2_select.png
+        color3_select.png
+        color4_locate.png
+        color5_locate.png
+        color6_select_all_instances.png
+        color7_translucent_unselected.png
+        color8_translucent_locate.png
+    FAIL 1
+    FAIL_PERCENT 1
+    PERCEPTUAL
+)
+
+# testHdxPickTransparentOccluder needs SdrGlslfxParserPlugin
+pxr_build_test(testHdxPickTransparentOccluder
+    LIBRARIES
+        hdx
+        hd
+        hdSt
+        hio
+        sdr
+        sdf
+        glf
+        garch
+        arch
+        tf
+    CPPFILES
+        unitTestUtils.cpp
+        testenv/testHdxPickTransparentOccluder.cpp
+)
+pxr_register_test(testHdxPickTransparentOccluder
+    COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testHdxPickTransparentOccluder --offscreen"
+    EXPECTED_RETURN_CODE 0
+    ENV
+        TF_DEBUG="HDX_SELECTION_SETUP HD_SELECTION_UPDATE"
 )
 
 endif() # TARGET shared_libs

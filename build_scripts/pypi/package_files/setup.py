@@ -5,7 +5,13 @@
 # https://openusd.org/license.
 #
 import setuptools
-import argparse, glob, os, platform, re, shutil, sys
+import argparse
+import glob
+import os
+import platform
+import re
+import shutil
+import sys
 
 # This setup.py script expects to be run from an inst directory in a typical
 # USD build run from build_usd.py.
@@ -37,6 +43,9 @@ def windows():
 WORKING_ROOT = '.'
 USD_BUILD_OUTPUT = os.path.join(WORKING_ROOT, 'inst')
 BUILD_DIR = os.path.join(WORKING_ROOT, 'pypi')
+PYTHON_LIB_DIR = os.path.join(BUILD_DIR, 'lib/python')
+PXR_DIR = os.path.join(PYTHON_LIB_DIR, 'pxr')
+PLUGINFO_DIR = os.path.join(PXR_DIR, 'pluginfo')
 
 # Copy everything in lib over before we start making changes
 shutil.copytree(os.path.join(USD_BUILD_OUTPUT, 'lib'), os.path.join(BUILD_DIR, 'lib'))
@@ -45,7 +54,18 @@ shutil.copytree(os.path.join(USD_BUILD_OUTPUT, 'lib'), os.path.join(BUILD_DIR, '
 # distribution. This breaks the relative paths in the pluginfos, but we'll need
 # to update them later anyway after running "auditwheel repair", which will
 # move the libraries to a new directory
-shutil.move(os.path.join(BUILD_DIR, 'lib/usd'), os.path.join(BUILD_DIR, 'lib/python/pxr/pluginfo'))
+shutil.move(os.path.join(BUILD_DIR, 'lib/usd'), PLUGINFO_DIR)
+
+# Move the pluginfos for plugins that are distributed with the package
+# to the same directory as above.
+#
+# XXX:
+# Currently all plugins are built into the monolithic shared library, so
+# we just need to move the pluginfos over. If we ever ship plugins that
+# are kept separate, we'll need to copy those over too.
+for p in glob.glob(os.path.join(USD_BUILD_OUTPUT, 'plugin/usd/*')):
+    if os.path.isdir(p):
+        shutil.move(p, PLUGINFO_DIR)
 
 if windows():
     # On windows we also need dlls from the bin directory
@@ -57,12 +77,12 @@ if windows():
     dll_files = glob.glob(os.path.join(BUILD_DIR, "lib/*.dll"))
     dll_files.extend(glob.glob(os.path.join(BUILD_DIR, "bin/*.dll")))
     for f in dll_files:
-        shutil.move(f, os.path.join(BUILD_DIR, "lib/python/pxr"))
+        shutil.move(f, PXR_DIR)
 
     # Because there are no RPATHS, patch __init__.py
     # See this thread and related conversations
     # https://mail.python.org/pipermail/distutils-sig/2014-September/024962.html
-    with open(os.path.join(BUILD_DIR, 'lib/python/pxr/__init__.py'), 'a+') as init_file:
+    with open(os.path.join(PXR_DIR, '__init__.py'), 'a+') as init_file:
         init_file.write('''
 
 # appended to this file for the windows PyPI package
@@ -88,12 +108,12 @@ with open("README.md", "r") as fh:
 # Get the library version number from the installed pxr.h header.
 with open(os.path.join(USD_BUILD_OUTPUT, "include/pxr/pxr.h"), "r") as fh:
     for line in fh:
-        m = re.match("#define PXR_MINOR_VERSION (\d+)", line)
+        m = re.match(r"#define PXR_MINOR_VERSION (\d+)", line)
         if m:
             minorVersion = m.groups(1)[0]
             continue
 
-        m = re.match("#define PXR_PATCH_VERSION (\d+)", line)
+        m = re.match(r"#define PXR_PATCH_VERSION (\d+)", line)
         if m:
             patchVersion = m.groups(1)[0]
             continue
@@ -102,6 +122,13 @@ version = "{}.{}".format(minorVersion, patchVersion)
 
 if args.post_release_tag:
     version = "{}.{}".format(version, args.post_release_tag)
+
+# Build the list of all pluginfo files to include as package data.
+pluginfo_files = [
+    os.path.relpath(f, PXR_DIR)
+    for f in glob.glob(os.path.join(PLUGINFO_DIR, '**/*'), recursive=True)
+    if os.path.isfile(f)
+]
 
 # Config
 setuptools.setup(
@@ -112,6 +139,7 @@ setuptools.setup(
     description="Pixar's Universal Scene Description",
     long_description=long_description,
     long_description_content_type="text/markdown",
+    license="LicenseRef-TOST-1.0",
     url="https://openusd.org",
     project_urls={
         "Documentation": "https://openusd.org",
@@ -119,20 +147,19 @@ setuptools.setup(
         "Source": "https://github.com/PixarAnimationStudios/OpenUSD",
         "Discussion Group": "https://forum.openusd.org"
     },
-    packages=setuptools.find_packages(os.path.join(BUILD_DIR, 'lib/python')),
-    package_dir={"": os.path.join(BUILD_DIR, 'lib/python')},
+    packages=setuptools.find_packages(PYTHON_LIB_DIR),
+    package_dir={"": PYTHON_LIB_DIR},
     package_data={
         "": ["*.so", "*.dll", "*.pyd"],
-        "pxr": ["pluginfo/*", "pluginfo/*/*", "pluginfo/*/*/*"],
+        "pxr": pluginfo_files,
     },
     classifiers=[
         "Programming Language :: Python :: 3",
-        "License :: Other/Proprietary License",
         "Operating System :: POSIX :: Linux",
         "Operating System :: MacOS :: MacOS X",
         "Operating System :: Microsoft :: Windows :: Windows 10",
         "Environment :: Console",
         "Topic :: Multimedia :: Graphics",
     ],
-    python_requires='>=3.6, <3.13',
+    python_requires='>=3.11, <3.15',
 )

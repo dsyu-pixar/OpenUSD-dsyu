@@ -13,10 +13,6 @@
 #include "pxr/pxr.h"
 #include "pxr/external/boost/python/common.hpp"
 
-#ifndef PXR_USE_INTERNAL_BOOST_PYTHON
-#include <boost/python/object_core.hpp>
-#else
-
 # define PXR_BOOST_PYTHON_OBJECT_HAS_IS_NONE // added 2010-03-15 by rwgk
 
 # include "pxr/external/boost/python/detail/prefix.hpp"
@@ -430,6 +426,16 @@ inline api::object_base& api::object_base::operator=(api::object_base const& rhs
 
 inline api::object_base::~object_base()
 {
+#ifdef Py_GIL_DISABLED
+    // This is a not very elegant fix for a problem that occurs with the
+    // free-threaded build of Python.  If this is called when the interpreter
+    // has already been finalized, the thread-state can be null.  Unlike the
+    // GIL-enabled build, Py_DECREF() requires a valid thread-state.  This
+    // causes a memory leak, rather than crash, which seems preferable.
+    if (PyThreadState_GetUnchecked() == NULL) {
+        return;
+    }
+#endif
     assert( Py_REFCNT(m_ptr) > 0 );
     Py_DECREF(m_ptr);
 }
@@ -488,5 +494,4 @@ inline PyObject* get_managed_object(object const& x, tag_t)
 
 # include "pxr/external/boost/python/slice_nil.hpp"
 
-#endif // PXR_USE_INTERNAL_BOOST_PYTHON
 #endif // PXR_EXTERNAL_BOOST_PYTHON_OBJECT_CORE_HPP

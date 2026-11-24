@@ -36,13 +36,13 @@ PXR_NAMESPACE_OPEN_SCOPE
 ////////////////////////////////////////////////////////////////////////
 // Computing layer stacks
 
-// XXX Parallel layer prefetch is only available in usd-mode, until Sd
-// thread-safety issues can be fixed, specifically plugin loading:
-// - FileFormat plugins
-// - value type plugins for parsing AnimSplines
 TF_DEFINE_ENV_SETTING(
     PCP_ENABLE_PARALLEL_LAYER_PREFETCH, true,
-    "Enables parallel, threaded pre-fetch of sublayers.");
+    "Enables parallel, threaded pre-fetch of sublayers in USD mode.");
+
+TF_DEFINE_ENV_SETTING(
+    PCP_ENABLE_PARALLEL_NON_USD_LAYER_PREFETCH, true,
+    "Enables parallel, threaded pre-fetch of sublayers in non-USD mode.");
 
 TF_DEFINE_ENV_SETTING(
     PCP_ENABLE_LEGACY_RELOCATES_BEHAVIOR, true,
@@ -51,6 +51,11 @@ TF_DEFINE_ENV_SETTING(
     "context of all other relocates on the layer stack. This only applies to "
     "non-USD caches/layer stacks; the legacy behavior cannot be enabled in USD "
     "mode");
+
+TF_DEFINE_ENV_SETTING(PCP_ENABLE_SESSION_OWNER_SUBLAYER_REORDERING, true,
+    "When enabled, sublayer reordering is based on the session owner. "                     
+    "When disabled, sublayer order always follows declaration order; session owner "
+    "metadata is ignored.");
 
 struct Pcp_SublayerInfo {
     Pcp_SublayerInfo() = default;
@@ -290,7 +295,20 @@ public:
         TRACE_FUNCTION();
 
         _layerStack = &layerStack;
-        _isUsd = layerStack.IsUsd();
+        _supportsPrimRelocates = 
+            [&]() {
+                // If all layers in the layer stack share the same schema, just
+                // check whether that schema supports prim relocates.
+                const SdfSchemaBase* schema = 
+                    layerStack.GetSchemaForAllLayers();
+                if (schema) {
+                    return schema->IsRegistered(Pcp_Fields->primRelocates);
+                }
+
+                // Otherwise we need to check each layer to see if it may
+                // support prim relocates.
+                return true;
+            }();
 
         const SdfLayerRefPtrVector & layers = layerStack.GetLayers();
 
@@ -317,7 +335,7 @@ public:
         TRACE_FUNCTION();
 
         _layerStack = nullptr;
-        _isUsd = true;
+        _supportsPrimRelocates = false;
 
         // Compose the authored relocations from each layer.
         for (const auto &[layer, relocates] : layerRelocates) {
@@ -347,12 +365,11 @@ private:
             return;
         }
 
-        // Collect relocates from the layer metadata first. In USD mode, this
-        // is the only place we collect relocates from. In non-USD mode, 
-        // layer metadata relocates usurp any relocates otherwise authored on
-        // prims so we skip the full traversal of namespace for relocates if 
-        // we found layer metadata or are in USD mode.
-        if (_CollectLayerRelocates(layer) || _isUsd) {
+        // Collect relocates from the layer metadata first. These relocates
+        // usurp any relocates otherwise authored on prims so we skip the full
+        // traversal of namespace for relocates if we found layer relocates or
+        // this layer stack does not support prim relocates.
+        if (_CollectLayerRelocates(layer) || !_supportsPrimRelocates) {
             return;
         }
 
@@ -467,7 +484,8 @@ private:
     {
         // Check for relocations on this prim.
         SdfRelocatesMap relocates;
-        if (!layer->HasField(primPath, SdfFieldKeys->Relocates, &relocates)) {
+        if (!layer->HasField(primPath, Pcp_Fields->primRelocates,
+                             &relocates)) {
             return false;
         }
 
@@ -501,7 +519,8 @@ private:
     void
     _ConformLegacyRelocates()
     {
-        if (_isUsd || !TfGetEnvSetting(PCP_ENABLE_LEGACY_RELOCATES_BEHAVIOR)) {
+        if (!_supportsPrimRelocates ||
+            !TfGetEnvSetting(PCP_ENABLE_LEGACY_RELOCATES_BEHAVIOR)) {
             return;
         }
 
@@ -624,7 +643,8 @@ private:
             // will update these cases to conform in the future, but the work to
             // do so is non-trivial, so for now we need to allow these cases to 
             // still work.
-            if (!_isUsd && TfGetEnvSetting(PCP_ENABLE_LEGACY_RELOCATES_BEHAVIOR)) {
+            if (_supportsPrimRelocates &&
+                TfGetEnvSetting(PCP_ENABLE_LEGACY_RELOCATES_BEHAVIOR)) {
                 continue;
             }
 
@@ -863,7 +883,7 @@ private:
     }
 
     const PcpLayerStack *_layerStack = nullptr;
-    bool _isUsd = true;
+    bool _supportsPrimRelocates = false;
 
     std::vector<PcpErrorInvalidConflictingRelocationPtr>
         _invalidConflictingRelocates;
@@ -987,8 +1007,15 @@ _FilterRelocationsForPath(const PcpLayerStack& layerStack,
 
     siteRelocates[SdfPath::AbsoluteRootPath()] = SdfPath::AbsoluteRootPath();
 
-    // Return a map function representing the relocates.
-    return PcpMapFunction::Create(siteRelocates, SdfLayerOffset());
+    // Return a map function representing the relocates. There may be an
+    // arbitrarily large number of relocates so we use a deferred-composition
+    // map function to improve performance in those cases.
+    // 
+    // XXX: Might want to explore tuning this to only return
+    // deferred-composition map functions if relocates are larger than a
+    // certain size.
+    return PcpMapFunction::DeferredComposition(
+        PcpMapFunction::Create(siteRelocates, SdfLayerOffset()));
 }
 
 ////////////////////////////////////////////////////////////////////////
@@ -1061,6 +1088,11 @@ Pcp_NeedToRecomputeLayerStackTimeCodesPerSecond(
     return newLayerStackTcps != layerStack->GetTimeCodesPerSecond();
 }
 
+bool PcpIsSessionOwnerSublayerReorderingEnabled()
+{
+    return TfGetEnvSetting(PCP_ENABLE_SESSION_OWNER_SUBLAYER_REORDERING);
+}
+
 ////////////////////////////////////////////////////////////////////////
 // PcpLayerStack
 
@@ -1113,6 +1145,7 @@ PcpLayerStack::PcpLayerStack(
                 std::move(composedExpressionVars));
 
         }())
+    , _schemaForAllLayers(nullptr)
     , _isUsd(registry._IsUsd())
 
     // Note that we do not set the _registry member here. This will be
@@ -1389,6 +1422,12 @@ PcpLayerStack::GetLayerOffsetForLayer(size_t layerIdx) const
     return layerOffset.IsIdentity() ? NULL : &layerOffset;
 }
 
+const SdfSchemaBase*
+PcpLayerStack::GetSchemaForAllLayers() const
+{
+    return _schemaForAllLayers;
+}
+
 const std::set<std::string>& 
 PcpLayerStack::GetMutedLayers() const
 {
@@ -1539,6 +1578,10 @@ PcpLayerStack::_Compute(const std::string &fileFormatTarget,
 
     // The session owner.  This will be empty if there is no session owner
     // in the session layer.
+    //
+    // This will also be empty if sublayer reordering is disabled. In this case, 
+    // we want to skip any reordering based on the session owner, so we don't 
+    // bother computing the session owner at all.
     std::string sessionOwner;
 
     PcpErrorVector errors;
@@ -1548,6 +1591,9 @@ PcpLayerStack::_Compute(const std::string &fileFormatTarget,
 
     const double rootTcps = _identifier.rootLayer->GetTimeCodesPerSecond();
     SdfLayerOffset rootLayerOffset;
+
+    // Initialize _schemaForAllLayers.
+    _schemaForAllLayers = &_identifier.rootLayer->GetSchema();
 
     // The layer stack's time codes per second initially comes from the root 
     // layer. An opinion in the session layer may override it below.
@@ -1596,26 +1642,29 @@ PcpLayerStack::_Compute(const std::string &fileFormatTarget,
                                  std::string(), mutedLayers, &seenLayers, 
                                  &errors);
 
-            // Get the session owner.
-            struct _Helper {
-                static bool FindSessionOwner(const SdfLayerTreeHandle& tree,
-                                             std::string* sessionOwner)
-                {
-                    if (tree->GetLayer()->HasField(SdfPath::AbsoluteRootPath(), 
-                                                   SdfFieldKeys->SessionOwner,
-                                                   sessionOwner)) {
-                        return true;
-                    }
-                    TF_FOR_ALL(subtree, tree->GetChildTrees()) {
-                        if (FindSessionOwner(*subtree, sessionOwner)) {
+            // Get the session owner if we want to reorder sublayers based on 
+            // the session owner.
+            if (PcpIsSessionOwnerSublayerReorderingEnabled()) {
+                struct _Helper {
+                    static bool FindSessionOwner(const SdfLayerTreeHandle& tree,
+                                                std::string* sessionOwner)
+                    {
+                        if (tree->GetLayer()->HasField(SdfPath::AbsoluteRootPath(), 
+                                                    SdfFieldKeys->SessionOwner,
+                                                    sessionOwner)) {
                             return true;
                         }
+                        TF_FOR_ALL(subtree, tree->GetChildTrees()) {
+                            if (FindSessionOwner(*subtree, sessionOwner)) {
+                                return true;
+                            }
+                        }
+                        return false;
                     }
-                    return false;
-                }
-            };
+                };
 
-            _Helper::FindSessionOwner(_sessionLayerTree, &sessionOwner);
+                _Helper::FindSessionOwner(_sessionLayerTree, &sessionOwner);
+            }
         }
     }
 
@@ -1666,14 +1715,37 @@ PcpLayerStack::_BuildLayerStack(
     // Accumulate layer into results.
     _layers.push_back(layer);
 
+    if (_schemaForAllLayers != &layer->GetSchema()) {
+        _schemaForAllLayers = nullptr;
+    }
+
     const PcpMapFunction::PathMap &identity = PcpMapFunction::IdentityPathMap();
     PcpMapFunction mapFunction = PcpMapFunction::Create(identity, offset);
     _mapFunctions.push_back(mapFunction);
         
     // Recurse over sublayers to build subtrees.
     vector<string> sublayers = layer->GetSubLayerPaths();
-    const SdfLayerOffsetVector &sublayerOffsets = layer->GetSubLayerOffsets();
+    SdfLayerOffsetVector sublayerOffsets = layer->GetSubLayerOffsets();
     const size_t numSublayers = sublayers.size();
+
+    // We should report a composition error if the number of sublayers is not
+    // equal to the number of offsets, these must be of the same size, else the
+    // following code will be out-of-bounds. This is an illegal scenario and we
+    // report these as PcpErrorInvalidSublayerAndOffsetCount errors. We will
+    // also update the sublayerOffsets to identity offsets to avoid
+    // out-of-bounds.
+    if (numSublayers != sublayerOffsets.size()) {
+        PcpErrorInvalidSublayerAndOffsetCountPtr err =
+            PcpErrorInvalidSublayerAndOffsetCount::New();
+        err->rootSite = PcpSite(_identifier, SdfPath::AbsoluteRootPath());
+        err->layer = layer;
+        err->sublayerCount = numSublayers;
+        err->offsetCount = sublayerOffsets.size();
+        errors->push_back(std::move(err));
+        // need to update sublayerOffsets to identity offsets to avoid
+        // out-of-bounds access below
+        sublayerOffsets.assign(numSublayers, SdfLayerOffset());
+    }
 
     // Evaluate expressions and compute mutedness first.
     for(size_t i=0; i != numSublayers; ++i) {
@@ -1733,10 +1805,10 @@ PcpLayerStack::_BuildLayerStack(
     
     // Open all the layers in parallel.
     WorkWithScopedDispatcher([&](WorkDispatcher &wd) {
-        // Cannot use parallelism for non-USD clients due to thread-safety
-        // issues in file format plugins & value readers.
-        const bool goParallel = _isUsd && numSublayers > 1 &&
-            TfGetEnvSetting(PCP_ENABLE_PARALLEL_LAYER_PREFETCH);
+        const bool goParallel = numSublayers > 1 && (
+            (_isUsd && TfGetEnvSetting(PCP_ENABLE_PARALLEL_LAYER_PREFETCH)) ||
+            (!_isUsd && TfGetEnvSetting(
+                PCP_ENABLE_PARALLEL_NON_USD_LAYER_PREFETCH)));
 
         for (size_t i=0; i != numSublayers; ++i) {
             if (sublayers[i].empty()) {
@@ -1786,8 +1858,12 @@ PcpLayerStack::_BuildLayerStack(
 
         // Check sublayer offset.
         SdfLayerOffset sublayerOffset = sublayerOffsets[i];
-        if (!sublayerOffset.IsValid()
-            || !sublayerOffset.GetInverse().IsValid()) {
+
+        const bool isNegativeScale = sublayerOffset.GetScale() < 0.0;
+
+        if (isNegativeScale ||
+            !sublayerOffset.IsValid() || 
+            !sublayerOffset.GetInverse().IsValid()) {
             // Report error, but continue with an identity layer offset.
             PcpErrorInvalidSublayerOffsetPtr err =
                 PcpErrorInvalidSublayerOffset::New();
@@ -1828,9 +1904,11 @@ PcpLayerStack::_BuildLayerStack(
     }
     localSourceInfo.clear();
 
-    // Reorder sublayers according to sessionOwner.
-    _ApplyOwnedSublayerOrder(_identifier, layer, sessionOwner, &sublayerInfo,
-                             errors);
+    // Reorder sublayers according to sessionOwner if needed.
+    if (PcpIsSessionOwnerSublayerReorderingEnabled()) {
+        _ApplyOwnedSublayerOrder(_identifier, layer, sessionOwner, &sublayerInfo,
+                                errors);
+    }
 
     // Recurse over sublayers to build subtrees.  We must do this after
     // applying the sublayer order, otherwise _layers and

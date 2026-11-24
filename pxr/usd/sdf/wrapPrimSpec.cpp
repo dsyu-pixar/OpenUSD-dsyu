@@ -104,6 +104,13 @@ _SetSymmetryArguments(const SdfPrimSpec& self,
 }
 
 static void
+_SetClips(const SdfPrimSpec& self,
+          VtDictionary const &dictionary)
+{
+    self.GetClips() = dictionary;
+}
+
+static void
 _SetCustomData(const SdfPrimSpec& self,
                VtDictionary const &dictionary)
 {
@@ -117,23 +124,6 @@ _SetAssetInfo(const SdfPrimSpec& self,
     self.GetAssetInfo() = dictionary;
 }
 
-static void
-_SetRelocates(SdfPrimSpec& self, const dict &d)
-{
-    SdfRelocatesMap reloMap;
-
-    auto items = d.attr("items")();
-    auto end =  stl_input_iterator<tuple>();
-    for (auto it = stl_input_iterator<tuple>(items); it != end; ++it) {
-        tuple kv = *it;
-        SdfPath key = extract<SdfPath>(kv[0]);
-        SdfPath val = extract<SdfPath>(kv[1]);
-
-        reloMap[key] = val;
-    }
-
-    self.SetRelocates(reloMap);
-}
 
 ////////////////////////////////////////////////////////////////////////
 
@@ -268,6 +258,24 @@ void wrapPrimSpec()
             &This::SetPermission,
             "The prim's permission restriction.\n"
             "The default value is SdfPermissionPublic.")
+
+        .add_property("clipSetsList",
+            &This::GetClipSetsList,
+            "A StringListEditor for the prim's value clip sets.\n\n"
+            "The list of the clip sets for this prim may be "
+            "modified with this NameListEditor.\n\n"
+            "A NameListEditor may express a list either as an explicit "
+            "value or as a set of list editing operations.  See NameListEditor "
+            "for more information.")
+
+        .add_property("clips",
+            &This::GetClips,
+            &_SetClips,
+            "Dictionary with value clips information.")
+
+        .add_property("hasClipSets",
+            &This::HasClipSets,
+            "Returns true if this prim has clipSets set.")
 
         .add_property("symmetryFunction",
             &This::GetSymmetryFunction,
@@ -486,14 +494,6 @@ void wrapPrimSpec()
             &This::HasSpecializes,
             "Returns true if this prim has specializes set.")
 
-        .add_property("relocates",
-            &This::GetRelocates,
-            &_SetRelocates,
-            "An editing proxy for the prim's map of relocation paths.\n\n"
-            "The map of source-to-target paths specifying namespace "
-            "relocation may be set or cleared whole, or individual map "
-            "entries may be added, removed, or edited.")
-
         .def("ClearReferenceList",
             &This::ClearReferenceList,
             "Clears the references for this prim.")
@@ -525,7 +525,6 @@ void wrapPrimSpec()
         .setattr("PrefixSubstitutionsKey", SdfFieldKeys->PrefixSubstitutions)
         .setattr("PropertyOrderKey", SdfFieldKeys->PropertyOrder)
         .setattr("ReferencesKey", SdfFieldKeys->References)
-        .setattr("RelocatesKey", SdfFieldKeys->Relocates)
         .setattr("SpecializesKey", SdfFieldKeys->Specializes)
         .setattr("SpecifierKey", SdfFieldKeys->Specifier)
         .setattr("SymmetricPeerKey", SdfFieldKeys->SymmetricPeer)

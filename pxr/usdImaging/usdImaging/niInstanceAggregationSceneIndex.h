@@ -9,6 +9,8 @@
 
 #include "pxr/pxr.h"
 
+#include "pxr/usdImaging/usdImaging/api.h"
+
 #include "pxr/imaging/hd/filteringSceneIndex.h"
 
 PXR_NAMESPACE_OPEN_SCOPE
@@ -137,14 +139,15 @@ TF_DECLARE_REF_PTRS(UsdImaging_NiInstanceAggregationSceneIndex);
 /// {
 ///     def Cube "MyCube"
 ///     {
-///          rel:material:binding = </MyMaterial>
 ///     }
 /// }
 ///
 /// def "Cube_1" (
 ///     instanceable = true
 ///     references = </MyPrototype>
+///     prepend apiSchemas = ["MaterialBindingAPI"]
 /// {
+///     rel:material:binding = </Cube_1/MyMaterial>
 /// }
 ///
 /// UsdImaging_NiInstanceAggregationSceneIndex (with empty prototype root)
@@ -157,7 +160,7 @@ TF_DECLARE_REF_PTRS(UsdImaging_NiInstanceAggregationSceneIndex);
 ///     primType: ""
 ///     dataSource:
 ///         materialBinding:
-///             "": /MyMaterial
+///             "": /UsdNiPropagatedPrototypes/Binding312...436/__Prototype_1/UsdNiInstancer/MyMaterial # Note that it was translated to point into the propagated prototype by the UsdImagingRerootingContainerDataSource.
 /// /UsdNiPropagatedPrototypes/Binding312...436/__Prototype_1
 ///     primType: ""
 /// /UsdNiPropagatedPrototypes/Binding312...436/__Prototype_1/UsdNiInstancer
@@ -226,6 +229,7 @@ TF_DECLARE_REF_PTRS(UsdImaging_NiInstanceAggregationSceneIndex);
 ///
 class UsdImaging_NiInstanceAggregationSceneIndex final
                 : public HdFilteringSceneIndexBase
+                , public HdEncapsulatingSceneIndexBase
 {
 public:
     // forNativePrototype = false indicates that this scene index is
@@ -257,10 +261,12 @@ public:
 
     std::vector<HdSceneIndexBaseRefPtr> GetInputScenes() const override;
 
+    std::vector<HdSceneIndexBaseRefPtr> GetEncapsulatedScenes() const override;
+
     // If the given path is for an instancer in this scene index, returns the
     // name of the prototype that this instancer is meant to instance.
     // Otherwise, return empty token.
-    static
+    USDIMAGING_API static
     TfToken GetPrototypeNameFromInstancerPath(const SdfPath &primPath);
 
     // If the given path is for an instancer in this scene index, returns
@@ -269,7 +275,7 @@ public:
     //
     // That is the data source of that scope needs to be used when resolving
     // the opinions on the prototype that this instancer is meant to instance.
-    static
+    USDIMAGING_API static
     SdfPath GetBindingScopeFromInstancerPath(const SdfPath &primPath);
 
 private:
@@ -297,6 +303,7 @@ private:
         UsdImaging_NiInstanceAggregationSceneIndex * const _owner;
     };
 
+    USDIMAGING_API
     UsdImaging_NiInstanceAggregationSceneIndex(
         HdSceneIndexBaseRefPtr const &inputScene,
         bool forNativePrototype,

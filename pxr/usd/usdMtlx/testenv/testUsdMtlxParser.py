@@ -17,7 +17,7 @@ class TestParser(unittest.TestCase):
         Test MaterialX node parser.
         """
         # Find our nodes.
-        nodes = Sdr.Registry().GetShaderNodesByFamily('UsdMtlxTestNode')
+        nodes = Sdr.Registry().GetShaderNodesByFunction('UsdMtlxTestNode')
         self.assertEqual(sorted([node.GetName() for node in nodes]), [
             'UsdMtlxTestNamespace:nd_boolean',
             'UsdMtlxTestNamespace:nd_color3',
@@ -35,10 +35,10 @@ class TestParser(unittest.TestCase):
             implementationUri = node.GetResolvedImplementationURI()
             self.assertEqual(os.path.normcase(implementationUri), 
                     os.path.normcase(os.path.abspath("test.mtlx")))
-            self.assertEqual(node.GetSourceType(), "mtlx")
-            self.assertEqual(node.GetFamily(), "UsdMtlxTestNode")
-            self.assertEqual(sorted(node.GetInputNames()), ["in", "note"])
-            self.assertEqual(node.GetOutputNames(), ['out'])
+            self.assertEqual(node.GetShadingSystem(), "mtlx")
+            self.assertEqual(node.GetFunction(), "UsdMtlxTestNode")
+            self.assertEqual(sorted(node.GetShaderInputNames()), ["in", "note"])
+            self.assertEqual(node.GetShaderOutputNames(), ['out'])
 
         # Verify some metadata:
         node = Sdr.Registry().GetShaderNodeByIdentifier(
@@ -50,7 +50,7 @@ class TestParser(unittest.TestCase):
         self.assertEqual(node.GetPages(), ["UI Page", ""])
         self.assertEqual(node.GetPropertyNamesForPage("UI Page"), ["in",])
         self.assertEqual(node.GetPropertyNamesForPage(""), ["note", "out"])
-        input = node.GetInput("in")
+        input = node.GetShaderInput("in")
         self.assertEqual(input.GetHelp(), "Property help")
         self.assertEqual(input.GetLabel(), "UI Vector")
         self.assertEqual(input.GetPage(), "UI Page")
@@ -68,7 +68,7 @@ class TestParser(unittest.TestCase):
             "unittype": "angle",
             "unit": "degree"
         }
-        input = node.GetInput("in")
+        input = node.GetShaderInput("in")
         self.assertEqual(input.GetHelp(), "Unit is degree.")
         hints = input.GetHints()
         metadata = input.GetMetadata()
@@ -94,7 +94,7 @@ class TestParser(unittest.TestCase):
             name = node.GetName()[24:]
 
             # Get the input.
-            prop = node.GetInput('in')
+            prop = node.GetShaderInput('in')
 
             # Verify type.
             self.assertEqual(prop.GetType(), typeNameMap.get(name))

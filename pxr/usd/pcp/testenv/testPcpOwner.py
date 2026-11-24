@@ -5,7 +5,6 @@
 # Licensed under the terms set forth in the LICENSE.txt file available at
 # https://openusd.org/license.
 
-from __future__ import print_function
 from pxr import Tf, Pcp, Sdf
 import os, sys, unittest
 
@@ -14,17 +13,17 @@ class TestPcpOwner(unittest.TestCase):
         """Automatically invoked once before any test cases are run."""
 
         # Find the sibling sublayers that contain value opinions.
-        self.animLayer     = Sdf.Layer.FindOrOpen("anim.sdf")
-        self.strongerLayer = Sdf.Layer.FindOrOpen("stronger.sdf")
-        self.userLayer     = Sdf.Layer.FindOrOpen("owned.sdf")
-        self.weakerLayer   = Sdf.Layer.FindOrOpen("weaker.sdf")
+        self.animLayer     = Sdf.Layer.FindOrOpen("anim.usda")
+        self.strongerLayer = Sdf.Layer.FindOrOpen("stronger.usda")
+        self.userLayer     = Sdf.Layer.FindOrOpen("owned.usda")
+        self.weakerLayer   = Sdf.Layer.FindOrOpen("weaker.usda")
 
         self.assertTrue(self.strongerLayer)
         self.assertTrue(self.userLayer)
         self.assertTrue(self.weakerLayer)
 
         # Open the shot, and ensure that it has a session layer.
-        self.rootLayer = Sdf.Layer.FindOrOpen("shot.sdf")
+        self.rootLayer = Sdf.Layer.FindOrOpen("shot.usda")
         self.assertTrue(self.rootLayer)
 
         self.sessionLayer = Sdf.Layer.CreateAnonymous("session")

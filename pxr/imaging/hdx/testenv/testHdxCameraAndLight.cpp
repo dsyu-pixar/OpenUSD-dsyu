@@ -5,8 +5,7 @@
 // https://openusd.org/license.
 //
 
-#include "pxr/imaging/glf/glContext.h"
-#include "pxr/imaging/glf/testGLContext.h"
+#include "pxr/imaging/garch/glDebugWindow.h"
 
 #include "pxr/imaging/hd/changeTracker.h"
 #include "pxr/imaging/hd/driver.h"
@@ -54,10 +53,10 @@ static void CameraAndLightTest()
     HdChangeTracker& tracker = index->GetChangeTracker();
     HdPerfLog& perfLog = HdPerfLog::GetInstance();
     perfLog.Enable();
-    HdRprimCollection collection(HdTokens->geometry, 
+    HdRprimCollection collection(HdTokens->geometry,
         HdReprSelector(HdReprTokens->hull));
     HdEngine engine;
-    
+
     // --------------------------------------------------------------------
 
     // prep tasks
@@ -68,48 +67,11 @@ static void CameraAndLightTest()
     HdTaskSharedPtrVector tasks;
     tasks.push_back(index->GetTask(renderSetupTask));
     tasks.push_back(index->GetTask(renderTask));
-    
+
     // Setup AOVs
-    const SdfPath colorAovId = SdfPath("/aov_color");
-    const SdfPath depthAovId = SdfPath("/aov_depth");
-    HdRenderPassAovBindingVector aovBindings;
+    const HdRenderPassAovBindingVector aovBindings =
+        delegate->AddAovBindings(GfVec2i(512, 512));
 
-    // Color AOV
-    {
-        HdRenderPassAovBinding colorAovBinding;
-        const HdAovDescriptor colorAovDesc = 
-            renderDelegate.GetDefaultAovDescriptor(HdAovTokens->color);
-        colorAovBinding.aovName = HdAovTokens->color;
-        colorAovBinding.clearValue = VtValue(GfVec4f(0.1f, 0.1f, 0.1f, 1.0f));
-        colorAovBinding.renderBufferId = colorAovId;
-        colorAovBinding.aovSettings = colorAovDesc.aovSettings;
-        aovBindings.push_back(std::move(colorAovBinding));
-
-        HdRenderBufferDescriptor colorRbDesc;
-        colorRbDesc.dimensions = GfVec3i(512, 512, 1);
-        colorRbDesc.format = colorAovDesc.format;
-        colorRbDesc.multiSampled = false;
-        delegate->AddRenderBuffer(colorAovId, colorRbDesc);
-    }
-
-    // Depth AOV
-    {
-        HdRenderPassAovBinding depthAovBinding;
-        const HdAovDescriptor depthAovDesc = 
-            renderDelegate.GetDefaultAovDescriptor(HdAovTokens->depth);
-        depthAovBinding.aovName = HdAovTokens->depth;
-        depthAovBinding.clearValue = VtValue(1.f);
-        depthAovBinding.renderBufferId = depthAovId;
-        depthAovBinding.aovSettings = depthAovDesc.aovSettings;
-        aovBindings.push_back(std::move(depthAovBinding));
-
-        HdRenderBufferDescriptor depthRbDesc;
-        depthRbDesc.dimensions = GfVec3i(512, 512, 1);
-        depthRbDesc.format = depthAovDesc.format;
-        depthRbDesc.multiSampled = false;
-        delegate->AddRenderBuffer(depthAovId, depthRbDesc);
-    }
-    
     // Set render task param
     delegate->SetTaskParam(
         renderTask, HdTokens->collection, VtValue(collection));
@@ -120,7 +82,7 @@ static void CameraAndLightTest()
     param.enableLighting = true;
     param.aovBindings = aovBindings;
     delegate->SetTaskParam(renderSetupTask, HdTokens->params, VtValue(param));
-    
+
     // Set up scene
     GfMatrix4d tx(1.0f);
     tx.SetRow(3, GfVec4f(5, 0, 5, 1.0));
@@ -159,8 +121,9 @@ static void CameraAndLightTest()
 
     engine.Execute(index.get(), &tasks);
 
-    // batch rebuilt
-    VERIFY_PERF_COUNT(HdPerfTokens->rebuildBatches, 2);
+    // No shadow task is part of this test, so no shadow render pass picks up
+    // the new collection, and the main render pass's batches are not rebuilt.
+    VERIFY_PERF_COUNT(HdPerfTokens->rebuildBatches, 1);
 
     // Update shadow collection again with the same data
     delegate->SetLight(light, HdLightTokens->shadowCollection,
@@ -171,15 +134,15 @@ static void CameraAndLightTest()
     engine.Execute(index.get(), &tasks);
 
     // batch should not be rebuilt
-    VERIFY_PERF_COUNT(HdPerfTokens->rebuildBatches, 2);
+    VERIFY_PERF_COUNT(HdPerfTokens->rebuildBatches, 1);
 }
 
 int main()
 {
     TfErrorMark mark;
 
-    GlfTestGLContext::RegisterGLContextCallbacks();
-    GlfSharedGLContextScopeHolder sharedContext;
+    GarchGLDebugWindow window("Hd Test", 512, 512);
+    window.Init();
 
     CameraAndLightTest();
 

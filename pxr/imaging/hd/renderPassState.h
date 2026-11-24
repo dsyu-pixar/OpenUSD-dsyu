@@ -50,6 +50,11 @@ public:
     HD_API
     virtual ~HdRenderPassState();
 
+    /// Copy state from src into this object. Overridden in derived classes
+    /// to avoid object slicing when copying through a base-class pointer.
+    HD_API
+    virtual void Copy(HdRenderPassState const& src);
+
     /// Schedule to update renderPassState parameters.
     /// e.g. camera matrix, override color, id blend factor.
     /// Prepare, called once per frame after the sync phase, but prior to
@@ -191,6 +196,10 @@ public:
     HD_API
     void SetClippingEnabled(bool enabled);
     bool GetClippingEnabled() const { return _clippingEnabled; }
+
+    HD_API
+    void SetEnableExposureCompensation(bool enableExposureCompensation);
+    bool GetEnableExposureCompensation() const { return _enableExposureCompensation; }
 
     // ---------------------------------------------------------------------- //
     /// \name Render pipeline state
@@ -357,6 +366,7 @@ protected:
     float _pointSize;
     bool _lightingEnabled;
     bool _clippingEnabled;
+    bool _enableExposureCompensation;
 
     GfVec4f _maskColor;
     GfVec4f _indicatorColor;

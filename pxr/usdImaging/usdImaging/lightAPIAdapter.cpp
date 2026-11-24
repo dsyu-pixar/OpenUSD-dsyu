@@ -5,6 +5,7 @@
 // https://openusd.org/license.
 //
 #include "pxr/usdImaging/usdImaging/lightAPIAdapter.h"
+#include "pxr/usdImaging/usdImaging/dataSourceRelationship.h"
 #include "pxr/usdImaging/usdImaging/primAdapter.h"
 
 
@@ -46,20 +47,30 @@ public:
     Get(const TfToken &name) override
     {
         if (name == HdTokens->filters) {
-            SdfPathVector filterPaths;
-            _lightApi.GetFiltersRel().GetForwardedTargets(&filterPaths);
-            return HdCreateTypedRetainedDataSource(VtValue(filterPaths));
-
+            return UsdImagingDataSourceRelationship::New(
+                _lightApi.GetFiltersRel(), _stageGlobals);
         }
         if (name == HdTokens->isLight) {
             return HdRetainedTypedSampledDataSource<bool>::New(true);
         }
         if (name == HdTokens->materialSyncMode) {
+            // XXX: This branch is functionally identical to the else branch
+            // below. Maintained separate because materialSyncMode is a known
+            // light schema member. Also note that UsdLux declares
+            // materialSyncMode as `uniform` and, strictly speaking, should
+            // never be time-varying. However, time-varying values survive so
+            // long as USD_VALIDATE_VARIABILITY isn't enabled. Allowing this
+            // parameter to be time-varying is useful for testing purposes; if
+            // production demands require time-varying materialSyncMode, UsdLux
+            // schema will need to be updated to drop `uniform` from the
+            // declaration.
             if (UsdAttribute attr = _lightApi.GetMaterialSyncModeAttr()) {
-                TfToken v;
-                if (attr.Get(&v)) {
-                    return HdRetainedTypedSampledDataSource<TfToken>::New(v);
-                }
+                return UsdImagingDataSourceAttributeNew(
+                    attr,
+                    _stageGlobals,
+                    _lightApi.GetPrim().GetPath(),
+                    HdLightSchema::GetDefaultLocator().Append(
+                        HdTokens->materialSyncMode));
             }
         } else {
 
@@ -101,15 +112,36 @@ private:
     _LightDataSource(
         const UsdLuxLightAPI &lightApi,
         const UsdImagingDataSourceStageGlobals &stageGlobals)
-    : _lightApi(lightApi)
-    , _stageGlobals(stageGlobals)
-    {}
+      : _lightApi(lightApi)
+      , _stageGlobals(stageGlobals)
+    { }
 
     UsdLuxLightAPI _lightApi;
     const UsdImagingDataSourceStageGlobals &_stageGlobals;
 };
 
 } // namespace anonymous
+
+TfToken
+UsdImagingLightAPIAdapter::GetImagingSubprimType(
+    UsdPrim const& prim,
+    TfToken const& subprim,
+    TfToken const& appliedInstanceName)
+{
+    // UsdLuxLightAPI is not a multi-apply schema.
+    if (!appliedInstanceName.IsEmpty()) {
+        return TfToken();
+    }
+    // Override the prim type only for the primary hydra prim.
+    // This adapter does not define any additional subprims.
+    if (!subprim.IsEmpty()) {
+        return TfToken();
+    }
+
+    // Note that this opinion weakly composes with opinions from other
+    // adapters servicing this prim.
+    return HdLightSchemaTokens->light;
+}
 
 HdContainerDataSourceHandle
 UsdImagingLightAPIAdapter::GetImagingSubprimData(
@@ -124,7 +156,7 @@ UsdImagingLightAPIAdapter::GetImagingSubprimData(
 
     if (subprim.IsEmpty()) {
         return HdRetainedContainerDataSource::New(
-            HdPrimTypeTokens->material,
+            HdMaterialSchema::GetSchemaToken(),
             UsdImagingDataSourceMaterial::New(
                 prim,
                 stageGlobals,

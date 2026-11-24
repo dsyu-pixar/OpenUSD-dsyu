@@ -6,9 +6,12 @@
 //
 
 #include "pxr/pxr.h"
+
 #include "pxr/base/ts/knot.h"
 #include "pxr/base/ts/knotData.h"
+#include "pxr/base/ts/typeHelpers.h"
 #include "pxr/base/ts/valueTypeDispatch.h"
+
 #include "pxr/base/tf/enum.h"
 
 #include <iostream>
@@ -24,11 +27,18 @@ TsKnot::TsKnot()
 }
 
 TsKnot::TsKnot(
-    TfType valueType,
-    TsCurveType curveType)
+    TfType valueType)
     : _data(Ts_KnotData::Create(valueType)),
       _proxy(Ts_KnotDataProxy::Create(_data, valueType))
 {
+}
+
+TsKnot::TsKnot(
+    TfType valueType,
+    TsCurveType curveType)
+    : TsKnot(valueType)
+{
+    // SetCurveType has been deprecated and will be removed in a future release.
     SetCurveType(curveType);
 }
 
@@ -55,7 +65,7 @@ TsKnot::TsKnot(TsKnot &&other)
       _customData(std::move(other._customData))
 {
     // Leave other with valid data.
-    const TfType valueType = _proxy->GetValueType();
+    const TfType valueType = GetValueType();
     other._data = Ts_KnotData::Create(valueType);
     other._proxy = Ts_KnotDataProxy::Create(other._data, valueType);
 }
@@ -92,7 +102,7 @@ TsKnot& TsKnot::operator=(TsKnot &&other)
     _customData = std::move(other._customData);
 
     // Leave other with valid data.
-    const TfType valueType = _proxy->GetValueType();
+    const TfType valueType = GetValueType();
     other._data = Ts_KnotData::Create(valueType);
     other._proxy = Ts_KnotDataProxy::Create(other._data, valueType);
 
@@ -165,7 +175,7 @@ bool TsKnot::SetValue(const VtValue value)
         return false;
     }
 
-    _proxy->SetValue(value);
+    _proxy->SetValue(_ToStorage(value));
     return true;
 }
 
@@ -176,7 +186,9 @@ bool TsKnot::GetValue(VtValue* const valueOut) const
         return false;
     }
 
-    _proxy->GetValue(valueOut);
+    VtValue value;
+    _proxy->GetValue(&value);
+    *valueOut = _FromStorage(value);
     return true;
 }
 
@@ -196,7 +208,7 @@ bool TsKnot::SetPreValue(const VtValue value)
     }
 
     _data->dualValued = true;
-    _proxy->SetPreValue(value);
+    _proxy->SetPreValue(_ToStorage(value));
     return true;
 }
 
@@ -207,14 +219,17 @@ bool TsKnot::GetPreValue(VtValue* const valueOut) const
         return false;
     }
 
+
+    VtValue value;
     if (_data->dualValued)
     {
-        _proxy->GetPreValue(valueOut);
+        _proxy->GetPreValue(&value);
     }
     else
     {
-        _proxy->GetValue(valueOut);
+        _proxy->GetValue(&value);
     }
+    *valueOut = _FromStorage(value);
 
     return true;
 }
@@ -230,12 +245,14 @@ bool TsKnot::ClearPreValue()
 
 bool TsKnot::SetCurveType(const TsCurveType curveType)
 {
+    TF_WARN("TsKnot::SetCurveType has been deprecated.");
     _data->curveType = curveType;
     return true;
 }
 
 TsCurveType TsKnot::GetCurveType() const
 {
+    TF_WARN("TsKnot::GetCurveType has been deprecated.");
     return _data->curveType;
 }
 
@@ -255,11 +272,6 @@ bool TsKnot::SetPreTanWidth(const TsTime width)
 
 TsTime TsKnot::GetPreTanWidth() const
 {
-    if (!_CheckGetWidth())
-    {
-        return false;
-    }
-
     return _data->GetPreTanWidth();
 }
 
@@ -270,7 +282,7 @@ bool TsKnot::SetPreTanSlope(const VtValue slope)
         return false;
     }
 
-    _proxy->SetPreTanSlope(slope);
+    _proxy->SetPreTanSlope(_ToStorage(slope));
     return true;
 }
 
@@ -281,9 +293,23 @@ bool TsKnot::GetPreTanSlope(VtValue* const slopeOut) const
         return false;
     }
 
-    _proxy->GetPreTanSlope(slopeOut);
+    VtValue value;
+    _proxy->GetPreTanSlope(&value);
+    *slopeOut = _FromStorage(value);
     return true;
 }
+
+bool TsKnot::SetPreTanAlgorithm(const TsTangentAlgorithm algorithm)
+{
+    _data->preTanAlgorithm = algorithm;
+    return true;
+}
+
+TsTangentAlgorithm TsKnot::GetPreTanAlgorithm() const
+{
+    return _data->preTanAlgorithm;
+}
+
 
 ////////////////////////////////////////////////////////////////////////////////
 // Post-Tangent
@@ -301,11 +327,6 @@ bool TsKnot::SetPostTanWidth(const TsTime width)
 
 TsTime TsKnot::GetPostTanWidth() const
 {
-    if (!_CheckGetWidth())
-    {
-        return false;
-    }
-
     return _data->GetPostTanWidth();
 }
 
@@ -316,7 +337,7 @@ bool TsKnot::SetPostTanSlope(const VtValue slope)
         return false;
     }
 
-    _proxy->SetPostTanSlope(slope);
+    _proxy->SetPostTanSlope(_ToStorage(slope));
     return true;
 }
 
@@ -327,10 +348,55 @@ bool TsKnot::GetPostTanSlope(VtValue* const slopeOut) const
         return false;
     }
 
-    _proxy->GetPostTanSlope(slopeOut);
+    VtValue value;
+    _proxy->GetPostTanSlope(&value);
+    *slopeOut = _FromStorage(value);
     return true;
 }
 
+bool TsKnot::SetPostTanAlgorithm(const TsTangentAlgorithm algorithm)
+{
+    _data->postTanAlgorithm = algorithm;
+    return true;
+}
+
+TsTangentAlgorithm TsKnot::GetPostTanAlgorithm() const
+{
+    return _data->postTanAlgorithm;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Algorithmic Tangents
+
+bool TsKnot::UpdateTangents(
+    const std::optional<TsKnot> prevKnot,
+    const std::optional<TsKnot> nextKnot,
+    const TsCurveType curveType /* = TsCurveTypeBezier */)
+{
+    // Verify knot value types match.
+    if (prevKnot &&
+        !TF_VERIFY(prevKnot->GetValueType() == GetValueType(),
+                   "Invalid prevKnot value type: `%s` instead of `%s`",
+                   prevKnot->GetValueType().GetTypeName().c_str(),
+                   GetValueType().GetTypeName().c_str()))
+    {
+        return false;
+    }
+        
+    if (nextKnot &&
+        !TF_VERIFY(nextKnot->GetValueType() == GetValueType(),
+                   "Invalid nextKnot value type: `%s` instead of `%s`",
+                   nextKnot->GetValueType().GetTypeName().c_str(),
+                   GetValueType().GetTypeName().c_str()))
+    {
+        return false;
+    }
+
+    Ts_KnotDataProxy* prevProxy = (prevKnot ? prevKnot->_proxy.get() : nullptr);
+    Ts_KnotDataProxy* nextProxy = (nextKnot ? nextKnot->_proxy.get() : nullptr);
+    return _proxy->UpdateTangents(prevProxy, nextProxy, curveType);
+}
+    
 ////////////////////////////////////////////////////////////////////////////////
 // Custom Data
 
@@ -362,25 +428,8 @@ VtValue TsKnot::GetCustomDataByKey(
 ////////////////////////////////////////////////////////////////////////////////
 // Helpers
 
-bool TsKnot::_CheckGetWidth() const
-{
-    if (_data->curveType == TsCurveTypeHermite)
-    {
-        TF_CODING_ERROR("Cannot read widths for Hermite knots");
-        return false;
-    }
-
-    return true;
-}
-
 bool TsKnot::_CheckSetWidth(const TsTime width) const
 {
-    if (_data->curveType == TsCurveTypeHermite)
-    {
-        TF_CODING_ERROR("Cannot set widths for Hermite knots");
-        return false;
-    }
-
     if (width < 0)
     {
         TF_CODING_ERROR("Cannot set negative tangent width");
@@ -426,8 +475,8 @@ bool TsKnot::_CheckInParamVt(const VtValue value) const
     }
 
     bool ok = false;
-    TsDispatchToValueTypeTemplate<_ValueChecker>(
-        value.GetType(), value, &ok);
+    TsDispatchToStorageValueTypeTemplate<_ValueChecker>(
+        value.GetType(), _ToStorage(value), &ok);
     if (!ok)
     {
         return false;
@@ -447,14 +496,49 @@ bool TsKnot::_CheckOutParamVt(VtValue* const valueOut) const
     return true;
 }
 
+VtValue TsKnot::_ToStorage(const VtValue& value) const
+{
+    if (_proxy->valueType == Ts_GetType<GfTimeCode>()) {
+        const GfTimeCode& tc = value.UncheckedGet<GfTimeCode>();
+        return VtValue(double(tc));
+    } else if (_proxy->valueType == Ts_GetType<GfDuration>()) {
+        const GfDuration& dur = value.UncheckedGet<GfDuration>();
+        return VtValue(double(dur));
+    }
+
+    return value;
+}
+
+VtValue TsKnot::_FromStorage(const VtValue& value) const
+{
+    if (_proxy->valueType == Ts_GetType<GfTimeCode>() ||
+        _proxy->valueType == Ts_GetType<GfDuration>())
+    {
+        if (!TF_VERIFY(value.IsHolding<double>(),
+                       "Time valued knots must have underlying "
+                       "stored doubles"))
+        {
+            return VtValue();
+        }
+
+        const double& d = value.UncheckedGet<double>();
+        if (_proxy->valueType == Ts_GetType<GfTimeCode>()) {
+            return VtValue(GfTimeCode(d));
+        } else {
+            return VtValue(GfDuration(d));
+        }
+    }
+
+    return value;
+}
+
+
 #define GET_VT_VALUE(method) [&](){ VtValue v; knot.method(&v); return v; }()
 
 std::ostream& operator<<(std::ostream& out, const TsKnot &knot)
 {
     out << "Knot:" << std::endl
         << "  value type " << knot.GetValueType().GetTypeName() << std::endl
-        << "  curve type "
-        << TfEnum::GetName(knot.GetCurveType()).substr(11) << std::endl
         << "  time " << TfStringify(knot.GetTime()) << std::endl
         << "  value " << GET_VT_VALUE(GetValue) << std::endl
         << "  next interp "
@@ -465,22 +549,24 @@ std::ostream& operator<<(std::ostream& out, const TsKnot &knot)
         out << "  preValue " << GET_VT_VALUE(GetPreValue) << std::endl;
     }
 
-    if (knot.GetCurveType() == TsCurveTypeBezier)
-    {
-        out << "  pre-tan width "
-            << TfStringify(knot.GetPreTanWidth()) << std::endl;
-    }
-
-    out << "  pre-tan slope "
+    out << "  pre-tan width "
+        << TfStringify(knot.GetPreTanWidth()) << std::endl
+        << "  pre-tan slope "
         << GET_VT_VALUE(GetPreTanSlope) << std::endl;
-    if (knot.GetCurveType() == TsCurveTypeBezier)
-    {
-        out << "  post-tan width "
-            << TfStringify(knot.GetPostTanWidth()) << std::endl;
+    if (knot.GetPreTanAlgorithm() != TsTangentAlgorithmNone) {
+        out << "  pre-tan algorithm "
+            << TfEnum::GetName(knot.GetPreTanAlgorithm()).substr(18)
+            << std::endl;
     }
-
-    out << "  post-tan slope "
+    out << "  post-tan width "
+        << TfStringify(knot.GetPostTanWidth()) << std::endl
+        << "  post-tan slope "
         << GET_VT_VALUE(GetPostTanSlope) << std::endl;
+    if (knot.GetPostTanAlgorithm() != TsTangentAlgorithmNone) {
+        out << "  post-tan algorithm "
+            << TfEnum::GetName(knot.GetPostTanAlgorithm()).substr(18)
+            << std::endl;
+    }
 
     const VtDictionary customData = knot.GetCustomData();
     if (!customData.empty())

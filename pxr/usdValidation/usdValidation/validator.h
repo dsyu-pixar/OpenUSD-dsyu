@@ -16,6 +16,7 @@
 #include "pxr/usd/usd/timeCode.h"
 #include "pxr/usdValidation/usdValidation/api.h"
 #include "pxr/usdValidation/usdValidation/timeRange.h"
+#include "pxr/usdValidation/usdValidation/fixer.h"
 
 #include <functional>
 #include <string>
@@ -44,6 +45,8 @@ class UsdPrim;
 /// - keywords: Keywords associated with this validator.
 /// - doc: Doc string explaining the purpose of the validator.
 /// - schemaTypes: If the validator is associated with specific schemaTypes.
+///   Only PrimValidators can provide schemaTypes; validator suites cannot,
+///   as a suite's contained validators provide their own.
 /// - isTimeDependent: If the validator is testing rules which are time
 ///   dependent. Note that only PrimValidators and StageValidators can be time 
 ///   dependent, as these are the ones which can evaluate time dependent 
@@ -81,10 +84,10 @@ struct UsdValidationValidatorMetadata
     /// whether this test is time dependent or not.
     /// Only PrimValidators and StageValidators can be time dependent.
     /// By default this is false.
-    bool isTimeDependent;
+    bool isTimeDependent = false;
 
-    /// whether this test represents a test suite or not
-    bool isSuite;
+    /// whether this test represents a test suite or not, default is false.
+    bool isSuite = false;
 }; // UsdValidationValidatorMetadata
 
 using UsdValidationValidatorMetadataVector
@@ -125,7 +128,14 @@ using UsdValidatePrimTaskFn = std::function<UsdValidationErrorVector(
 /// all validators which are registered with the UsdValidationRegistry are
 /// immortal.
 ///
+/// A UsdValidationValidator can optionally provide a list of fixers, which
+/// clients can use to fix specific errors reported by the validator. Note that
+/// these fixers must have unique names within the context of a validator. If
+/// not unique, a coding error is issued during the construction of the
+/// UsdValidationValidator instance.
+///
 /// \sa UsdValidationRegistry
+/// \sa UsdValidationFixer
 class UsdValidationValidator
 {
 public:
@@ -148,19 +158,22 @@ public:
     /// implemented by a UsdValidateLayerTaskFn.
     USDVALIDATION_API
     UsdValidationValidator(const UsdValidationValidatorMetadata &metadata,
-                           const UsdValidateLayerTaskFn &validateLayerTaskFn);
+                           const UsdValidateLayerTaskFn &validateLayerTaskFn,
+                           std::vector<UsdValidationFixer> fixers = {});
 
     /// Instantiate a UsdValidationValidator which has its validation logic
     /// implemented by a UsdValidateStageTaskFn.
     USDVALIDATION_API
     UsdValidationValidator(const UsdValidationValidatorMetadata &metadata,
-                           const UsdValidateStageTaskFn &validateStageTaskFn);
+                           const UsdValidateStageTaskFn &validateStageTaskFn,
+                           std::vector<UsdValidationFixer> fixers = {});
 
     /// Instantiate a UsdValidationValidator which has its validation logic
     /// implemented by a UsdValidatePrimTaskFn.
     USDVALIDATION_API
     UsdValidationValidator(const UsdValidationValidatorMetadata &metadata,
-                           const UsdValidatePrimTaskFn &validatePrimTaskFn);
+                           const UsdValidatePrimTaskFn &validatePrimTaskFn,
+                           std::vector<UsdValidationFixer> fixers = {});
 
     /// Return metadata associated with this Validator.
     const UsdValidationValidatorMetadata &GetMetadata() const &
@@ -173,6 +186,45 @@ public:
     {
         return std::move(_metadata);
     }
+
+    /// Return a vector of immutable fixers associated with this Validator.
+    ///
+    USDVALIDATION_API
+    const std::vector<const UsdValidationFixer *> GetFixers() const;
+
+    /// Return an immutable fixer given its \p name if it exists, else return
+    /// nullptr.
+    ///
+    USDVALIDATION_API
+    const UsdValidationFixer *GetFixerByName(const TfToken &name) const;
+
+    /// Return a vector of immutable fixers catering to a specific 
+    /// \p errorName.
+    ///
+    USDVALIDATION_API
+    const std::vector<const UsdValidationFixer *> GetFixersByErrorName(
+        const TfToken &errorName) const;
+
+    /// Return an immutable fixer given its \p name and catering to a specific
+    /// \p errorName if it exists, else return nullptr.
+    /// 
+    USDVALIDATION_API
+    const UsdValidationFixer *GetFixerByNameAndErrorName(
+        const TfToken &name, const TfToken &errorName) const;
+
+    /// Return a vector of immutable fixers catering to any of the given
+    /// \p keywords.
+    ///
+    /// Fixers can be associated with keywords, like show, department, etc.
+    /// which can be used to filter fixers based on the context in which they
+    /// are being queried.
+    ///
+    /// Note that the returned list contains fixers which have any of the 
+    /// provided \p keywords, the fixers do not have to have all of the 
+    /// keywords to be returned.
+    USDVALIDATION_API
+    const std::vector<const UsdValidationFixer *> GetFixersByKeywords(
+        const TfTokenVector &keywords) const;
 
     /// Run validation on the given \p layer by executing the contained
     /// validateTaskFn and returns UsdValidationErrorVector.
@@ -213,11 +265,6 @@ public:
         const UsdValidationTimeRange &timeRange = {}) const;
 
 private:
-    // To make sure registry can query task types on a validator.
-    // Registry needs access to _GetValidatorPrimTasks, in order to determine if
-    // the contained validators in a suite, which provides schemaTypes metadata
-    // are compliant.
-    friend class UsdValidationRegistry;
     // In order to distribute validators into different sets based on the type
     // of validation to be performed, ValidationContext needs to access
     // _GetValidateLayerTask, _GetValidateStageTask and _GetValidatePrimTask.
@@ -227,6 +274,8 @@ private:
     std::variant<UsdValidateLayerTaskFn, UsdValidateStageTaskFn,
                  UsdValidatePrimTaskFn>
         _validateTaskFn;
+
+    std::vector<UsdValidationFixer> _fixers;
 
     // Return UsdValidateLayerTaskFn if provided by the validator, else a
     // nullptr.
@@ -240,6 +289,10 @@ private:
     // nullptr.
     const UsdValidatePrimTaskFn *_GetValidatePrimTask() const;
 
+    // Helper to validate that all fixers have unique names. Issues a coding
+    // error if not unique.
+    void _ValidateFixerNames() const;
+
 }; // UsdValidationValidator
 
 /// \class UsdValidationValidatorSuite
@@ -249,7 +302,9 @@ private:
 ///
 /// If client failed to provide isSuite metadata for a
 /// UsdValidationValidatorSuite instance then the validatorSuite will not be
-/// registered, and client will appropriately be warned.
+/// registered, and client will appropriately be warned. Similarly, a suite
+/// which provides schemaTypes metadata will not be registered, as only its
+/// contained validators' schemaTypes are used when validating.
 ///
 /// UsdValidationValidatorSuite instances are immutable and non-copyable. Note
 /// that all validator suites which are registered with the

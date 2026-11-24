@@ -5,7 +5,6 @@
 # Licensed under the terms set forth in the LICENSE.txt file available at
 # https://openusd.org/license.
 
-from __future__ import print_function
 from pxr import Ar, Sdf, Usd, UsdUtils
 
 import argparse, contextlib, sys
@@ -27,7 +26,6 @@ if __name__ == '__main__':
     parser.add_argument('-n', '--firstLayerName', type=str, default='', 
                         dest='rename')
     parser.add_argument('--arkit', dest='arkit', action='store_true')
-    parser.add_argument('--check', dest='check', action='store_true')
     parser.add_argument('--numFailedChecks', dest='numFailedChecks', default=0,
                         type=int, action='store')
     parser.add_argument('--numErrors', dest='numErrors', default=0,
@@ -66,7 +64,7 @@ if __name__ == '__main__':
             layerShouldBeDirty = layer in expectedDirtyLayers
             assert layer.dirty is layerShouldBeDirty
 
-    zipFile = Usd.ZipFile.Open(args.usdzFile)
+    zipFile = Sdf.ZipFile.Open(args.usdzFile)
     assert zipFile
 
     with stream(args.outfile, 'w') as ofp:
@@ -76,18 +74,5 @@ if __name__ == '__main__':
     # Validate that the usdz file can be opened on a stage.
     stage = Usd.Stage.Open(args.usdzFile)
     assert stage
-
-    if args.check:
-        rootLayerPath = stage.GetRootLayer().realPath
-        context = Ar.GetResolver().CreateDefaultContextForAsset(rootLayerPath)
-        with Ar.ResolverContextBinder(context):
-            checker = UsdUtils.ComplianceChecker(arkit=args.arkit, verbose=True)
-            checker.CheckCompliance(args.usdzFile)
-            failedChecks = checker.GetFailedChecks()
-            errors = checker.GetErrors()
-            for msg in failedChecks + errors:
-                print(msg, file=sys.stderr)
-            assert args.numFailedChecks == len(failedChecks)
-            assert args.numErrors == len(errors)
 
     sys.exit(0)

@@ -14,6 +14,7 @@
 # free to do whatever they want with mainwindow for testing.
 
 import pxr.Usdviewq as Usdviewq
+import pxr.Tf as Tf
 from pxr.Usdviewq import AppController
 from pxr.Usdviewq.qt import QtWidgets
 
@@ -49,7 +50,7 @@ class TestUsdView(Usdviewq.Launcher):
         # Set a fixed size on the stage view so that any image tests get a
         # consistent resolution - but only if we've created a viewer
         if appController._stageView:
-            appController._stageView.setFixedSize(597,540)
+            appController._stageView.SetPhysicalWindowSize(597, 540)
 
         # Process initial loading events
         app.processEvents()
@@ -133,6 +134,11 @@ AppController._processEvents = _processEvents
 def _takeShot(self, fileName, iterations=10, waitForConvergence=False,
               cropToAspectRatio=False):
     self._processEvents(iterations, waitForConvergence)
+    # Force a synchronous repaint, because it's not guaranteed it will always
+    # happen before the shot. This mostly seems to be a Windows issue.
+    if self._stageView:
+        self._stageView.updateSelection()
+        self._stageView.repaint()
     viewportShot = self.GrabViewportShot(cropToAspectRatio=cropToAspectRatio)
     viewportShot.save(fileName, "PNG")
 
@@ -140,4 +146,6 @@ AppController._takeShot = _takeShot
 
 
 if __name__ == '__main__':
+    errorMark = Tf.Error.Mark()
     TestUsdView().Run()
+    errorMark.RaiseIfNotClean()

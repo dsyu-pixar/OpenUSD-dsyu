@@ -36,6 +36,7 @@
 #include <vector>
 #include <unordered_map>
 #include <memory>
+#include <optional>
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -61,6 +62,11 @@ using HdTaskContext = std::unordered_map<TfToken,
                            TfToken::HashFunctor>;
 
 /// \class HdRenderIndex
+///
+/// The render index is part of the Hydra 1.0 API and is only used for
+/// emulation purposes so that HdSceneDelegate's and HdRenderDelegate's
+/// can be used with scene indices through the HdRenderIndexAdapterSceneIndex
+/// and HdRenderDelegateAdapterRenderer.
 ///
 /// The Hydra render index is a flattened representation of the client scene 
 /// graph, which may be composed of several self-contained scene graphs, each of
@@ -106,6 +112,10 @@ class HdRenderIndex final
 public:
     typedef std::vector<HdDrawItem const*> HdDrawItemPtrVector;
 
+    ///
+    /// \deprecated In Hydra 2.0, applications create scene indices feeding
+    /// into HdRenderer.
+    ///
     /// Create a render index with the given render delegate.
     /// Returns null if renderDelegate is null.
     /// The render delegate and render tasks may require access to a renderer's
@@ -129,6 +139,32 @@ public:
         HdDriverVector const& drivers,
         const std::string &instanceName=std::string(),
         const std::string &appName=std::string());
+
+    /// Create a render index with the given render delegate that populates
+    /// itself by observing the given scene index.
+    /// Returns null if renderDelegate is null.
+    /// The render delegate and render tasks may require access to a renderer's
+    /// device provided by the application. The objects can be
+    /// passed in as 'drivers'. Hgi is an example of a HdDriver.
+    ///   hgi = Hgi::CreatePlatformDefaultHgi()
+    ///   hgiDriver = new HdDriver<Hgi*>(HgiTokens→renderDriver, hgi)
+    ///   HdRenderIndex::New(_renderDelegate, {_hgiDriver})
+    ///
+    static HdRenderIndex *NewForBackendEmulation(
+        HdRenderDelegate *renderDelegate, 
+        HdDriverVector const& drivers,
+        HdSceneIndexBaseRefPtr const &terminalSceneIndex);
+
+    /// Create a render index for "front-end" emulation. That is,
+    /// the render index can be populated from an HdSceneDelegate and
+    /// populates the returned emulation scene index.
+    ///
+    /// The HdRenderDelegate is not populated. It is just used by the
+    /// HdSceneDelegate for queries such as
+    /// HdRenderDelegate::GetMaterialBindingPurpose().
+    ///
+    static HdRenderIndex *
+    NewForFrontendEmulation(HdRenderDelegate *nullRenderDelegate);
 
     HD_API
     ~HdRenderIndex();
@@ -167,6 +203,9 @@ public:
     /// This is the first phase in Hydra's execution. See HdEngine::Execute
     HD_API
     void SyncAll(HdTaskSharedPtrVector *tasks, HdTaskContext *taskContext);
+
+    /// Returns true while a thread is invoking SyncAll().
+    HD_API bool IsSyncAllInProgress() const;
 
     // ---------------------------------------------------------------------- //
     /// \name Execution
@@ -220,6 +259,10 @@ public:
 
     /// Query function to return the id's of the scene delegate and instancer
     /// associated with the Rprim at the given path.
+    ///
+    /// \deprecated. Query terminal scene index for prim and extract instancer
+    /// from HdInstancedBySchema instead.
+    ///
     HD_API
     bool GetSceneDelegateAndInstancerIds(SdfPath const &id,
                                          SdfPath* sceneDelegateId,
@@ -270,14 +313,29 @@ public:
     /// \name Task Support
     // ---------------------------------------------------------------------- //
 
+    /// \deprecated
+    ///
+    /// In Hydra 2.0, tasks are managed by a scene index such as the
+    /// HdxTaskControllerSceneIndex (reimplementing HdxTaskController).
+    ///
     /// Inserts a new task into the render index with an identifier of \p id.
     template <typename T>
     void InsertTask(HdSceneDelegate* delegate, SdfPath const& id);
 
+    /// \deprecated
+    ///
+    /// In Hydra 2.0, tasks are managed by a scene index such as the
+    /// HdxTaskControllerSceneIndex (reimplementing HdxTaskController).
+    ///
     /// Removes the given task from the RenderIndex.
     HD_API
     void RemoveTask(SdfPath const& id);
 
+    /// \deprecated
+    ///
+    /// In Hydra 2.0, tasks are managed by a scene index such as the
+    /// HdxTaskControllerSceneIndex (reimplementing HdxTaskController).
+    ///
     /// Returns true if a task exists in the index with the given \p id.
     bool HasTask(SdfPath const& id) {
         return _taskMap.find(id) != _taskMap.end();
@@ -366,6 +424,9 @@ public:
     HD_API
     HdSceneIndexBaseRefPtr GetTerminalSceneIndex() const;
 
+    HD_API
+    HdSceneIndexBaseRefPtr GetEmulationSceneIndex() const;
+    
     // ---------------------------------------------------------------------- //
     /// \name Render Delegate
     // ---------------------------------------------------------------------- //
@@ -384,12 +445,6 @@ public:
     /// delegate.
     HD_API
     HdResourceRegistrySharedPtr GetResourceRegistry() const;
-
-    /// Returns true if scene index features are available
-    /// This is true by default but can be controlled via an
-    /// HD_ENABLE_SCENE_INDEX_EMULATION environment variable.
-    HD_API
-    static bool IsSceneIndexEmulationEnabled();
 
     /// An application or legacy scene delegate may prefer for the scene 
     /// index observer notices generated from its prim insertions, removals, or
@@ -435,7 +490,9 @@ private:
         HdRenderDelegate *renderDelegate, 
         HdDriverVector const& drivers,
         const std::string &instanceName,
-        const std::string &appName);
+        const std::string &appName,
+        HdSceneIndexBaseRefPtr const &terminalSceneIndex = nullptr,
+        bool createFrontendEmulationOnly = false);
 
     // ---------------------------------------------------------------------- //
     // Private Helper methods 
@@ -548,7 +605,10 @@ private:
     _RprimMap _rprimMap;
     Hd_SortedIds _rprimIds;
 
-    _RprimPrimIDVector _rprimPrimIdMap;
+    // Prim id -> rprim path table. Only maintained (and non-empty optional)
+    // if the prim id is not coming from the given terminal scene index.
+    //
+    std::optional<_RprimPrimIDVector> _rprimPrimIdMap;
 
     _TaskMap _taskMap;
 
@@ -563,6 +623,7 @@ private:
     HdRenderDelegate *_renderDelegate;
     HdDriverVector _drivers;
 
+    HdSceneIndexBaseRefPtr _finalEmulationSceneIndex;
 
     std::string _instanceName;
 
@@ -571,6 +632,9 @@ private:
     // ---------------------------------------------------------------------- //
     HdRprimCollectionVector _collectionsToSync;
     HdDirtyList _rprimDirtyList;
+
+    // Call depth to SyncAll().  Should only ever be 0 or 1.
+    std::atomic<int> _syncAllDepth;
 
     // ---------------------------------------------------------------------- //
 

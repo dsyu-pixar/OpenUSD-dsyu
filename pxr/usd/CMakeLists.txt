@@ -2,7 +2,6 @@ set(DIRS
     ar
     kind
     sdf
-    ndr
     sdr
     pcp
     usd
@@ -10,8 +9,10 @@ set(DIRS
     usdVol
     usdMedia
     usdShade
+    usdLod
     usdLux
     usdProc
+    usdProfiles
     usdRender
     usdHydra
     usdRi
@@ -22,6 +23,10 @@ set(DIRS
     usdPhysics
     plugin
 )
+
+if (${PXR_BUILD_PMC_PLUGIN})
+    list(APPEND DIRS usdPmc)
+endif()
 
 foreach(d ${DIRS})
     add_subdirectory(${d})

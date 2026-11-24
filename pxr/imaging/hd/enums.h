@@ -150,6 +150,14 @@ enum HdPointsGeomStyle {
     HdPointsGeomStylePoints
 };
 
+enum HdImplicitSurfaceGeomStyle {
+    HdImplicitSurfaceGeomStyleInvalid,
+    HdImplicitSurfaceGeomStyleSurf,
+    HdImplicitSurfaceGeomStyleEdgeOnly,
+    HdImplicitSurfaceGeomStyleEdgeOnSurf,
+    HdImplicitSurfaceGeomStylePoints
+};
+
 ///
 /// \enum HdInterpolation
 ///

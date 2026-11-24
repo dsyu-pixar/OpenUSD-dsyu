@@ -14,7 +14,9 @@ Generating New Schema Classes
        * usdGenSchema, our tool for generating C++ classes from a schema.usda
          file requires the `jinja2 template substitution module
          <https://github.com/mitsuhiko/jinja2>`_ and argparse modules be
-         installed and available in your python syspath.
+         installed and available in your python syspath. If these dependencies
+         are not available when USD is built/installed, usdGenSchema will not be
+         installed.
    
        * Ensure that you have setup your python environment properly, so it can
          find USD python modules. We'll refer to the install location of your 
@@ -31,7 +33,7 @@ Generating New Schema Classes
               - This is a path list which Python uses to find modules.
               - $PYTHONPATH:**USD_INSTALL_ROOT/lib/python/**
 
-   For more information see our page on `Advanced Build Configuration <https://github.com/PixarAnimationStudios/OpenUSD/blob/release/BUILDING.md>`_ .
+   For more information see our page on `Advanced Build Configuration <https://github.com/PixarAnimationStudios/OpenUSD/blob/v26.11/BUILDING.md>`_ .
 
 The files used in this tutorial are available in
 USD/extras/usd/examples/usdSchemaExamples/. The objective of this tutorial is 
@@ -356,7 +358,10 @@ if they already exist).
 Building the Schema
 ###################
 
-To rebuild the plugin, simply go to the root of your build directory and run.
+Your USD install location contains a build directory with the build results for
+USD and build results for all the dependencies that needed to be built for your
+USD build. To rebuild the plugin, simply go to the root of your USD build 
+directory (<install location>/build/USD) and run:
 
 .. code-block:: console
    :caption: Build plugin using cmake

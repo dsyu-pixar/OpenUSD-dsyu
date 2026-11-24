@@ -89,6 +89,21 @@ def "ModelWithTimesSpanningClips" (
 {
 }
 
+def "ModelWithTimesSpanningClipsWithDifferentTypes" (
+    references = @./ref.usda@</Model>
+
+    clips = {
+        dictionary default = {
+            asset[] assetPaths = [@./times_1_diff_type.usda@, @./times_2_diff_type.usda@]
+            string primPath = "/Model"
+            double2[] active = [(1.0, 0.0), (3.0, 1.0)]
+            double2[] times = [(1.0, 1.0), (4.0, 4.0)]
+        }
+    }
+)
+{
+}
+
 def "ModelWithTimesSpanningClips_2" (
     references = @./ref.usda@</Model>
 
@@ -102,7 +117,24 @@ def "ModelWithTimesSpanningClips_2" (
     }
 )
 {
+
 }
+
+def "ModelWithTimesSpanningClips_3" (
+    references = @./ref.usda@</Model>
+
+    clips = {
+        dictionary default = {
+            asset[] assetPaths = [@./jump_1.usda@, @./jump_2.usda@]
+            string primPath = "/Model"
+            double2[] active = [(0.0, 0), (10.0, 1)]
+            double2[] times = [(0, 0), (20, 20), (20, 0), (30, 10)]
+        }
+    }
+)
+{
+}
+
 
 def "ModelWithNoTimes" (
     references = @./ref.usda@</Model>

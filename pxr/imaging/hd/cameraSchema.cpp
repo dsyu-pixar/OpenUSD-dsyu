@@ -123,6 +123,41 @@ HdCameraSchema::GetExposure() const
         HdCameraSchemaTokens->exposure);
 }
 
+HdFloatDataSourceHandle
+HdCameraSchema::GetExposureTime() const
+{
+    return _GetTypedDataSource<HdFloatDataSource>(
+        HdCameraSchemaTokens->exposureTime);
+}
+
+HdFloatDataSourceHandle
+HdCameraSchema::GetExposureIso() const
+{
+    return _GetTypedDataSource<HdFloatDataSource>(
+        HdCameraSchemaTokens->exposureIso);
+}
+
+HdFloatDataSourceHandle
+HdCameraSchema::GetExposureFStop() const
+{
+    return _GetTypedDataSource<HdFloatDataSource>(
+        HdCameraSchemaTokens->exposureFStop);
+}
+
+HdFloatDataSourceHandle
+HdCameraSchema::GetExposureResponsivity() const
+{
+    return _GetTypedDataSource<HdFloatDataSource>(
+        HdCameraSchemaTokens->exposureResponsivity);
+}
+
+HdFloatDataSourceHandle
+HdCameraSchema::GetLinearExposureScale() const
+{
+    return _GetTypedDataSource<HdFloatDataSource>(
+        HdCameraSchemaTokens->linearExposureScale);
+}
+
 HdBoolDataSourceHandle
 HdCameraSchema::GetFocusOn() const
 {
@@ -158,6 +193,13 @@ HdCameraSchema::GetNamespacedProperties() const
         HdCameraSchemaTokens->namespacedProperties));
 }
 
+HdBackPlateContainerSchema
+HdCameraSchema::GetBackPlate() const
+{
+    return HdBackPlateContainerSchema(_GetTypedDataSource<HdContainerDataSource>(
+        HdCameraSchemaTokens->backPlate));
+}
+
 /*static*/
 HdContainerDataSourceHandle
 HdCameraSchema::BuildRetained(
@@ -174,15 +216,21 @@ HdCameraSchema::BuildRetained(
         const HdDoubleDataSourceHandle &shutterOpen,
         const HdDoubleDataSourceHandle &shutterClose,
         const HdFloatDataSourceHandle &exposure,
+        const HdFloatDataSourceHandle &exposureTime,
+        const HdFloatDataSourceHandle &exposureIso,
+        const HdFloatDataSourceHandle &exposureFStop,
+        const HdFloatDataSourceHandle &exposureResponsivity,
+        const HdFloatDataSourceHandle &linearExposureScale,
         const HdBoolDataSourceHandle &focusOn,
         const HdFloatDataSourceHandle &dofAspect,
         const HdContainerDataSourceHandle &splitDiopter,
         const HdContainerDataSourceHandle &lensDistortion,
-        const HdContainerDataSourceHandle &namespacedProperties
+        const HdContainerDataSourceHandle &namespacedProperties,
+        const HdContainerDataSourceHandle &backPlate
 )
 {
-    TfToken _names[18];
-    HdDataSourceBaseHandle _values[18];
+    TfToken _names[24];
+    HdDataSourceBaseHandle _values[24];
 
     size_t _count = 0;
 
@@ -251,6 +299,31 @@ HdCameraSchema::BuildRetained(
         _values[_count++] = exposure;
     }
 
+    if (exposureTime) {
+        _names[_count] = HdCameraSchemaTokens->exposureTime;
+        _values[_count++] = exposureTime;
+    }
+
+    if (exposureIso) {
+        _names[_count] = HdCameraSchemaTokens->exposureIso;
+        _values[_count++] = exposureIso;
+    }
+
+    if (exposureFStop) {
+        _names[_count] = HdCameraSchemaTokens->exposureFStop;
+        _values[_count++] = exposureFStop;
+    }
+
+    if (exposureResponsivity) {
+        _names[_count] = HdCameraSchemaTokens->exposureResponsivity;
+        _values[_count++] = exposureResponsivity;
+    }
+
+    if (linearExposureScale) {
+        _names[_count] = HdCameraSchemaTokens->linearExposureScale;
+        _values[_count++] = linearExposureScale;
+    }
+
     if (focusOn) {
         _names[_count] = HdCameraSchemaTokens->focusOn;
         _values[_count++] = focusOn;
@@ -274,6 +347,11 @@ HdCameraSchema::BuildRetained(
     if (namespacedProperties) {
         _names[_count] = HdCameraSchemaTokens->namespacedProperties;
         _values[_count++] = namespacedProperties;
+    }
+
+    if (backPlate) {
+        _names[_count] = HdCameraSchemaTokens->backPlate;
+        _values[_count++] = backPlate;
     }
     return HdRetainedContainerDataSource::New(_count, _names, _values);
 }
@@ -383,6 +461,46 @@ HdCameraSchema::Builder::SetExposure(
 }
 
 HdCameraSchema::Builder &
+HdCameraSchema::Builder::SetExposureTime(
+    const HdFloatDataSourceHandle &exposureTime)
+{
+    _exposureTime = exposureTime;
+    return *this;
+}
+
+HdCameraSchema::Builder &
+HdCameraSchema::Builder::SetExposureIso(
+    const HdFloatDataSourceHandle &exposureIso)
+{
+    _exposureIso = exposureIso;
+    return *this;
+}
+
+HdCameraSchema::Builder &
+HdCameraSchema::Builder::SetExposureFStop(
+    const HdFloatDataSourceHandle &exposureFStop)
+{
+    _exposureFStop = exposureFStop;
+    return *this;
+}
+
+HdCameraSchema::Builder &
+HdCameraSchema::Builder::SetExposureResponsivity(
+    const HdFloatDataSourceHandle &exposureResponsivity)
+{
+    _exposureResponsivity = exposureResponsivity;
+    return *this;
+}
+
+HdCameraSchema::Builder &
+HdCameraSchema::Builder::SetLinearExposureScale(
+    const HdFloatDataSourceHandle &linearExposureScale)
+{
+    _linearExposureScale = linearExposureScale;
+    return *this;
+}
+
+HdCameraSchema::Builder &
 HdCameraSchema::Builder::SetFocusOn(
     const HdBoolDataSourceHandle &focusOn)
 {
@@ -422,6 +540,14 @@ HdCameraSchema::Builder::SetNamespacedProperties(
     return *this;
 }
 
+HdCameraSchema::Builder &
+HdCameraSchema::Builder::SetBackPlate(
+    const HdContainerDataSourceHandle &backPlate)
+{
+    _backPlate = backPlate;
+    return *this;
+}
+
 HdContainerDataSourceHandle
 HdCameraSchema::Builder::Build()
 {
@@ -439,11 +565,17 @@ HdCameraSchema::Builder::Build()
         _shutterOpen,
         _shutterClose,
         _exposure,
+        _exposureTime,
+        _exposureIso,
+        _exposureFStop,
+        _exposureResponsivity,
+        _linearExposureScale,
         _focusOn,
         _dofAspect,
         _splitDiopter,
         _lensDistortion,
-        _namespacedProperties
+        _namespacedProperties,
+        _backPlate
     );
 }
 
@@ -496,11 +628,81 @@ HdCameraSchema::GetShutterCloseLocator()
 
 /* static */
 const HdDataSourceLocator &
+HdCameraSchema::GetExposureLocator()
+{
+    static const HdDataSourceLocator locator =
+        GetDefaultLocator().Append(
+            HdCameraSchemaTokens->exposure);
+    return locator;
+}
+
+/* static */
+const HdDataSourceLocator &
+HdCameraSchema::GetExposureTimeLocator()
+{
+    static const HdDataSourceLocator locator =
+        GetDefaultLocator().Append(
+            HdCameraSchemaTokens->exposureTime);
+    return locator;
+}
+
+/* static */
+const HdDataSourceLocator &
+HdCameraSchema::GetExposureIsoLocator()
+{
+    static const HdDataSourceLocator locator =
+        GetDefaultLocator().Append(
+            HdCameraSchemaTokens->exposureIso);
+    return locator;
+}
+
+/* static */
+const HdDataSourceLocator &
+HdCameraSchema::GetExposureFStopLocator()
+{
+    static const HdDataSourceLocator locator =
+        GetDefaultLocator().Append(
+            HdCameraSchemaTokens->exposureFStop);
+    return locator;
+}
+
+/* static */
+const HdDataSourceLocator &
+HdCameraSchema::GetExposureResponsivityLocator()
+{
+    static const HdDataSourceLocator locator =
+        GetDefaultLocator().Append(
+            HdCameraSchemaTokens->exposureResponsivity);
+    return locator;
+}
+
+/* static */
+const HdDataSourceLocator &
+HdCameraSchema::GetLinearExposureScaleLocator()
+{
+    static const HdDataSourceLocator locator =
+        GetDefaultLocator().Append(
+            HdCameraSchemaTokens->linearExposureScale);
+    return locator;
+}
+
+/* static */
+const HdDataSourceLocator &
 HdCameraSchema::GetNamespacedPropertiesLocator()
 {
     static const HdDataSourceLocator locator =
         GetDefaultLocator().Append(
             HdCameraSchemaTokens->namespacedProperties);
+    return locator;
+}
+
+/* static */
+const HdDataSourceLocator &
+HdCameraSchema::GetBackPlateLocator()
+{
+    static const HdDataSourceLocator locator =
+        GetDefaultLocator().Append(
+            HdCameraSchemaTokens->backPlate);
     return locator;
 }
 

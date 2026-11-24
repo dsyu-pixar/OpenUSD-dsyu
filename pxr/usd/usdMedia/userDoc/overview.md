@@ -1,6 +1,6 @@
 # Overview
 
-The `UsdMedia` provides ways to associate various forms of media, such as 
+The `UsdMedia` domain provides ways to associate various forms of media, such as 
 audio (`SpatialAudio`) or thumbnails (`AssetPreviewsAPI`) with assets.
 
 (usdMedia_working_with_media)=
@@ -13,21 +13,7 @@ specific location. It also allows setting various playback options.
 The thumbnails could be pre-rendered images of the asset that could be 
 presented in the asset browser of a DCC tool, or in a system asset browser.
 
-View the example below that utilizes both of these APIs, with an example from 
-macOS Finder.
-
-![Example screenshot](usdMediaExample.jpg)
-
-```{admonition} Thumbnail Usage
-:class: note
-
-Notice how Finder is using `defaultThumbnail.jpg` in the file icon for 
-`assetPreviewsApi.usda`.
-```
-
-
-
-Below is one way to express `assetPreviewsApi.usda` from the image above.
+The following example, `assetPreviewsApi.usda`, uses both of these schemas.
 
 ```{code-block} usda
 #usda 1.0
@@ -53,6 +39,9 @@ def Xform "World"(
 {
     def Cube "Cube"
     {
+        double3 xformOp:translate = (1, 5, -2)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
         def SpatialAudio "Speech"
         {
             uniform token auralMode = "spatial"
@@ -77,3 +66,15 @@ The following can be observed from the example above:
 - The difference between using spatially played audio in `Speech` and 
 nonSpatial audio in `Ambient`
 - The way thumbnails are associated with assets, and how they can be utilized.
+- The way `Speech` is nested under the `Cube` gprim, in case the gprim is 
+ever moved or animated.
+
+As an example of how the thumbnail information might be presented, the 
+following macOS screenshot shows `assetPreviewsApi.usda` in the Finder file
+browser. Notice how Finder is using `defaultThumbnail.jpg` in the 
+file icon for `assetPreviewsApi.usda`.
+
+```{image} usdMediaExample.jpg
+:width: 800px
+:align: center
+```

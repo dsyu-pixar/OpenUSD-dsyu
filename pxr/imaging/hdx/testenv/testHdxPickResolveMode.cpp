@@ -110,10 +110,6 @@ Hdx_TestDriver::_Init(HdReprSelector const &reprSelector)
 
     // picking
     _pickablesCol = HdRprimCollection(_tokens->pickables, sceneReprSel);
-    // We have to unfortunately explictly add collections besides 'geometry'
-    // See HdRenderIndex constructor.
-    delegate.GetRenderIndex().GetChangeTracker().AddCollection(
-        _tokens->pickables);
 }
 
 void
@@ -405,7 +401,7 @@ My_TestGLDrawing::OffscreenTest()
             6  /*primsAndInstances*/,
             69 /*faces*/,
            135 /*edges*/,
-            41 /*points*/};
+            39 /*points*/};
         
         for (size_t i = 0; i < pickTargets.size(); i++) {
             allHits.clear();
@@ -427,7 +423,13 @@ My_TestGLDrawing::OffscreenTest()
             HdxPickTokens->pickPrimsAndInstances,
             HdxPickTokens->resolveAll,
             &allHits);
-        TF_VERIFY(allHits.size() == 22515);
+        const size_t expectedHitCount = 
+            _driver->GetHgi()->GetAPIName() == HgiTokens->Vulkan ?  22440 :
+            22438;
+        std::cout << "allHits: " << allHits.size()
+                  << " expectedHitCount:  " << expectedHitCount
+                  << std::endl;
+        TF_VERIFY(allHits.size() == expectedHitCount);
     }
 }
 

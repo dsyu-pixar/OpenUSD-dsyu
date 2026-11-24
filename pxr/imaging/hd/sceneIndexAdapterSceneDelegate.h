@@ -13,7 +13,25 @@
 #include <thread>
 #include <tbb/concurrent_unordered_map.h>
 
+#include "pxr/imaging/hd/extComputationPrimvarSchema.h"
+#include "pxr/imaging/hd/primvarSchema.h"
+
 PXR_NAMESPACE_OPEN_SCOPE
+
+/// Convert an ext computation primvar descriptor from Hydra 2 to Hydra 1
+/// representation...
+HD_API
+HdExtComputationPrimvarDescriptor
+HdExtComputationPrimvarDescriptorFromSchema(
+    TfToken const& name,
+    HdExtComputationPrimvarSchema primvar);
+
+/// Convert a primvar descriptor from Hydra 2 to Hydra 1 representation...
+HD_API
+HdPrimvarDescriptor
+HdPrimvarDescriptorFromSchema(
+    TfToken const& name,
+    HdPrimvarSchema primvar);
 
 /// \class HdSceneIndexAdapterSceneDelegate
 ///
@@ -34,13 +52,6 @@ public:
             SdfPath const &delegateID);
 
     ~HdSceneIndexAdapterSceneDelegate() override;
-
-    // ------------------------------------------------------------------------
-
-    /// Returns the end of a scene index chain containing the filters
-    /// necessary for input to an instance of this scene delegate.
-    static HdSceneIndexBaseRefPtr AppendDefaultSceneFilters(
-        HdSceneIndexBaseRefPtr inputSceneIndex, SdfPath const &delegateID);
 
     // satisfying HdSceneIndexObserver ----------------------------------------
     void PrimsAdded(
@@ -79,6 +90,8 @@ public:
     VtArray<TfToken> GetCategories(SdfPath const &id) override;
     HdVolumeFieldDescriptorVector GetVolumeFieldDescriptors(
             SdfPath const &volumeId) override;
+    VtValue GetVolumeParamValue(SdfPath const &id,
+        TfToken const &paramName) override;
 
     // ------------------------------------------------------------------------
     // Transform API
@@ -200,6 +213,8 @@ public:
                               HdExtComputationContext *context) override;
 
     TfTokenVector GetTaskRenderTags(SdfPath const &taskId) override;
+
+    int32_t GetPrimId(SdfPath const &id) override;
     
     void Sync(HdSyncRequestVector* request) override;
     void PostSyncCleanup() override;
@@ -269,8 +284,17 @@ private:
         _ComputeExtCmpPrimvarDescriptors(
             const HdContainerDataSourceHandle &primDataSource);
 
+    bool _didAddOrRemovePrimsSinceLastSync;
     bool _sceneDelegatesBuilt;
     std::vector<HdSceneDelegate*> _sceneDelegates;
+
+    // Hint cache of all prim paths that have been populated with
+    // geomSubset children.  This is purely an optimization and
+    // not authoritative -- it may have false positioves, such as
+    // if subsets are removed later.  These hints provide a way
+    // to skip the expense of _GatherGeomSubsets() when no subsets
+    // have been populated.
+    std::unordered_set<SdfPath, SdfPath::Hash> _geomSubsetParents;
 
     // Cache for rprim locator set -> dirty bits translation.
     HdDataSourceLocatorSet _cachedLocatorSet;

@@ -24,6 +24,8 @@ using HdStDrawItemsCachePtr = HdSt_DrawItemsCache *;
 using HdStResourceRegistrySharedPtr = 
     std::shared_ptr<class HdStResourceRegistry>;
 
+struct HdRenderDelegateInfo;
+
 ///
 /// HdStRenderDelegate
 ///
@@ -97,6 +99,11 @@ public:
     void DestroyBprim(HdBprim *bPrim) override;
 
     HDST_API
+    void BeginExecute() override;
+    HDST_API
+    void EndExecute() override;
+
+    HDST_API
     void CommitResources(HdChangeTracker *tracker) override;
 
     HDST_API
@@ -118,15 +125,24 @@ public:
     HDST_API
     HdAovDescriptor
         GetDefaultAovDescriptor(TfToken const& name) const override;
-    
+
+    /// Flag for the HdxTaskControllerSceneIndex.
+    ///
+    /// The HdxTaskControllerSceneIndex requires a different configuration
+    /// for Storm than any other render delegate.
+    ///
+    HDST_API
+    bool RequiresStormTasks() const override;
+
     // ---------------------------------------------------------------------- //
     /// \name Misc public API
     // ---------------------------------------------------------------------- //
 
-    // Returns whether or not HdStRenderDelegate can run on the current
-    // hardware.
+    // Returns whether HdStRenderDelegate can run on the given hardware.
     HDST_API
-    static bool IsSupported();
+    static bool IsSupported(
+        const HdRendererCreateArgsSchema &,
+        std::string * reasonWhyNot = nullptr);
 
     // Returns a raw pointer to the draw items cache owned (solely) by the
     // render delegate.
@@ -137,6 +153,19 @@ public:
     HDST_API
     Hgi* GetHgi();
 
+    HDST_API
+    static
+    const HdRenderDelegateInfo &GetRenderDelegateInfo();
+
+    // Static version of GetRenderSettingDescriptors for
+    // the renderer plugin.
+    HDST_API
+    static
+    const HdRenderSettingDescriptorList &GetRenderSettingDescriptorsForPlugin();
+
+    HDST_API
+    static bool IsEnabledNativeImplicitsRenderingSupport();
+    
 private:
     void _ApplyTextureSettings();
     HdSprim *_CreateFallbackMaterialPrim();
@@ -149,8 +178,6 @@ private:
 
     // Resource registry used in this render delegate
     HdStResourceRegistrySharedPtr _resourceRegistry;
-
-    HdRenderSettingDescriptorList _settingDescriptors;
 
     Hgi* _hgi;
 

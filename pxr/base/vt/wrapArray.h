@@ -24,6 +24,7 @@
 #include "pxr/base/tf/pyLock.h"
 #include "pxr/base/tf/pyObjWrapper.h"
 #include "pxr/base/tf/pyResultConversions.h"
+#include "pxr/base/tf/pySpan.h"
 #include "pxr/base/tf/pyUtils.h"
 #include "pxr/base/tf/iterator.h"
 #include "pxr/base/tf/meta.h"
@@ -402,10 +403,10 @@ static std::string _VtStr(T const &self)
 }
 
 template <typename T>
-void VtWrapArray()
+pxr_boost::python::class_<T> VtWrapArray()
 {
     using namespace Vt_WrapArray;
-    
+
     typedef T This;
     typedef typename This::ElementType Type;
 
@@ -485,9 +486,10 @@ void VtWrapArray()
         TfPyContainerConversions::
         variable_capacity_all_items_convertible_policy>();
 
-    // Wrap implicit conversions from VtArray to TfSpan.
-    implicitly_convertible<This, TfSpan<Type> >();
-    implicitly_convertible<This, TfSpan<const Type> >();
+    // Allow VtArrays to be passed to wrapped functions taking TfSpan.
+    TfPyRegisterSpanSource<This, Type>();
+
+    return selfCls;
 }
 
 template <class Array>

@@ -18,14 +18,18 @@ PXR_NAMESPACE_OPEN_SCOPE
 
 #define USD_VALIDATOR_NAME_TOKENS                                              \
     ((compositionErrorTest, "usdValidation:CompositionErrorTest"))             \
-    ((stageMetadataChecker, "usdValidation:StageMetadataChecker"))
+    ((stageMetadataChecker, "usdValidation:StageMetadataChecker"))             \
+    ((attributeTypeMismatch, "usdValidation:AttributeTypeMismatch"))           \
+    ((attributeSpecValueTypeMismatch, "usdValidation:AttributeSpecValueTypeMismatch"))
 
 #define USD_VALIDATOR_KEYWORD_TOKENS                                           \
     (UsdCoreValidators)
 
 #define USD_VALIDATION_ERROR_NAME_TOKENS                                       \
     ((compositionError, "CompositionError"))                                   \
-    ((missingDefaultPrim, "MissingDefaultPrim"))
+    ((missingDefaultPrim, "MissingDefaultPrim"))                               \
+    ((attributeTypeMismatch, "AttributeTypeMismatch"))                         \
+    ((attributeSpecValueTypeMismatch, "AttributeSpecValueTypeMismatch"))
 
 /// \def USD_VALIDATOR_NAME_TOKENS
 /// Tokens representing validator names. Note that for plugin provided

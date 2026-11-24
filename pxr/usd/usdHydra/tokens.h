@@ -81,10 +81,18 @@ struct UsdHydraTokensType {
     /// 
     /// The id value of a UvTexture shader.
     const TfToken HwUvTexture_1;
+    /// \brief "hydra:expandInstances"
+    /// 
+    /// UsdHydraPrimAPI
+    const TfToken hydraExpandInstances;
     /// \brief "hydraGenerativeProcedural"
     /// 
     /// Fallback value for UsdHydraGenerativeProceduralAPI::GetProceduralSystemAttr()
     const TfToken hydraGenerativeProcedural;
+    /// \brief "hydra:rendererName"
+    /// 
+    /// UsdHydraRenderPassAPI
+    const TfToken hydraRendererName;
     /// \brief "inputs:file"
     /// 
     /// The special "info:filename" property of a hydra Texture shader, which points to a resolvable texture asset.
@@ -163,8 +171,16 @@ struct UsdHydraTokensType {
     const TfToken wrapT;
     /// \brief "HydraGenerativeProceduralAPI"
     /// 
-    /// Schema identifer and family for UsdHydraGenerativeProceduralAPI
+    /// Schema identifier and family for UsdHydraGenerativeProceduralAPI
     const TfToken HydraGenerativeProceduralAPI;
+    /// \brief "HydraPrimAPI"
+    /// 
+    /// Schema identifier and family for UsdHydraPrimAPI
+    const TfToken HydraPrimAPI;
+    /// \brief "HydraRenderPassAPI"
+    /// 
+    /// Schema identifier and family for UsdHydraRenderPassAPI
+    const TfToken HydraRenderPassAPI;
     /// A vector of all of the tokens listed above.
     const std::vector<TfToken> allTokens;
 };

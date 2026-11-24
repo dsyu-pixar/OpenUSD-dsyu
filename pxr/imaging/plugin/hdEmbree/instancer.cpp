@@ -23,22 +23,21 @@ PXR_NAMESPACE_OPEN_SCOPE
 HdEmbreeInstancer::HdEmbreeInstancer(HdSceneDelegate* delegate,
                                      SdfPath const& id)
     : HdInstancer(delegate, id)
+    , _visible(true)
 {
 }
 
-HdEmbreeInstancer::~HdEmbreeInstancer()
-{
-    TF_FOR_ALL(it, _primvarMap) {
-        delete it->second;
-    }
-    _primvarMap.clear();
-}
+HdEmbreeInstancer::~HdEmbreeInstancer() = default;
 
 void
 HdEmbreeInstancer::Sync(HdSceneDelegate* delegate,
                         HdRenderParam* renderParam,
                         HdDirtyBits* dirtyBits)
 {
+    if (*dirtyBits & HdChangeTracker::DirtyVisibility) {
+        _visible = delegate->GetVisible(GetId());
+    }
+
     _UpdateInstancer(delegate, dirtyBits);
 
     if (HdChangeTracker::IsAnyPrimvarDirty(*dirtyBits, GetId())) {
@@ -62,11 +61,7 @@ HdEmbreeInstancer::_SyncPrimvars(HdSceneDelegate* delegate,
         if (HdChangeTracker::IsPrimvarDirty(dirtyBits, id, pv.name)) {
             VtValue value = delegate->Get(id, pv.name);
             if (!value.IsEmpty()) {
-                if (_primvarMap.count(pv.name) > 0) {
-                    delete _primvarMap[pv.name];
-                }
-                _primvarMap[pv.name] =
-                    new HdVtBufferSource(pv.name, value);
+                _primvarMap[pv.name] = value;
             }
         }
     }
@@ -88,6 +83,10 @@ HdEmbreeInstancer::ComputeInstanceTransforms(SdfPath const &prototypeId)
     // }
     // If any transform isn't provided, it's assumed to be the identity.
 
+    if (!_visible) {
+        return {};
+    }
+
     GfMatrix4d instancerTransform =
         GetDelegate()->GetInstancerTransform(GetId());
     VtIntArray instanceIndices =
@@ -101,7 +100,7 @@ HdEmbreeInstancer::ComputeInstanceTransforms(SdfPath const &prototypeId)
     // "hydra:instanceTranslations" holds a translation vector for each index.
     if (_primvarMap.count(HdInstancerTokens->instanceTranslations) > 0) {
         HdEmbreeBufferSampler
-                sampler(*_primvarMap[HdInstancerTokens->instanceTranslations]);
+            sampler(_primvarMap[HdInstancerTokens->instanceTranslations]);
         for (size_t i = 0; i < instanceIndices.size(); ++i) {
             GfVec3f translate;
             if (sampler.Sample(instanceIndices[i], &translate)) {
@@ -115,7 +114,8 @@ HdEmbreeInstancer::ComputeInstanceTransforms(SdfPath const &prototypeId)
     // "hydra:instanceRotations" holds a quaternion in <real, i, j, k>
     // format for each index.
     if (_primvarMap.count(HdInstancerTokens->instanceRotations) > 0) {
-        HdEmbreeBufferSampler sampler(*_primvarMap[HdInstancerTokens->instanceRotations]);
+        HdEmbreeBufferSampler
+            sampler(_primvarMap[HdInstancerTokens->instanceRotations]);
         for (size_t i = 0; i < instanceIndices.size(); ++i) {
             GfVec4f quat;
             if (sampler.Sample(instanceIndices[i], &quat)) {
@@ -129,7 +129,8 @@ HdEmbreeInstancer::ComputeInstanceTransforms(SdfPath const &prototypeId)
 
     // "hydra:instanceScales" holds an axis-aligned scale vector for each index.
     if (_primvarMap.count(HdInstancerTokens->instanceScales) > 0) {
-        HdEmbreeBufferSampler sampler(*_primvarMap[HdInstancerTokens->instanceScales]);
+        HdEmbreeBufferSampler
+            sampler(_primvarMap[HdInstancerTokens->instanceScales]);
         for (size_t i = 0; i < instanceIndices.size(); ++i) {
             GfVec3f scale;
             if (sampler.Sample(instanceIndices[i], &scale)) {
@@ -143,7 +144,7 @@ HdEmbreeInstancer::ComputeInstanceTransforms(SdfPath const &prototypeId)
     // "hydra:instanceTransforms" holds a 4x4 transform matrix for each index.
     if (_primvarMap.count(HdInstancerTokens->instanceTransforms) > 0) {
         HdEmbreeBufferSampler
-                sampler(*_primvarMap[HdInstancerTokens->instanceTransforms]);
+            sampler(_primvarMap[HdInstancerTokens->instanceTransforms]);
         for (size_t i = 0; i < instanceIndices.size(); ++i) {
             GfMatrix4d instanceTransform;
             if (sampler.Sample(instanceIndices[i], &instanceTransform)) {

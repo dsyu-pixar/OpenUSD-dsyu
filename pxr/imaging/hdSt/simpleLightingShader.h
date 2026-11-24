@@ -15,7 +15,6 @@
 #include "pxr/imaging/hd/version.h"
 
 #include "pxr/imaging/glf/simpleLightingContext.h"
-#include "pxr/base/tf/declarePtrs.h"
 
 #include <memory>
 #include <string>
@@ -31,8 +30,6 @@ using HdStSimpleLightingShaderSharedPtr =
     std::shared_ptr<class HdStSimpleLightingShader>;
 using HdRenderPassAovBindingVector = std::vector<HdRenderPassAovBinding>;
 
-TF_DECLARE_REF_PTRS(GlfBindingMap);
-
 /// \class HdStSimpleLightingShader
 ///
 /// A shader that supports simple lighting functionality.
@@ -41,7 +38,7 @@ class HdStSimpleLightingShader : public HdStLightingShader
 {
 public:
     HDST_API
-    HdStSimpleLightingShader();
+    HdStSimpleLightingShader(const Hgi* hgi);
     HDST_API
     ~HdStSimpleLightingShader() override;
 
@@ -97,7 +94,9 @@ public:
     /// Call after lighting context has been set or updated in Sync-phase.
     ///
     HDST_API
-    void AllocateTextureHandles(HdRenderIndex const &renderIndex);
+    void AllocateTextureHandles(
+        HdRenderIndex const &renderIndex,
+        const SdfPath& graphPath);
 
     /// The dome light environment map used as source for the other
     /// dome light textures.
@@ -117,17 +116,35 @@ public:
     const HdStTextureHandleSharedPtr &GetTextureHandle(
         const TfToken &name) const;
 
+    /// The dome light environment cubemap texture generated from the
+    /// latlong dome light texture.
+    HDST_API
+    const HdStTextureHandleSharedPtr &
+    GetDomeLightEnvironmentCubemapTextureHandle() const;
+
     HdRenderPassAovBindingVector const& GetShadowAovBindings() {
         return _shadowAovBindings;
     }
 
+    HDST_API
+    void SetDomeLightCubemapTargetMemory(unsigned int targetMemoryMB);
+
+    HDST_API
+    void SetMaxLights(uint32_t maxLights);
+
+    // Limit set based to half the max samplers allowed by selected Hgi backend.
+    HDST_API
+    uint32_t GetMaxShadows() const {
+        return _maxShadows;
+    }
+
 private:
-    SdfPath _GetAovPath(TfToken const &aov, size_t shadowIndex) const;
-    void _ResizeOrCreateBufferForAov(size_t shadowIndex) const;
+    void _AllocateShadowTextures(
+        HdStResourceRegistry* const resourceRegistry,
+        const SdfPath& graphPath);
     void _CleanupAovBindings();
 
     GlfSimpleLightingContextRefPtr _lightingContext; 
-    bool _useLighting;
     std::unique_ptr<class HioGlslfx> _glslfx;
 
     // Lexicographic ordering for stable output between runs.
@@ -143,14 +160,24 @@ private:
     NamedTextureHandleVector _namedTextureHandles;
 
     NamedTextureHandleVector _domeLightTextureHandles;
-    NamedTextureHandleVector _shadowTextureHandles;
+
+    // Maximum target memory of computed dome light cubemap texture (in MB)
+    unsigned int _domeLightCubemapTargetMemoryMB;
+    
+    NamedTextureHandle _shadowTextureHandle;
     
     HdSt_MaterialParamVector _lightTextureParams;
 
     HdRenderParam *_renderParam;
 
     HdRenderPassAovBindingVector _shadowAovBindings;
-    std::vector<std::unique_ptr<HdStRenderBuffer>> _shadowAovBuffers;
+
+    std::vector<HdStPooledRenderBufferUniquePtr> _shadowBuffers;
+
+    HdStPooledRenderBufferUniquePtr _shadowBufferFallback;
+
+    uint32_t _maxLights;
+    uint32_t _maxShadows;
 };
 
 

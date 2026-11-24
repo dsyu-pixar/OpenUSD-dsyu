@@ -34,7 +34,10 @@ HdSt_GeometricShader::HdSt_GeometricShader(std::string const &glslfxString,
                                        bool cullingPass,
                                        FvarPatchType fvarPatchType,
                                        SdfPath const &debugId,
-                                       float lineWidth)
+                                       float lineWidth,
+                                       uint32_t vertexCountFallback,
+                                       TfToken const &depthQualifier,
+                                       bool useHardwareClipPlanes)
     : HdStShaderCode()
     , _primType(primType)
     , _cullStyle(cullStyle)
@@ -44,6 +47,9 @@ HdSt_GeometricShader::HdSt_GeometricShader(std::string const &glslfxString,
     , _useMetalTessellation(useMetalTessellation)
     , _polygonMode(polygonMode)
     , _lineWidth(lineWidth)
+    , _vertexCountFallback(vertexCountFallback)
+    , _depthQualifier(depthQualifier)
+    , _useHardwareClipPlanes(useHardwareClipPlanes)
     , _frustumCullingPass(cullingPass)
     , _fvarPatchType(fvarPatchType)
     , _hash(0)
@@ -70,7 +76,10 @@ HdSt_GeometricShader::HdSt_GeometricShader(std::string const &glslfxString,
         primType,
         cullStyle,
         useMetalTessellation,
-        fvarPatchType
+        fvarPatchType,
+        vertexCountFallback,
+        depthQualifier,
+        useHardwareClipPlanes
     );
     //
     // note: Don't include polygonMode into the hash.
@@ -360,7 +369,10 @@ HdSt_GeometricShader::GetHgiPrimitiveType() const
                 shaderKey.IsFrustumCullingPass(),
                 shaderKey.GetFvarPatchType(),
                 /*debugId=*/SdfPath(),
-                shaderKey.GetLineWidth()));
+                shaderKey.GetLineWidth(),
+                shaderKey.GetVertexCountFallback(),
+                shaderKey.GetDepthQualifier(),
+                shaderKey.UseHardwareClipPlanes()));
     }
     return geometricShaderInstance.GetValue();
 }

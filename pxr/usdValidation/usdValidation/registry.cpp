@@ -6,16 +6,19 @@
 //
 
 #include "pxr/usdValidation/usdValidation/registry.h"
+#include "pxr/usdValidation/usdValidation/notice.h"
 
 #include "pxr/base/plug/plugin.h"
 #include "pxr/base/plug/registry.h"
 #include "pxr/base/tf/instantiateSingleton.h"
 #include "pxr/base/tf/registryManager.h"
 #include "pxr/base/tf/token.h"
+#include "pxr/usd/usd/schemaRegistry.h"
 
 #include <algorithm>
 #include <memory>
 #include <type_traits>
+#include <unordered_set>
 #include <utility>
 
 PXR_NAMESPACE_OPEN_SCOPE
@@ -50,6 +53,17 @@ _FillTokenVector(const JsValue &value)
         tokens.emplace_back(a);
     }
     return tokens;
+}
+
+// schemaTypes metadata may name a schema by its TfType name (UsdGeomSphere) or
+// by its schema identifier (Sphere). Returns the TfType name, which is used as
+// the canonical key for schema types. If \p schemaType does not name a known
+// schema type, it is returned unchanged.
+static TfToken
+_GetCanonicalSchemaTypeName(const TfToken &schemaType)
+{
+    const TfType type = UsdSchemaRegistry::GetTypeFromName(schemaType);
+    return type ? TfToken(type.GetTypeName()) : schemaType;
 }
 
 // Helper to return common keywords associated with all validators in plugInfo
@@ -134,7 +148,6 @@ UsdValidationRegistry::_PopulateMetadataFromPlugInfo()
                 = TfToken(pluginName.GetString()
                           + _tokens->PluginValidatorNameDelimiter.GetString()
                           + validatorName.GetString());
-            validatorNames.push_back(metadata.name);
 
             metadata.doc = doc->GetString();
 
@@ -176,6 +189,19 @@ UsdValidationRegistry::_PopulateMetadataFromPlugInfo()
                 metadata.isSuite = false;
             }
 
+            // A suite is expanded into its contained validators when
+            // validating, so only their schemaTypes are used. Skip a suite
+            // which provides schemaTypes, as it can never be registered.
+            if (metadata.isSuite && !metadata.schemaTypes.empty()) {
+                TF_RUNTIME_ERROR("Cannot provide schemaTypes metadata for "
+                                 "validator suite '%s'; provide it on the "
+                                 "contained validators instead.",
+                                 metadata.name.GetText());
+                continue;
+            }
+
+            validatorNames.push_back(metadata.name);
+
             // we need no protection of shared resource here, because this
             // member function is only called from within the constructor, and
             // that's guaranteed to run only once by TfSingleton initialization.
@@ -190,31 +216,36 @@ UsdValidationRegistry::_PopulateMetadataFromPlugInfo()
 
 void
 UsdValidationRegistry::RegisterPluginValidator(
-    const TfToken &validatorName, const UsdValidateLayerTaskFn &layerTaskFn)
+    const TfToken &validatorName, const UsdValidateLayerTaskFn &layerTaskFn,
+    std::vector<UsdValidationFixer> fixers)
 {
-    _RegisterPluginValidator<UsdValidateLayerTaskFn>(validatorName,
-                                                     layerTaskFn);
+    _RegisterPluginValidator<UsdValidateLayerTaskFn>(
+        validatorName, layerTaskFn, fixers);
 }
 
 void
 UsdValidationRegistry::RegisterPluginValidator(
-    const TfToken &validatorName, const UsdValidateStageTaskFn &stageTaskFn)
+    const TfToken &validatorName, const UsdValidateStageTaskFn &stageTaskFn,
+    std::vector<UsdValidationFixer> fixers)
 {
-    _RegisterPluginValidator<UsdValidateStageTaskFn>(validatorName,
-                                                     stageTaskFn);
+    _RegisterPluginValidator<UsdValidateStageTaskFn>(
+        validatorName, stageTaskFn, fixers);
 }
 
 void
 UsdValidationRegistry::RegisterPluginValidator(
-    const TfToken &validatorName, const UsdValidatePrimTaskFn &primTaskFn)
+    const TfToken &validatorName, const UsdValidatePrimTaskFn &primTaskFn,
+    std::vector<UsdValidationFixer> fixers)
 {
-    _RegisterPluginValidator<UsdValidatePrimTaskFn>(validatorName, primTaskFn);
+    _RegisterPluginValidator<UsdValidatePrimTaskFn>(
+        validatorName, primTaskFn, fixers);
 }
 
 template <typename ValidateTaskFn>
 void
-UsdValidationRegistry::_RegisterPluginValidator(const TfToken &validatorName,
-                                                const ValidateTaskFn &taskFn)
+UsdValidationRegistry::_RegisterPluginValidator(
+    const TfToken &validatorName, const ValidateTaskFn &taskFn,
+    std::vector<UsdValidationFixer> fixers)
 {
     static_assert(std::is_same_v<ValidateTaskFn, UsdValidateLayerTaskFn>
                       || std::is_same_v<ValidateTaskFn, UsdValidateStageTaskFn>
@@ -236,38 +267,43 @@ UsdValidationRegistry::_RegisterPluginValidator(const TfToken &validatorName,
         return;
     }
 
-    _RegisterValidator(metadata, taskFn, /* addMetadata */ false);
+    _RegisterValidator(
+        metadata, taskFn, fixers, /* addMetadata */ false);
 }
 
 void
 UsdValidationRegistry::RegisterValidator(
     const UsdValidationValidatorMetadata &metadata,
-    const UsdValidateLayerTaskFn &layerTaskFn)
+    const UsdValidateLayerTaskFn &layerTaskFn,
+    std::vector<UsdValidationFixer> fixers)
 {
-    _RegisterValidator(metadata, layerTaskFn);
+    _RegisterValidator(metadata, layerTaskFn, fixers);
 }
 
 void
 UsdValidationRegistry::RegisterValidator(
     const UsdValidationValidatorMetadata &metadata,
-    const UsdValidateStageTaskFn &stageTaskFn)
+    const UsdValidateStageTaskFn &stageTaskFn,
+    std::vector<UsdValidationFixer> fixers)
 {
-    _RegisterValidator(metadata, stageTaskFn);
+    _RegisterValidator(metadata, stageTaskFn, fixers);
 }
 
 void
 UsdValidationRegistry::RegisterValidator(
     const UsdValidationValidatorMetadata &metadata,
-    const UsdValidatePrimTaskFn &primTaskFn)
+    const UsdValidatePrimTaskFn &primTaskFn,
+    std::vector<UsdValidationFixer> fixers)
 {
-    _RegisterValidator(metadata, primTaskFn);
+    _RegisterValidator(metadata, primTaskFn, fixers);
 }
 
 template <typename ValidateTaskFn>
 void
 UsdValidationRegistry::_RegisterValidator(
     const UsdValidationValidatorMetadata &metadata,
-    const ValidateTaskFn &taskFn, bool addMetadata)
+    const ValidateTaskFn &taskFn, std::vector<UsdValidationFixer> fixers,
+    bool addMetadata)
 {
     static_assert(std::is_same_v<ValidateTaskFn, UsdValidateLayerTaskFn>
                       || std::is_same_v<ValidateTaskFn, UsdValidateStageTaskFn>
@@ -281,6 +317,10 @@ UsdValidationRegistry::_RegisterValidator(
         return;
     }
 
+    // newValidator will be used to send notice after the lock is released on a
+    // successful registration, to avoid sending notice while holding the unique
+    // lock on the registry mutex.
+    const UsdValidationValidator *newValidator = nullptr;
     {
         // Lock for writing validators.
         std::unique_lock lock(_mutex);
@@ -307,13 +347,31 @@ UsdValidationRegistry::_RegisterValidator(
         }
 
         std::unique_ptr<UsdValidationValidator> validator
-            = std::make_unique<UsdValidationValidator>(metadata, taskFn);
-        if (!_validators.emplace(metadata.name, std::move(validator)).second) {
+            = std::make_unique<UsdValidationValidator>(
+                metadata, taskFn, fixers);
+        auto [validatorItr, inserted] =
+            _validators.emplace(metadata.name, std::move(validator));
+        if (inserted) {
+            newValidator = validatorItr->second.get();
+        } else {
             TF_CODING_ERROR(
                 "Validator with name '%s' already exists, failed to register "
                 "it again.",
                 metadata.name.GetText());
         }
+    }
+
+    // Since lock is released, it's safe to send notice now, with internal lock
+    // held by the notice system on a call from Send().
+    // Notice only needs to be sent for validator which are registered
+    // dynamically, outside the plugin registration process. addMetadata is used 
+    // to determine this, since for plugin registered validators, their metadata
+    // is already added during plugin metadata parsing, and for dynamic
+    // registration of validators, metadata needs to be added at the time of
+    // registration, so if addMetadata is true, that means this validator is
+    // dynamically registered.
+    if (newValidator && addMetadata) {
+        UsdValidationNotice::DidRegisterValidator(newValidator).Send();
     }
 }
 
@@ -447,51 +505,22 @@ UsdValidationRegistry::_RegisterValidatorSuite(
         return;
     }
 
-    // Make sure containedValidators are conforming if suite has schemaTypes.
-    // That is, validators have PrimTaskFn, otherwise, do not register this
-    // validator. And contained validators's schemaType is a subset of Suite's
-    // schemaTypes metadata.
-    if (!metadata.schemaTypes.empty()) {
-        for (const UsdValidationValidator *const validator :
-             containedValidators) {
-            if (!validator) {
-                // Possible clients try to register a validator which is
-                // invalid/nullptr
-                TF_CODING_ERROR(
-                    "Validator Suite '%s' not registered, one of the contained "
-                    "validator is invalid.",
-                    metadata.name.GetText());
-                return;
-            }
-            if (!validator->_GetValidatePrimTask()) {
-                TF_CODING_ERROR(
-                    "ValidatorSuite '%s' cannot be registered, as it provides "
-                    "schemaTypes, but at least one of its contained validator "
-                    "'%s' does not provide a UsdValidatePrimTaskFn",
-                    metadata.name.GetText(),
-                    validator->GetMetadata().name.GetText());
-                return;
-            }
-            // We also need to make sure the contained validator's schemaTypes
-            // is a subset of validatorSuite's schemaTypes
-            // NB: The size of the vectors here should be small.
-            for (const TfToken &schemaType :
-                 validator->GetMetadata().schemaTypes) {
-                if (std::find(metadata.schemaTypes.begin(),
-                              metadata.schemaTypes.end(), schemaType)
-                    == metadata.schemaTypes.end()) {
-                    TF_CODING_ERROR(
-                        "schemaType '%s' provided by a contained validator "
-                        "'%s' is not in schemaTypes for '%s' validator suite",
-                        schemaType.GetText(),
-                        validator->GetMetadata().name.GetText(),
-                        metadata.name.GetText());
-                    return;
-                }
-            }
+    // Contained validators are dereferenced when a validation context expands
+    // the suite, so do not register a suite which contains an invalid one.
+    for (const UsdValidationValidator *const validator : containedValidators) {
+        if (!validator) {
+            TF_CODING_ERROR(
+                "Validator Suite '%s' not registered, one of the contained "
+                "validator is invalid.",
+                metadata.name.GetText());
+            return;
         }
     }
 
+    // newValidatorSuite will be used to send notice after the lock is released
+    // on a successful registration, to avoid sending notice while holding the
+    // unique lock on the registry mutex.
+    const UsdValidationValidatorSuite *newValidatorSuite = nullptr;
     {
         // Lock for writing validatorSuites
         std::unique_lock lock(_mutex);
@@ -503,7 +532,7 @@ UsdValidationRegistry::_RegisterValidatorSuite(
         }
 
         // Note in case validator metadata needs to be added and there is
-        // contention only the first validator's (which is being added)
+        // contention, only the first validator's (which is being added)
         // metadata will be added.
         if (addMetadata) {
             // Following call to _AddValidatorMetadata is protected by the lock
@@ -520,13 +549,30 @@ UsdValidationRegistry::_RegisterValidatorSuite(
         std::unique_ptr<UsdValidationValidatorSuite> validatorSuite
             = std::make_unique<UsdValidationValidatorSuite>(
                 metadata, containedValidators);
-        if (!_validatorSuites.emplace(metadata.name, std::move(validatorSuite))
-                 .second) {
+        auto [validatorSuiteItr, inserted] = _validatorSuites.emplace(
+            metadata.name, std::move(validatorSuite));
+        if (inserted) {
+            newValidatorSuite = validatorSuiteItr->second.get();
+        } else {
             TF_CODING_ERROR(
                 "Suite with name '%s' already exists, failed to register it "
                 "again.",
                 metadata.name.GetText());
         }
+    }
+
+    // Since lock is released, it's safe to send notice now, with internal lock
+    // held by the notice system on a call from Send().
+    // Notice only needs to be sent for validator suites which are registered
+    // dynamically, outside the plugin registration process. addMetadata is used
+    // to determine this, since for plugin registered validator suites, their 
+    // metadata is already added during plugin metadata parsing, and for dynamic
+    // registration of validator suites, metadata needs to be added at the time
+    // of registration, so if addMetadata is true, that means this validator
+    // suite is dynamically registered.
+    if (newValidatorSuite && addMetadata) {
+        UsdValidationNotice::DidRegisterValidatorSuite(
+            newValidatorSuite).Send();
     }
 }
 
@@ -680,9 +726,11 @@ UsdValidationValidatorMetadataVector
 UsdValidationRegistry::GetValidatorMetadataForPlugins(
     const TfTokenVector &pluginNames) const
 {
-    // Since the _pluginNameToValidatorNames is created during registry
-    // initialization this method is inherently thread safe, as
-    // _pluginNameToValidatorNames is already populated and never updated.
+    // _pluginNameToValidatorNames is populated during registry initialization
+    // and never updated, but _validatorNameToMetadata, which the helper reads,
+    // is updated as validators are registered dynamically, so we need to hold a
+    // shared lock on _mutex here.
+    std::shared_lock lock(_mutex);
     return _GetValidatorMetadataForToken(_pluginNameToValidatorNames,
                                          pluginNames);
 }
@@ -699,9 +747,20 @@ UsdValidationValidatorMetadataVector
 UsdValidationRegistry::GetValidatorMetadataForSchemaTypes(
     const TfTokenVector &schemaTypes) const
 {
+    // Clients may query by TfType name or schema identifier, so look up by
+    // the same canonical names used to key _schemaTypeToValidatorNames.
+    const TfTokenVector canonicalizedSchemaTypes = [&]() {
+        TfTokenVector result;
+        result.reserve(schemaTypes.size());
+        for (const TfToken &schemaType : schemaTypes) {
+            result.push_back(_GetCanonicalSchemaTypeName(schemaType));
+        }
+        return result;
+    }();
+
     std::shared_lock lock(_mutex);
     return _GetValidatorMetadataForToken(_schemaTypeToValidatorNames,
-                                         schemaTypes);
+                                         canonicalizedSchemaTypes);
 }
 
 UsdValidationValidatorMetadataVector
@@ -709,14 +768,22 @@ UsdValidationRegistry::_GetValidatorMetadataForToken(
     const _TokenToValidatorNamesMap &tokenToValidatorNames,
     const TfTokenVector &tokens) const
 {
+    // Callers hold a shared lock on _mutex.
+ 
+    // A validator may be found through more than one of the tokens, or more
+    // than once through one token, so only add its metadata the first time it
+    // is found.
     UsdValidationValidatorMetadataVector result;
+    std::unordered_set<TfToken, TfToken::HashFunctor> addedValidatorNames;
     for (const TfToken &token : tokens) {
         const auto &itr = tokenToValidatorNames.find(token);
         if (itr == tokenToValidatorNames.end()) {
             continue;
         }
-        std::shared_lock lock(_mutex);
         for (const TfToken &validatorName : itr->second) {
+            if (!addedValidatorNames.insert(validatorName).second) {
+                continue;
+            }
             // If we have a validatorName in tokenToValidatorNames, we
             // must have a validatorMetadata for this validatorName, because
             // that's how these are added in _AddValidatorMetadata
@@ -741,8 +808,30 @@ UsdValidationRegistry::_AddValidatorMetadata(
         // Callers are required to hold a lock on `_mutex`, so
         // _schemaTypeToValidatorNames and _keywordToValidatorNames are
         // protected here.
+        //
+        // schemaTypes are keyed by their canonical TfType name. Entries
+        // naming the same schema collapse to a single key; a linear find
+        // suffices as schemaTypes lists are small.
+        // Entries that do not resolve are kept under their authored name, so
+        // they can still be queried, but no context will match them to a prim.
+        TfTokenVector schemaTypes;
+        schemaTypes.reserve(metadata.schemaTypes.size());
+        for (const TfToken &schemaType : metadata.schemaTypes) {
+            const TfType type = UsdSchemaRegistry::GetTypeFromName(schemaType);
+            if (!type) {
+                TF_WARN("schemaType '%s' for validator '%s' is not a known "
+                        "schema TfType name or schema identifier.",
+                        schemaType.GetText(), metadata.name.GetText());
+            }
+            const TfToken canonicalName
+                = type ? TfToken(type.GetTypeName()) : schemaType;
+            if (std::find(schemaTypes.begin(), schemaTypes.end(),
+                          canonicalName) == schemaTypes.end()) {
+                schemaTypes.push_back(canonicalName);
+            }
+        }
         _UpdateValidatorNamesMappings(_schemaTypeToValidatorNames,
-                                      metadata.name, metadata.schemaTypes);
+                                      metadata.name, schemaTypes);
         _UpdateValidatorNamesMappings(_keywordToValidatorNames, metadata.name,
                                       metadata.keywords);
     }
@@ -755,6 +844,18 @@ UsdValidationRegistry::_CheckMetadata(
     const UsdValidationValidatorMetadata &metadata, bool checkForPrimTask,
     bool expectSuite)
 {
+    // return false if we are trying to register a suite which is associated
+    // with schemaTypes. A suite is expanded into its contained validators when
+    // validating, so only their schemaTypes are used.
+    if (expectSuite && !metadata.schemaTypes.empty()) {
+        TF_CODING_ERROR(
+            "Invalid metadata for ('%s') validator suite. Cannot provide "
+            "schemaTypes metadata for a validator suite; provide it on the "
+            "contained validators instead.",
+            metadata.name.GetText());
+        return false;
+    }
+
     // return false if we are trying to register a validator which is
     // associated with schemaTypes, and testing task is not
     // UsdValidatePrimTaskFn!
@@ -802,9 +903,10 @@ UsdValidationRegistry::_UpdateValidatorNamesMappings(
         if (tokenMap.find(token) == tokenMap.end()) {
             tokenMap.emplace(token, TfTokenVector { validatorName });
         } else {
-            // Since this method is only called from the
-            // _PopulateMetadataFromPlugInfo, its guaranteed that
-            // validatorNames will be unique in this vector.
+            // validatorName may already be in this vector, if \p tokens
+            // contains the same token more than once, e.g. a keyword provided
+            // both for all validators in a plugInfo and for this validator.
+            // _GetValidatorMetadataForToken skips repeated validator names.
             tokenMap[token].push_back(validatorName);
         }
     }

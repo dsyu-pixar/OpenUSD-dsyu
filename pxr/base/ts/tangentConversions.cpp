@@ -7,6 +7,7 @@
 
 #include "pxr/pxr.h"
 
+#include "pxr/base/ts/types.h"
 #include "pxr/base/ts/tangentConversions.h"
 #include "pxr/base/ts/valueTypeDispatch.h"
 
@@ -126,72 +127,19 @@ bool Ts_ConvertFromStandardHelper(
 }
 
 // Instantiate versions we want in the library
-template
-TS_API
-bool Ts_ConvertToStandardHelper(
-    TsTime widthIn,
-    double slopeOrHeightIn,
-    bool convertHeightToSlope,
-    bool divideValuesByThree,
-    bool negateHeight,
-    TsTime* widthOut,
-    double* slopeOut);
-
-template
-TS_API
-bool Ts_ConvertToStandardHelper(
-    TsTime widthIn,
-    float slopeOrHeightIn,
-    bool convertHeightToSlope,
-    bool divideValuesByThree,
-    bool negateHeight,
-    TsTime* widthOut,
-    float* slopeOut);
-
-template
-TS_API
-bool Ts_ConvertToStandardHelper(
-    TsTime widthIn,
-    GfHalf slopeOrHeightIn,
-    bool convertHeightToSlope,
-    bool divideValuesByThree,
-    bool negateHeight,
-    TsTime* widthOut,
-    GfHalf* slopeOut);
-
-template
-TS_API
-bool Ts_ConvertFromStandardHelper(
-    TsTime widthIn,
-    double slopeIn,
-    bool convertSlopeToHeight,
-    bool multiplyValuesByThree,
-    bool negateHeight,
-    TsTime* widthOut,
-    double* slopeOrHeightOut);
-
-template
-TS_API
-bool Ts_ConvertFromStandardHelper(
-    TsTime widthIn,
-    float slopeIn,
-    bool convertSlopeToHeight,
-    bool multiplyValuesByThree,
-    bool negateHeight,
-    TsTime* widthOut,
-    float* slopeOrHeightOut);
-
-template
-TS_API
-bool Ts_ConvertFromStandardHelper(
-    TsTime widthIn,
-    GfHalf slopeIn,
-    bool convertSlopeToHeight,
-    bool multiplyValuesByThree,
-    bool negateHeight,
-    TsTime* widthOut,
-    GfHalf* slopeOrHeightOut);
-
+#define _INSTANTIATE_HELPERS(unused, tuple)                                 \
+    template TS_API bool Ts_ConvertToStandardHelper(                        \
+        TsTime widthIn, TS_SPLINE_VALUE_CPP_TYPE(tuple) slopeOrHeightIn,    \
+        bool convertHeightToSlope, bool divideValuesByThree,                \
+        bool negateHeight, TsTime* widthOut,                                \
+        TS_SPLINE_VALUE_CPP_TYPE(tuple)* slopeOut);                         \
+    template TS_API bool Ts_ConvertFromStandardHelper(                      \
+        TsTime widthIn, TS_SPLINE_VALUE_CPP_TYPE(tuple) slopeIn,            \
+        bool convertSlopeToHeight, bool multiplyValuesByThree,              \
+        bool negateHeight, TsTime* widthOut,                                \
+        TS_SPLINE_VALUE_CPP_TYPE(tuple)* slopeOrHeightOut);
+TF_PP_SEQ_FOR_EACH(_INSTANTIATE_HELPERS, ~, TS_SPLINE_STORAGE_VALUE_TYPES)
+#undef _INSTANTIATE_HELPERS
 
 namespace { // anonymous namespace
 
@@ -257,9 +205,17 @@ bool TsConvertToStandardTangent(
     TsTime* widthOut,
     VtValue* slopeOut)
 {
+    if (slopeOrHeightIn.IsHolding<GfTimeCode>() ||
+        slopeOrHeightIn.IsHolding<GfDuration>())
+    {
+        // XXX: why not?
+        TF_CODING_ERROR("GfTimeCode and GfDuration are not supported for "
+                        "TsConvertToStandardTangent");
+    }
+
     bool ok = true;
 
-    TsDispatchToValueTypeTemplate<_VtConvertToStandardHelper>(
+    TsDispatchToStorageValueTypeTemplate<_VtConvertToStandardHelper>(
         slopeOrHeightIn.GetType(),
         widthIn, slopeOrHeightIn, convertHeightToSlope, divideValuesByThree,
         negateHeight, widthOut, slopeOut, &ok);
@@ -276,10 +232,23 @@ bool TsConvertFromStandardTangent(
     TsTime* widthOut,
     VtValue* slopeOrHeightOut)
 {
+    if (slopeIn.IsHolding<GfTimeCode>())
+    {
+        TF_CODING_ERROR("GfTimeCode is unsupported for "
+                        "TsConvertFromStandardTangent");
+        return false;
+    }
+
+    if (slopeIn.IsHolding<GfDuration>())
+    {
+        TF_CODING_ERROR("GfDuration is unsupported for "
+                        "TsConvertFromStandardTangent");
+        return false;
+    }
 
     bool ok = true;
 
-    TsDispatchToValueTypeTemplate<_VtConvertFromStandardHelper>(
+    TsDispatchToStorageValueTypeTemplate<_VtConvertFromStandardHelper>(
         slopeIn.GetType(),
         widthIn, slopeIn, convertSlopeToHeight, multiplyValuesByThree,
         negateHeight, widthOut, slopeOrHeightOut, &ok);

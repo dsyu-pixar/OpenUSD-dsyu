@@ -60,6 +60,8 @@ TF_DECLARE_PUBLIC_TOKENS(HdNurbsPatchSchemaTokens, HD_API,
 //-----------------------------------------------------------------------------
 
 
+/// \class HdNurbsPatchSchema
+///
 class HdNurbsPatchSchema : public HdSchema
 {
 public:
@@ -122,6 +124,7 @@ public:
     HD_API
     HdTokenDataSourceHandle GetOrientation() const;
 
+    /// Deprecated. Use the prim-level surface schema instead.
     HD_API
     HdBoolDataSourceHandle GetDoubleSided() const; 
 

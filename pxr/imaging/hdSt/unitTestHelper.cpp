@@ -113,6 +113,7 @@ HdSt_TestDriver::_CreateRenderPassState()
             _GetRenderDelegate()->CreateRenderPassState()) };
     // set depthfunc to GL default
     _renderPassStates[0]->SetDepthFunc(HdCmpFuncLess);
+    _renderPassStates[0]->SetAlphaToCoverageEnabled(true);
 }
 
 HdRenderPassSharedPtr const &
@@ -648,7 +649,7 @@ HdSt_TextureTestDriver::_CreatePipeline(HgiTextureHandle const& colorDst)
 
     // Setup attachments
     _attachment0.blendEnabled = false;
-    _attachment0.loadOp = HgiAttachmentLoadOpDontCare;
+    _attachment0.loadOp = HgiAttachmentLoadOpLoad;
     _attachment0.storeOp = HgiAttachmentStoreOpStore;
     _attachment0.srcColorBlendFactor = HgiBlendFactorZero;
     _attachment0.dstColorBlendFactor = HgiBlendFactorZero;

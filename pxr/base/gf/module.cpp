@@ -18,6 +18,7 @@ TF_WRAP_MODULE
     TF_WRAP( DualQuatd );
     TF_WRAP( DualQuatf );
     TF_WRAP( DualQuath );
+    TF_WRAP( Duration );
     TF_WRAP( Frustum );
     TF_WRAP( Gamma );
     TF_WRAP( Half );
@@ -57,6 +58,8 @@ TF_WRAP_MODULE
     TF_WRAP( Rotation );
     TF_WRAP( Size2 );
     TF_WRAP( Size3 );
+    TF_WRAP( TestPySpan );
+    TF_WRAP( TimeCode );
 
     // Order of wrapping Vecs matters because in the cases where overloads could
     // choose either float or double, we want the double versions to be found
@@ -80,6 +83,7 @@ TF_WRAP_MODULE
     // Note that Transform must be wrapped after Rotation and Vec3d so that it
     // can create python objects for them as keyword args.
     TF_WRAP( Transform );
+    TF_WRAP( Traits );
 
 
     TF_WRAP( Camera );

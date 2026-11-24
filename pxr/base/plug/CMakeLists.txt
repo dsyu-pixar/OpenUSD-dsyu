@@ -8,10 +8,7 @@ pxr_library(plug
         js
         trace
         work
-        ${TBB_tbb_LIBRARY}
-
-    INCLUDE_DIRS
-        ${TBB_INCLUDE_DIRS}
+        TBB::tbb
 
     PUBLIC_CLASSES
         interfaceFactory
@@ -46,46 +43,53 @@ pxr_library(plug
         overview.dox
 )
 
+if(NOT "${PXR_APPLE_FRAMEWORK_RELATIVE_RESOURCES}" STREQUAL "")
+    target_compile_definitions(plug
+        PRIVATE
+        PXR_APPLE_FRAMEWORK_RELATIVE_RESOURCES="${PXR_APPLE_FRAMEWORK_RELATIVE_RESOURCES}"
+    )
+endif()
+
 pxr_test_scripts(
     testPlug.py
 )
 
-pxr_build_test_shared_lib(TestPlugDso1
+pxr_build_test_plugin(TestPlugDso1
     INSTALL_PREFIX PlugPlugins
     LIBRARIES
         tf
     CPPFILES
         testenv/TestPlugDso1.cpp
 ) 
-pxr_build_test_shared_lib(TestPlugDso2
+pxr_build_test_plugin(TestPlugDso2
     INSTALL_PREFIX PlugPlugins
     LIBRARIES
         tf
     CPPFILES
         testenv/TestPlugDso2.cpp
 ) 
-pxr_build_test_shared_lib(TestPlugDso3
+pxr_build_test_plugin(TestPlugDso3
     INSTALL_PREFIX PlugPlugins
     LIBRARIES
         tf
     CPPFILES
         testenv/TestPlugDso3.cpp
 ) 
-pxr_build_test_shared_lib(TestPlugDsoEmpty
+pxr_build_test_plugin(TestPlugDsoEmpty
     INSTALL_PREFIX PlugPlugins
     LIBRARIES
         tf
     CPPFILES
         testenv/TestPlugDsoEmpty.cpp
 ) 
-pxr_build_test_shared_lib(TestPlugDsoIncomplete
+pxr_build_test_plugin(TestPlugDsoIncomplete
     INSTALL_PREFIX PlugPlugins
     LIBRARIES
         tf
     CPPFILES
         testenv/TestPlugDsoIncomplete.cpp
 ) 
-pxr_build_test_shared_lib(TestPlugDsoUnloadable
+pxr_build_test_plugin(TestPlugDsoUnloadable
     INSTALL_PREFIX PlugPlugins
     LIBRARIES
         tf
@@ -178,5 +182,5 @@ endif()
 pxr_register_test(testPlug
     PYTHON
     COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testPlug"
+    TESTENV testenv/testPlug
 )
-

@@ -30,13 +30,18 @@ HdSt_TextureObjectRegistry::HdSt_TextureObjectRegistry(
 
 HdSt_TextureObjectRegistry::~HdSt_TextureObjectRegistry() = default;
 
+namespace
+{
+
+template <typename SubTexIdType>
 bool
-static
-_IsDynamic(const HdStTextureIdentifier &textureId)
+_IsSubTexIdType(const HdStTextureIdentifier &textureId)
 {
     return
-        dynamic_cast<const HdStDynamicUvSubtextureIdentifier*>(
+        dynamic_cast<const SubTexIdType*>(
             textureId.GetSubtextureIdentifier());
+}
+
 }
 
 HdStTextureObjectSharedPtr
@@ -46,7 +51,7 @@ HdSt_TextureObjectRegistry::_MakeTextureObject(
 {
     switch(textureType) {
     case HdStTextureType::Uv:
-        if (_IsDynamic(textureId)) {
+        if (_IsSubTexIdType<HdStDynamicUvSubtextureIdentifier>(textureId)) {
             return
                 std::make_shared<HdStDynamicUvTextureObject>(textureId, this);
         } else {
@@ -59,6 +64,14 @@ HdSt_TextureObjectRegistry::_MakeTextureObject(
         return std::make_shared<HdStPtexTextureObject>(textureId, this);
     case HdStTextureType::Udim:
         return std::make_shared<HdStUdimTextureObject>(textureId, this);
+    case HdStTextureType::Cubemap:
+        if (_IsSubTexIdType<HdStDynamicCubemapSubtextureIdentifier>(
+                textureId)) {
+            return
+                std::make_shared<HdStDynamicUvTextureObject>(
+                    textureId,
+                    this);
+        }
     }
 
     TF_CODING_ERROR(
@@ -88,6 +101,69 @@ HdSt_TextureObjectRegistry::AllocateTextureObject(
     }
 
     return inst.GetValue();
+}
+
+VtDictionary
+_FetchTextureInfo(const HgiTextureHandle& textureHandle, int refCount)
+{
+    VtDictionary info;
+    info["uniqueIdentifier"] = textureHandle.GetId();
+    const HgiTextureDesc& textureDesc = textureHandle->GetDescriptor();
+    info["memoryUsed"] = textureHandle->GetByteSizeOfResource();
+    info["width"] = textureDesc.dimensions[0];
+    info["height"] = textureDesc.dimensions[1];
+    info["depth"] = textureDesc.dimensions[2];
+    info["format"] = TfEnum::GetName(textureDesc.format).substr(9);
+    info["referenceCount"] = refCount;
+    info["debugName"] = textureDesc.debugName;
+    return info;
+}
+
+HDST_API
+std::vector<VtDictionary> HdSt_TextureObjectRegistry::GetAllocInfo() const
+{
+    std::vector<VtDictionary> resourceList;
+    // Reserve 1.5x number of textures to accomodate for some Ptex/Udim
+    resourceList.reserve(_textureObjectRegistry.size() * 1.5);
+    for (const auto& entry : _textureObjectRegistry)
+    {
+        const HdStTextureObjectSharedPtr& textureObject = entry.second.value;
+        int refCount = (int)textureObject.use_count();
+        HgiTextureHandle textureHandle;
+        switch (textureObject->GetTextureType()) {
+            case HdStTextureType::Uv:
+            case HdStTextureType::Cubemap:
+                resourceList.push_back(
+                    _FetchTextureInfo(dynamic_cast<HdStUvTextureObject*>(
+                    textureObject.get())->GetTexture(), refCount));
+                break;
+            case HdStTextureType::Field:
+                resourceList.push_back(
+                    _FetchTextureInfo(dynamic_cast<HdStFieldTextureObject*>(
+                    textureObject.get())->GetTexture(), refCount));
+                break;
+            case HdStTextureType::Ptex:
+                resourceList.push_back(
+                    _FetchTextureInfo(dynamic_cast<HdStPtexTextureObject*>(
+                    textureObject.get())->GetTexelTexture(), refCount));
+                resourceList.push_back(
+                    _FetchTextureInfo(dynamic_cast<HdStPtexTextureObject*>(
+                    textureObject.get())->GetLayoutTexture(), refCount));
+                break;
+            case HdStTextureType::Udim:
+                resourceList.push_back(
+                    _FetchTextureInfo(dynamic_cast<HdStUdimTextureObject*>(
+                    textureObject.get())->GetTexelTexture(), refCount));
+                resourceList.push_back(
+                    _FetchTextureInfo(dynamic_cast<HdStUdimTextureObject*>(
+                    textureObject.get())->GetLayoutTexture(), refCount));
+                break;
+            default:
+                TF_CODING_ERROR("Unhandled Type!");
+                break;
+        }
+    }
+    return resourceList;
 }
 
 void
@@ -162,7 +238,6 @@ HdSt_TextureObjectRegistry::Commit()
 
     {
         TRACE_FUNCTION_SCOPE("Loading textures");
-        HF_TRACE_FUNCTION_SCOPE("Loading textures");
         TF_DESCRIBE_SCOPE("Loading %zu textures", result.size());
 
         if (_isGlfBaseTextureDataThreadSafe) {

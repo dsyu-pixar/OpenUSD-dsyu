@@ -33,8 +33,6 @@
 #include "pxr/imaging/hgi/blitCmds.h"
 #include "pxr/imaging/hgi/blitCmdsOps.h"
 
-#include "pxr/imaging/glf/diagnostic.h"
-
 #include "pxr/base/gf/matrix4f.h"
 
 #include "pxr/base/tf/diagnostic.h"
@@ -79,6 +77,7 @@ HdSt_IndirectDrawBatch::HdSt_IndirectDrawBatch(
     , _bufferArraysHash(0)
     , _barElementOffsetsHash(0)
     , _numVisibleItems(0)
+    , _numVisibleItemsPostCull(0)
     , _numTotalVertices(0)
     , _numTotalElements(0)
     /* The following two values are set before draw by
@@ -125,8 +124,10 @@ HdSt_IndirectDrawBatch::_Init(HdStDrawItemInstance * drawItemInstance)
         _useGpuCulling && IsEnabledGPUInstanceFrustumCulling();
 
     if (_useGpuCulling) {
-        _cullingProgram.Initialize(
-            _useDrawIndexed, _useInstanceCulling, _bufferArraysHash);
+        if (_cullingProgram.Initialize(
+                _useDrawIndexed, _useInstanceCulling, _bufferArraysHash)) {
+            _dirtyCullingProgram = true;
+        }
     }
 
     TF_DEBUG(HDST_DRAW_BATCH).Msg(
@@ -574,6 +575,7 @@ HdSt_IndirectDrawBatch::_CompileBatch(
     // Count the number of visible items. We may actually draw fewer
     // items than this when GPU frustum culling is active.
     _numVisibleItems = 0;
+    _numVisibleItemsPostCull = 0;
     _numTotalElements = 0;
     _numTotalVertices = 0;
 
@@ -621,7 +623,12 @@ HdSt_IndirectDrawBatch::_CompileBatch(
             drawItem->GetGeometricShader()->GetPrimitiveIndexSize();
 
         uint32_t const baseVertex = vertexDC;
-        uint32_t const vertexCount = _GetElementCount(dc.vertexBar);
+
+        // Query fallback vertex count from geometric shader if the vertex bar
+        // is empty
+        uint32_t const vertexCount = dc.vertexBar ?
+                    _GetElementCount(dc.vertexBar) : 
+                    drawItem->GetGeometricShader()->GetVertexCountFallback();
 
         // if delegate fails to get vertex primvars, it could be empty.
         // skip the drawitem to prevent drawing uninitialized vertices.
@@ -827,6 +834,17 @@ HdSt_IndirectDrawBatch::Validate(bool deepValidation)
             return ValidationResult::RebuildBatch;
         }
 
+        // Check if the geometric shader has been updated; even if
+        // everything still aggregates, a geometric shader update can
+        // change dispatch buffer layout (e.g. if we switch from tris to
+        // patches...)
+        if (_GeometricShaderChanged()) {
+             TF_DEBUG(HDST_DRAW_BATCH).Msg(
+                "   Deep validation: Geometric shader changed."
+                "   Rebuilding batch.\n");
+            return ValidationResult::RebuildBatch;
+        }
+
     }
 
     TF_DEBUG(HDST_DRAW_BATCH).Msg(
@@ -902,7 +920,8 @@ bool
 HdSt_IndirectDrawBatch::_HasNothingToDraw() const
 {
     return ( _useDrawIndexed && _numTotalElements == 0) ||
-           (!_useDrawIndexed && _numTotalVertices == 0);
+           (!_useDrawIndexed && _numTotalVertices == 0) ||
+           (_numVisibleItems == 0);
 }
 
 void
@@ -935,6 +954,8 @@ HdSt_IndirectDrawBatch::PrepareDraw(
         // may still require multiple command buffer submissions.
         _ExecuteFrustumCull(updateBufferData,
                             renderPassState, resourceRegistry);
+    } else {
+        _numVisibleItemsPostCull = _numVisibleItems;
     }
 }
 
@@ -1140,7 +1161,6 @@ HdSt_IndirectDrawBatch::_ExecuteDraw(
     HdStResourceRegistrySharedPtr const &resourceRegistry)
 {
     TRACE_FUNCTION();
-    GLF_GROUP_FUNCTION();
 
     if (!TF_VERIFY(!_drawItemInstances.empty())) return;
 
@@ -1201,7 +1221,7 @@ HdSt_IndirectDrawBatch::_ExecuteDraw(
     state.UnbindResourcesForDrawing(renderPassState, *capabilities);
 
     HD_PERF_COUNTER_INCR(HdPerfTokens->drawCalls);
-    HD_PERF_COUNTER_ADD(HdTokens->itemsDrawn, _numVisibleItems);
+    HD_PERF_COUNTER_ADD(HdTokens->itemsDrawn, _numVisibleItemsPostCull);
 }
 
 void
@@ -1372,6 +1392,7 @@ _GetCullPipeline(
         pipeDesc.primitiveType = HgiPrimitiveTypePointList;
         pipeDesc.shaderProgram = shaderProgram->GetProgram();
         pipeDesc.rasterizationState.rasterizerEnabled = false;
+        pipeDesc.debugName = "FrustumCulling Pipeline";
 
         Hgi* hgi = resourceRegistry->GetHgi();
         HgiGraphicsPipelineHandle pso = hgi->CreateGraphicsPipeline(pipeDesc);
@@ -1545,7 +1566,10 @@ HdSt_IndirectDrawBatch::_ExecuteFrustumCull(
 
     if (IsEnabledGPUCountVisibleInstances()) {
         state.binder.UnbindBuffer(_tokens->drawIndirectResult, _resultBuffer);
-        _EndGPUCountVisibleInstances(resourceRegistry, &_numVisibleItems);
+        _EndGPUCountVisibleInstances(resourceRegistry,
+            &_numVisibleItemsPostCull);
+    } else {
+        _numVisibleItemsPostCull = _numVisibleItems;
     }
 }
 
@@ -1669,29 +1693,30 @@ HdSt_IndirectDrawBatch::_GetCullingProgram(
         _cullingProgram.SetGeometricShader(cullShader);
 
         _cullingProgram.CompileShader(_drawItemInstances.front()->GetDrawItem(),
-                                       resourceRegistry);
+                                      resourceRegistry,
+                                      _LogShaderCacheLookup());
 
         _dirtyCullingProgram = false;
     }
     return _cullingProgram;
 }
 
-void
+bool
 HdSt_IndirectDrawBatch::_CullingProgram::Initialize(
     bool useDrawIndexed,
     bool useInstanceCulling,
     size_t bufferArrayHash)
 {
-    if (useDrawIndexed     != _useDrawIndexed     ||
-        useInstanceCulling != _useInstanceCulling ||
-        bufferArrayHash    != _bufferArrayHash) {
-        // reset shader
-        Reset();
+    if (useDrawIndexed     == _useDrawIndexed     &&
+        useInstanceCulling == _useInstanceCulling &&
+        bufferArrayHash    == _bufferArrayHash) {
+        return false;
     }
 
     _useDrawIndexed = useDrawIndexed;
     _useInstanceCulling = useInstanceCulling;
     _bufferArrayHash = bufferArrayHash;
+    return true;
 }
 
 /* virtual */

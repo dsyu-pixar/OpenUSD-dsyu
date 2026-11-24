@@ -7,7 +7,6 @@
 
 # pylint: disable=map-builtin-not-iterating
 
-from __future__ import print_function
 import sys, os, unittest
 from pxr import Usd, Sdf, Gf, Tf
 
@@ -328,7 +327,10 @@ class TestUsdCreateProperties(unittest.TestCase):
             toks.Set(['bye']*3)
             assert toks.Get() == Vt.TokenArray(3, ['bye'])
             asst.Set([Sdf.AssetPath('/path')]*3)
-            assert asst.Get() == Sdf.AssetPathArray(3, [Sdf.AssetPath('/path')])
+            # It's possible for `/path` to be unintentionally resolved so the
+            # comparison here is restricted to verify the integrity of the
+            # authored data only.
+            assert list(p.authoredPath for p in asst.Get()) == ['/path'] * 3
             # Should fail with incompatible types.
             with self.assertRaises(Tf.ErrorException):
                 strs.Set([1234]*3)

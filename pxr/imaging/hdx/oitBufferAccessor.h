@@ -13,13 +13,16 @@
 
 #include "pxr/imaging/hd/task.h"
 
+#include "pxr/base/gf/vec2i.h"
+
 #include <memory>
 
 PXR_NAMESPACE_OPEN_SCOPE
 
 class Hgi;
+class HdRenderIndex;
 
-using HdBufferArrayRangeSharedPtr = 
+using HdBufferArrayRangeSharedPtr =
     std::shared_ptr<class HdBufferArrayRange>;
 
 using HdStRenderPassShaderSharedPtr =
@@ -28,7 +31,16 @@ using HdStRenderPassShaderSharedPtr =
 /// Class for OIT render tasks to access the OIT buffers.
 class HdxOitBufferAccessor {
 public:
+    HDX_API
     static bool IsOitEnabled();
+
+    // This method helps improve the footprint of the OIT buffers by packing the
+    // color, transmission and depth into smaller buffers. This follows the
+    // theory in https://interplayoflight.wordpress.com/2022/06/25/order-independent-transparency-part-1/
+    // This compression results in a 4x reduction in the memory footprint of the
+    // OIT buffers at the cost of accuracy.
+    HDX_API
+    static bool IsOitPackedDepthEnabled();
 
     HDX_API
     HdxOitBufferAccessor(HdTaskContext *ctx);
@@ -36,6 +48,19 @@ public:
     /// Called during Prepare to indicate that OIT buffers are needed.
     HDX_API
     void RequestOitBuffers();
+
+    /// Called during Prepare to allocate OIT bars if not yet in context.
+    /// Bars are initially unsized; call ResizeOitBuffersIfNecessary to size them.
+    HDX_API
+    void AllocateOitBuffersIfNecessary(HdRenderIndex *renderIndex);
+
+    /// Called during Prepare (by OitResolveTask) to grow OIT bars to fit the
+    /// current screen and update the OIT uniforms. Bars are never shrunk, so
+    /// they end up sized for the largest screen sharing this task context.
+    /// Returns false if OIT can't be used at this screen size.
+    HDX_API
+    bool ResizeOitBuffersIfNecessary(HdRenderIndex *renderIndex,
+                                     GfVec2i const &screenSize);
 
     /// Called during Excecute before writing to OIT buffers.
     HDX_API

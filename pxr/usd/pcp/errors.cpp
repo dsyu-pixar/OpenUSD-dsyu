@@ -46,6 +46,7 @@ TF_REGISTRY_FUNCTION(TfEnum) {
     TF_ADD_ENUM_NAME(PcpErrorType_TargetPermissionDenied);
     TF_ADD_ENUM_NAME(PcpErrorType_UnresolvedPrimPath);
     TF_ADD_ENUM_NAME(PcpErrorType_VariableExpressionError);
+    TF_ADD_ENUM_NAME(PcpErrorType_InvalidSublayerAndOffsetCount);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -640,6 +641,36 @@ PcpErrorInvalidSublayerOffset::ToString() const
 
 ///////////////////////////////////////////////////////////////////////////////
 
+PcpErrorInvalidSublayerAndOffsetCountPtr
+PcpErrorInvalidSublayerAndOffsetCount::New()
+{
+    return PcpErrorInvalidSublayerAndOffsetCountPtr(
+        new PcpErrorInvalidSublayerAndOffsetCount);
+}
+
+PcpErrorInvalidSublayerAndOffsetCount::PcpErrorInvalidSublayerAndOffsetCount() :
+    PcpErrorBase(PcpErrorType_InvalidSublayerAndOffsetCount)
+{
+}
+
+PcpErrorInvalidSublayerAndOffsetCount::~PcpErrorInvalidSublayerAndOffsetCount()
+{
+}
+
+// virtual
+std::string
+PcpErrorInvalidSublayerAndOffsetCount::ToString() const
+{
+    return TfStringPrintf("Layer @%s@ has %zu sublayers and %zu offsets, but "
+                          "these counts must be equal. Using an identity offset "
+                          "for all sublayers instead.",
+                          layer->GetIdentifier().c_str(),
+                          sublayerCount,
+                          offsetCount);
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
 PcpErrorInvalidReferenceOffsetPtr
 PcpErrorInvalidReferenceOffset::New()
 {
@@ -1082,10 +1113,10 @@ PcpErrorVariableExpressionError::ToString() const
 {
     // Example error messages:
     // Error evaluating expression "`if(${FOO}, ..."
-    // for sublayer in @foo.sdf@: invalid syntax
+    // for sublayer in @foo.usda@: invalid syntax
     //
     // Error evaluating expression "`if(${FOO}, ..."
-    // for reference at </Foo> in @bar.sdf@: invalid syntax
+    // for reference at </Foo> in @bar.usda@: invalid syntax
     auto makeSourceStr = [this]() {
         std::string result;
         if (!sourcePath.IsAbsoluteRootPath()) {

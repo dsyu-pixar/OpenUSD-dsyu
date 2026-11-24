@@ -7,9 +7,17 @@
 
 #include "pxr/usd/ar/packageUtils.h"
 #include "pxr/usd/ar/resolver.h"
-#include "pxr/usd/usd/zipFile.h"
+#include "pxr/usd/sdf/zipFile.h"
 #include "pxr/usd/usdUtils/dependencies.h"
 #include "pxr/usd/usdUtils/userProcessingFunc.h"
+#include "pxr/usdValidation/usdValidation/validatorTokens.h"
+#include "pxr/usdValidation/usdGeomValidators/validatorTokens.h"
+#include "pxr/usdValidation/usdLodValidators/validatorTokens.h"
+#include "pxr/usdValidation/usdLuxValidators/validatorTokens.h"
+#include "pxr/usdValidation/usdMediaValidators/validatorTokens.h"
+#include "pxr/usdValidation/usdPhysicsValidators/validatorTokens.h"
+#include "pxr/usdValidation/usdShadeValidators/validatorTokens.h"
+#include "pxr/usdValidation/usdSkelValidators/validatorTokens.h"
 #include "pxr/usdValidation/usdUtilsValidators/validatorTokens.h"
 #include "pxr/usdValidation/usdValidation/error.h"
 #include "pxr/usdValidation/usdValidation/registry.h"
@@ -17,6 +25,7 @@
 
 #include "pxr/usd/sdf/fileFormat.h"
 
+#include <algorithm>
 #include <string>
 
 PXR_NAMESPACE_OPEN_SCOPE
@@ -116,19 +125,40 @@ _FileExtensionValidator(const UsdStagePtr& usdStage,
         TfToken("m4a"), TfToken("mp3"), TfToken("wav")};
 
     const SdfLayerHandle& rootLayer = usdStage->GetRootLayer();
-    const UsdZipFile& zipFile = UsdZipFile::Open(rootLayer->GetRealPath());
+    const SdfZipFile& zipFile = SdfZipFile::Open(rootLayer->GetRealPath());
 
     const std::vector<std::string> fileNames =
         std::vector<std::string>(zipFile.begin(), zipFile.end());
+
+    bool didWarnAboutUsdPmc = false;
 
     for (const std::string& fileName : fileNames)
     {
         const std::string extension = ArGetResolver().GetExtension(fileName);
 
-        if (std::find(validExtensions.begin(), validExtensions.end(),
-            extension) == validExtensions.end())
+        if (extension == "pmc") {
+            if (didWarnAboutUsdPmc) {
+                continue;
+            }
+
+            errors.emplace_back(
+                UsdValidationError {
+                    UsdUtilsValidationErrorNameTokens->containsPmcFile,
+                    UsdValidationErrorType::Warn,
+                    UsdValidationErrorSites {
+                        UsdValidationErrorSite(
+                                rootLayer, SdfPath(rootLayer->GetIdentifier()))
+                    },
+                    "This package contains a file with the 'pmc' extension. "
+                    "The UsdPmc plugin is required in order to read files of "
+                    "this type. This plugin is not part of the default USD "
+                    "build and therefore a client may not be able to read it."
+                });
+            didWarnAboutUsdPmc = true;
+        } else if (std::find(validExtensions.begin(), validExtensions.end(),
+            extension) == validExtensions.end()) 
         {
-            return {
+            errors.emplace_back(
                 UsdValidationError {
                     UsdUtilsValidationErrorNameTokens->
                     unsupportedFileExtensionInPackage,
@@ -142,8 +172,7 @@ _FileExtensionValidator(const UsdStagePtr& usdStage,
                                    fileName.c_str(),
                                    rootLayer->GetIdentifier().c_str(),
                                    extension.c_str())
-                }
-            };
+                });
         }
     }
 
@@ -186,7 +215,7 @@ _MissingReferenceValidator(const UsdStagePtr& usdStage,
 static UsdValidationErrorVector
 _GetUsdzPackageErrors(const SdfLayerHandle &rootLayer)
 {
-    const UsdZipFile zipFile = UsdZipFile::Open(
+    const SdfZipFile zipFile = SdfZipFile::Open(
             rootLayer->GetRealPath().c_str());
     if (!zipFile) {
         return {};
@@ -198,7 +227,7 @@ _GetUsdzPackageErrors(const SdfLayerHandle &rootLayer)
     UsdValidationErrorVector errors;
     for(auto it = zipFile.begin(); it != zipFile.end(); ++it)
     {
-        const UsdZipFile::FileInfo &fileInfo = it.GetFileInfo();
+        const SdfZipFile::FileInfo &fileInfo = it.GetFileInfo();
         if (fileInfo.compressionMethod != 0)
         {
             const std::string &fileName = *it;
@@ -215,6 +244,21 @@ _GetUsdzPackageErrors(const SdfLayerHandle &rootLayer)
                     "is %lu.", fileName.c_str(), packagePath.c_str(), 
                     fileInfo.compressionMethod, fileInfo.size, 
                     fileInfo.uncompressedSize)
+            );
+        }
+
+        if (fileInfo.encrypted)
+        {
+            const std::string &fileName = *it;
+            errors.emplace_back(
+                UsdUtilsValidationErrorNameTokens->encryptionDetected,
+                UsdValidationErrorType::Error,
+                UsdValidationErrorSites {
+                    UsdValidationErrorSite(
+                            rootLayer, SdfPath(fileName))
+                },
+                TfStringPrintf("File '%s' in package '%s' is encrypted.",
+                    fileName.c_str(), packagePath.c_str())
             );
         }
 
@@ -291,6 +335,53 @@ _UsdzPackageValidator(const UsdStagePtr& usdStage,
     return errors;
 }
 
+static void
+_RegisterVanillaUsdValidatorSuite(UsdValidationRegistry &registry)
+{
+    // Include every validator from the core and schema domain validator
+    // plugins, except the ones listed in excludedNames.
+    const std::vector<const std::vector<TfToken> *> domainTokens = {
+        &UsdValidatorNameTokens->allTokens,
+        &UsdGeomValidatorNameTokens->allTokens,
+        &UsdLodValidatorNameTokens->allTokens,
+        &UsdLuxValidatorNameTokens->allTokens,
+        &UsdMediaValidatorNameTokens->allTokens,
+        &UsdPhysicsValidatorNameTokens->allTokens,
+        &UsdShadeValidatorNameTokens->allTokens,
+        &UsdSkelValidatorNameTokens->allTokens,
+        &UsdUtilsValidatorNameTokens->allTokens
+    };
+
+    const TfTokenVector excludedNames = {
+        // Asset checks for stages intended to be referenced into aggregate
+        // stages.
+        UsdValidatorNameTokens->stageMetadataChecker,
+        UsdGeomValidatorNameTokens->stageMetadataChecker,
+        // UsdzPackageValidator already checks the root layer's package, along
+        // with every other package in the stage's dependencies.
+        UsdUtilsValidatorNameTokens->rootPackageValidator,
+        // This suite itself.
+        UsdUtilsValidatorNameTokens->vanillaUsdValidatorSuite
+    };
+
+    TfTokenVector validatorNames;
+    for (const std::vector<TfToken> *tokens : domainTokens) {
+        for (const TfToken &name : *tokens) {
+            if (std::find(excludedNames.begin(), excludedNames.end(), name)
+                == excludedNames.end()) {
+                validatorNames.push_back(name);
+            }
+        }
+    }
+
+    const std::vector<const UsdValidationValidator *> containedValidators =
+        registry.GetOrLoadValidatorsByName(validatorNames);
+
+    registry.RegisterPluginValidatorSuite(
+        UsdUtilsValidatorNameTokens->vanillaUsdValidatorSuite,
+        containedValidators);
+}
+
 TF_REGISTRY_FUNCTION(UsdValidationRegistry)
 {
     UsdValidationRegistry &registry = UsdValidationRegistry::GetInstance();
@@ -314,6 +405,8 @@ TF_REGISTRY_FUNCTION(UsdValidationRegistry)
     registry.RegisterPluginValidator(
             UsdUtilsValidatorNameTokens->usdzPackageValidator,
             _UsdzPackageValidator);
+
+    _RegisterVanillaUsdValidatorSuite(registry);
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE

@@ -32,6 +32,7 @@ progAndArgList = [("usdedit", "-h"),
 ("usdrecord","-h"),
 ("usdresolve","-h"),
 ("usdtree","-h"),
+("usdauthors","-h"),
 ("usdzip","-h"),
 ("usdchecker","-h"),
 ("usdfixbrokenpixarschemas", "-h"),
@@ -40,7 +41,12 @@ progAndArgList = [("usdedit", "-h"),
 ("usddumpcrate", "-h"),
 ("sdfdump", "-h"),
 ("sdffilter", "-h"),
-("usdmeasureperformance", "-h")
+("usdmeasureperformance", "-h"),
+("usdGenSchema", "-h"),
+("usdgenschemafromsdr", "-h"),
+("usdInitSchema", "-h"),
+("usdupdatecrate", "-h"),
+("usdcrush", "-h")
 ]
 
 #------------------------------------------------------------------------------#

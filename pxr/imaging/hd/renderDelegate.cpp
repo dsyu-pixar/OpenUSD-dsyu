@@ -40,6 +40,33 @@ HdRenderDelegate::HdRenderDelegate()
 {
 }
 
+bool
+HdRenderParam::SetArbitraryValue(const TfToken& key, const VtValue& value)
+{
+    // Default implementation does not allow setting any arbitrary values.
+    return false;
+}
+
+VtValue
+HdRenderParam::GetArbitraryValue(const TfToken& key) const
+{
+    // Default implementation does not provide any arbitrary values.
+    return VtValue();
+}
+
+bool
+HdRenderParam::HasArbitraryValue(const TfToken& key) const
+{
+    // Default implementation does not provide any arbitrary values.
+    return false;
+}
+
+bool
+HdRenderParam::IsValid() const
+{
+    return false;
+}
+
 HdRenderDelegate::HdRenderDelegate(HdRenderSettingsMap const& settingsMap)
     : _settingsMap(settingsMap), _settingsVersion(1)
 {
@@ -63,11 +90,30 @@ HdRenderDelegate::CreateRenderPassState() const
     return std::make_shared<HdRenderPassState>();
 }
 
+void 
+HdRenderDelegate::BeginExecute()
+{
+
+}
+
+void 
+HdRenderDelegate::EndExecute()
+{
+
+}
+
 TfToken
 HdRenderDelegate::GetMaterialBindingPurpose() const
 {
     return HdTokens->preview;
 }
+
+TfTokenVector 
+HdRenderDelegate::GetShadingSystems() const
+{
+    return GetShaderSourceTypes();
+}
+
 
 TfTokenVector 
 HdRenderDelegate::GetShaderSourceTypes() const
@@ -222,6 +268,11 @@ bool HdRenderDelegate::IsParallelSyncEnabled(
     if (primType == HdPrimTypeTokens->extComputation) {
         return true;
     }
+    return false;
+}
+
+bool HdRenderDelegate::RequiresStormTasks() const
+{
     return false;
 }
 

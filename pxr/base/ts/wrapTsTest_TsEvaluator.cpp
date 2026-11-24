@@ -8,8 +8,8 @@
 #include "pxr/pxr.h"
 #include "pxr/base/ts/tsTest_TsEvaluator.h"
 #include "pxr/base/ts/spline.h"
-#include "pxr/base/ts/tsTest_SplineData.h"
 #include "pxr/base/ts/tsTest_SampleTimes.h"
+
 #include "pxr/base/tf/pyResultConversions.h"
 
 #include "pxr/external/boost/python/class.hpp"
@@ -18,6 +18,33 @@ PXR_NAMESPACE_USING_DIRECTIVE
 
 using namespace pxr_boost::python;
 
+static object
+_wrapSample(const TsTest_TsEvaluator& evaluator,
+            const TsSpline& spline,
+            const GfInterval& timeInterval,
+            const double timeScale,
+            const double valueScale,
+            const double tolerance,
+            bool withSamples = false)
+{
+    if (withSamples) {
+        TsSplineSamplesWithSources<GfVec2d> samples;
+        if (evaluator.Sample(spline, timeInterval,
+                             timeScale, valueScale, tolerance,
+                             &samples)) {
+            return object(samples);
+        }
+    } else {
+        TsSplineSamples<GfVec2d> samples;
+        if (evaluator.Sample(spline, timeInterval,
+                             timeScale, valueScale, tolerance,
+                             &samples)) {
+            return object(samples);
+        }
+    }
+
+    return object();
+}
 
 void wrapTsTest_TsEvaluator()
 {
@@ -27,24 +54,17 @@ void wrapTsTest_TsEvaluator()
         // Default init is not suppressed, so automatically created.
 
         .def("Eval", &This::Eval,
-            (arg("splineData"),
+            (arg("spline"),
              arg("sampleTimes")),
             return_value_policy<TfPySequenceToList>())
 
-        /*
-        .def("Sample", &This::Sample,
-            (arg("splineData"),
-             arg("interval"),
-             arg("tolerance")),
-            return_value_policy<TfPySequenceToList>())
-        */
-
-        .def("SplineToSplineData", &This::SplineToSplineData,
-            (arg("spline")))
-
-        .def("SplineDataToSpline", &This::SplineDataToSpline,
-            (arg("splineData"),
-             arg("mayaTangentForm") = false))
+        .def("Sample", &_wrapSample,
+            (arg("spline"),
+             arg("timeInterval"),
+             arg("timeScale"),
+             arg("valueScale"),
+             arg("tolerance"),
+             arg("withSources") = false))
 
         /*
         .def("BakeInnerLoops", &This::BakeInnerLoops,

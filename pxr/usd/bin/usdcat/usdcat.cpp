@@ -7,15 +7,17 @@
 
 #include "pxr/pxr.h"
 
+#include "pxr/usd/ar/resolver.h"
+#include "pxr/usd/ar/resolverContextBinder.h"
 #include "pxr/base/tf/fileUtils.h"
 #include "pxr/base/tf/pathUtils.h"
 #include "pxr/base/tf/pxrCLI11/CLI11.h"
 #include "pxr/base/tf/stringUtils.h"
 #include "pxr/usd/sdf/fileFormat.h"
 #include "pxr/usd/sdf/layer.h"
+#include "pxr/usd/sdf/usdFileFormat.h"
 #include "pxr/usd/usd/stage.h"
 #include "pxr/usd/usd/stagePopulationMask.h"
-#include "pxr/usd/usd/usdFileFormat.h"
 #include "pxr/usd/usdUtils/authoring.h"
 #include "pxr/usd/usdUtils/flattenLayerStack.h"
 
@@ -54,10 +56,12 @@ static void Configure(CLI::App *app, Args &args) {
     app->add_option(
         "--usdFormat", args.usdFormat,
         "Use this underlying file format for output files\n"
-        "with the extension 'usd'. For example, passing\n"
-        "'-o output.usd --usdformat usda' will create\n"
-        "output.usd as a text file. The USD_DEFAULT_FILE_FORMAT\n"
-        "environment variable is another way to achieve this.")
+        "with the extension 'usd', or with no or an unknown\n"
+        "extension. For example, passing '-o output.usd\n"
+        "--usdformat usda' will create output.usd as a text\n"
+        "file. The USD_DEFAULT_FILE_FORMAT environment\n"
+        "variable is another way to achieve this for .usd\n"
+        "files.")
         ->check(CLI::IsMember({"usda", "usdc"}, CLI::ignore_case))
         ->option_text("usda|usdc");
 
@@ -119,8 +123,9 @@ static void Quarantine(const std::string &filepath) {
 
 static int UsdCat(const Args &args) {
     // If --out was specified, it must either not exist or must be writable, the
-    // extension must correspond to a known Sdf file format, and we must have
-    // exactly one input file.
+    // extension must correspond to a known Sdf file format unless --usdFormat
+    // was given, and we must have exactly one input file.
+    SdfFileFormatConstPtr unrecognizedExtFormat;
     if (!args.output.empty()) {
         if (TfPathExists(args.output) && !TfIsWritable(args.output)) {
             std::cerr << "error: no write permission for existing output file "
@@ -134,18 +139,31 @@ static int UsdCat(const Args &args) {
             return 1;
         }
 
+        // FindByExtension issues a coding error for an empty extension.
         const std::string ext = TfGetExtension(args.output);
-        if (!args.usdFormat.empty() && ext != "usd") {
-            std::cerr << "error: use of --usdFormat requires output "
-                      << "file end with '.usd' extension.\n";
+        const bool recognizedExt =
+            !ext.empty() && SdfFileFormat::FindByExtension(ext);
+        if (!recognizedExt) {
+            if (args.usdFormat.empty()) {
+                std::cerr << "error: unknown output file extension; specify "
+                          << "--usdFormat to write it anyway.\n";
+                return 1;
+            }
+            unrecognizedExtFormat = SdfFileFormat::FindById(
+                TfToken(TfStringToLower(args.usdFormat)));
+            if (!unrecognizedExtFormat) {
+                std::cerr << "error: cannot find file format "
+                          << std::quoted(args.usdFormat, '\'') << ".\n";
+                return 1;
+            }
+        }
+        else if (!args.usdFormat.empty() && ext != "usd") {
+            std::cerr << "error: use of --usdFormat requires output file end "
+                      << "with '.usd' extension or one not associated with "
+                      << "any file format.\n";
             return 1;
         }
-
-        if (!SdfFileFormat::FindByExtension(ext)) {
-            std::cerr << "error: unknown output file extension.\n";
-            return 1;
-        }
-    } 
+    }
     // If --out was not specified, then --usdFormat must be unspecified or must
     // be 'usda'.
     else if (!args.usdFormat.empty() && args.usdFormat != "usda") {
@@ -174,9 +192,10 @@ static int UsdCat(const Args &args) {
 
     std::map<std::string, std::string> formatArgs;
     if (!args.usdFormat.empty()) {
-        formatArgs[UsdUsdFileFormatTokens->FormatArg] = args.usdFormat;
+        formatArgs[SdfUsdFileFormatTokens->FormatArg] = args.usdFormat;
     }
 
+    ArResolver &resolver = ArGetResolver();
     for (auto &input: args.inputFiles) {
         SdfLayerRefPtr layer;
         UsdStageRefPtr stage;
@@ -184,21 +203,34 @@ static int UsdCat(const Args &args) {
         // Capture errors that are emitted so we can do error handling below.
         TfErrorMark errMark;
 
+        // create and bind a context for opening layers
+        const ArResolverContext context =
+            resolver.CreateDefaultContextForAsset(input);
+        const ArResolverContextBinder binder(context);
+
         // Either open a layer or compose a stage, depending on whether or not
         // --flatten was specified.
         if (args.flatten) {
+            // create context layer for stage opening
+            SdfLayerRefPtr ctxLayer;
+            ctxLayer = SdfLayer::FindOrOpen(input);
+
             if (args.mask.empty()) {
-                stage = UsdStage::Open(input);
+                stage = UsdStage::Open(ctxLayer, context);
             } else {
                 // Mask can be provided as a comma or space delimited string
                 auto mask = UsdStagePopulationMask();
                 for (const auto &path : TfStringTokenize(args.mask, ", ")) {
                     mask.Add(SdfPath(path));
                 }
-                stage = UsdStage::OpenMasked(input, mask);
+                stage = UsdStage::OpenMasked(ctxLayer, context, mask);
             }
         } else if (args.flattenLayerStack) {
-            stage = UsdStage::Open(input, UsdStage::LoadNone);
+            // create context layer for stage opening
+            SdfLayerRefPtr ctxLayer;
+            ctxLayer = SdfLayer::FindOrOpen(input);
+
+            stage = UsdStage::Open(ctxLayer, context, UsdStage::LoadNone);
             if (stage) {
                 layer = UsdUtilsFlattenLayerStack(stage);
             }
@@ -248,6 +280,22 @@ static int UsdCat(const Args &args) {
 
         // Write to either stdout or the specified output file
         if (!args.output.empty()) {
+            // Sdf writes a file whose extension it does not recognize in the
+            // layer's own format, so transfer the content to a layer of the
+            // requested format if needed.
+            if (unrecognizedExtFormat) {
+                if (!layer) {
+                    layer = stage->Flatten(!args.skipSourceFileComment);
+                }
+                if (layer && layer->GetFileFormat() != unrecognizedExtFormat) {
+                    SdfLayerRefPtr converted = SdfLayer::CreateAnonymous(
+                        "usdcat", unrecognizedExtFormat);
+                    converted->TransferContent(layer);
+                    layer = converted;
+                }
+            }
+
+            const bool outputExisted = TfPathExists(args.output);
             if (layer) {
                 layer->Export(args.output, std::string(), formatArgs);
             }
@@ -266,9 +314,16 @@ static int UsdCat(const Args &args) {
                     std::cerr << err.GetCommentary() << "\n";
                 }
 
-                // If the output file exists, let's try to rename it with
-                // '.quarantine' appended and let the user know.
-                Quarantine(args.output);
+                // If this export created the output file, let's try to rename
+                // it with '.quarantine' appended and let the user know.  Leave
+                // a file that existed beforehand in place: the filesystem
+                // resolver replaces files atomically, so if the export failed
+                // before writing, that file is the untouched original, and we
+                // cannot cheaply tell that apart from a file the export
+                // replaced.
+                if (!outputExisted) {
+                    Quarantine(args.output);
+                }
             }
         }
         else {

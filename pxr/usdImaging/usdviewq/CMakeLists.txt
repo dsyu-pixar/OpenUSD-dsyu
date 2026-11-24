@@ -10,9 +10,11 @@ pxr_library(usdviewq
         tf
         usd
         usdGeom
+        usdUI
         hd
 
     PUBLIC_CLASSES
+        debugCodes
         hydraObserver
         utils
         
@@ -49,7 +51,7 @@ pxr_library(usdviewq
         preferences.py
         primViewItem.py
         common.py
-        hydraSceneBrowser.py
+        hydraSceneDebugger.py
         legendUtil.py
         primLegend.py
         primTreeWidget.py
@@ -60,11 +62,17 @@ pxr_library(usdviewq
         qt.py
         rootDataModel.py
         selectionDataModel.py
+        splineViewer.py
         viewSettingsDataModel.py
         freeCamera.py
         debugFlagsWidget.py
         configController.py
         usdviewstyle.qss
+        validationWidget.py
+
+    PYMODULE_DIRS
+        icons
+        fonts
 
     PYSIDE_UI_FILES
         mainWindowUI.ui
@@ -80,27 +88,13 @@ pxr_library(usdviewq
         blackBoxTesting.md
 )
 
-install(DIRECTORY
-    icons
-    DESTINATION lib/python/pxr/Usdviewq
-)
-
-install(DIRECTORY
-    fonts
-    DESTINATION lib/python/pxr/Usdviewq
-)
-
 pxr_test_scripts(
     testenv/testUsdviewqSettings.py
     testenv/testUsdviewqRootDataModel.py
     testenv/testUsdviewqSelectionDataModel.py
     testenv/testUsdviewqLauncher.py
     testenv/testUsdviewqViewSettingsDataModel.py
-)
-
-pxr_install_test_dir(
-    SRC testenv/testUsdviewqRootDataModel
-    DEST testUsdviewqRootDataModel
+    testenv/testUsdviewqToolSpawn.py
 )
 
 pxr_register_test(testUsdviewqSettings
@@ -112,6 +106,7 @@ pxr_register_test(testUsdviewqSettings
 pxr_register_test(testUsdviewqRootDataModel
     PYTHON
     COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testUsdviewqRootDataModel"
+    TESTENV testenv/testUsdviewqRootDataModel
     EXPECTED_RETURN_CODE 0
 )
 
@@ -130,6 +125,12 @@ pxr_register_test(testUsdviewqLauncher
 pxr_register_test(testUsdviewqViewSettingsDataModel
     PYTHON
     COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testUsdviewqViewSettingsDataModel"
+    EXPECTED_RETURN_CODE 0
+)
+
+pxr_register_test(testUsdviewqToolSpawn
+    PYTHON
+    COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testUsdviewqToolSpawn"
     EXPECTED_RETURN_CODE 0
 )
 

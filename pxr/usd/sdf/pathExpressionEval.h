@@ -14,8 +14,8 @@
 #include "pxr/usd/sdf/predicateExpression.h"
 #include "pxr/usd/sdf/predicateLibrary.h"
 #include "pxr/usd/sdf/predicateProgram.h"
+#include "pxr/usd/sdf/globPattern.h"
 
-#include "pxr/base/arch/regex.h"
 #include "pxr/base/tf/functionRef.h"
 
 #include <string>
@@ -76,6 +76,9 @@ protected:
 
     class _PatternImplBase {
     protected:
+        using _RunNthPredFn =
+            TfFunctionRef<SdfPredicateFunctionResult (int, SdfPath const &)>;
+        
         // This is not a constructor because the subclass wants to invoke this
         // from its ctor, TfFunctionRef currently requires an lvalue, which is
         // hard to conjure in a ctor initializer list.
@@ -86,26 +89,22 @@ protected:
 
         SDF_API
         SdfPredicateFunctionResult
-        _Match(
-            SdfPath const &path,
-            TfFunctionRef<SdfPredicateFunctionResult (int, SdfPath const &)>
-            runNthPredicate) const;
+        _Match(SdfPath const &path, _RunNthPredFn runNthPredicate) const;
 
         SDF_API
         SdfPredicateFunctionResult
         _Next(_PatternIncrSearchState &searchState,
-              SdfPath const &path,
-              TfFunctionRef<SdfPredicateFunctionResult (int, SdfPath const &)>
-              runNthPredicate) const;
+              SdfPath const &path, _RunNthPredFn runNthPredicate) const;
+
 
         enum _ComponentType {
             ExplicitName,      // an explicit name (not a glob pattern).
-            Regex              // a glob pattern (handled via regex).
+            Glob               // a glob pattern.
         };
 
         struct _Component {
             _ComponentType type;
-            int patternIndex; // into either _explicitNames or _regexes
+            int patternIndex; // into either _explicitNames or _globPatterns
             int predicateIndex;  // into _predicates or -1 if no predicate.
         };
 
@@ -118,11 +117,55 @@ protected:
             size_t begin, end;
         };
         
+        bool _IsBarePredicate(_Component const &comp) const {
+            // An empty explicit name component with a predicate is a "bare
+            // predicate".
+            return comp.type == ExplicitName &&
+                _explicitNames[comp.patternIndex].empty() &&
+                comp.predicateIndex != -1;
+        }
+
+        size_t _SegmentMinMatchElts(_Segment const &seg) const {
+            // If a segment starts with a bare predicate, it may match the bare
+            // predicate to the *prior* path element, so it requires one fewer
+            // path element to match than the number of segment components.
+            return seg.GetSize() - (_IsBarePredicate(
+                                        _components[seg.begin]) ? 1 : 0);
+        }
+
+        // Check if \p seg matches at exactly \p pathIterInOut.  Update \p
+        // pathIterInOut to the position past this match if there is a match and
+        // return a truthy result.  Otherwise leave \p pathIterInOut untouched
+        // and return a falsey result.
+        SDF_API
+        SdfPredicateFunctionResult
+        _CheckExactMatch(_Segment const &seg,
+                         _RunNthPredFn runNthPredicate,
+                         SdfPathVector::const_iterator pathIterEnd,
+                         SdfPathVector::const_iterator &pathIterInOut) const;
+
+        // Check if \p seg matches at \p pathIterInOut, or at
+        // `std::prev(pathIterInOut)` if \p seg starts with a bare predicate
+        // (like //{predicate}).  Update \p pathIterInOut to the position past
+        // the match if there is a match and return a truthy result.  Otherwise
+        // leave \p pathIterInOut untouched and return a falsey result.  The key
+        // difference between _CheckMatch() and _CheckExactMatch() is that if \p
+        // seg begins with a bare predicate, it can potentially match at
+        // `std::prev(pathIterInOut)`.
+        SDF_API
+        SdfPredicateFunctionResult
+        _CheckMatch(_Segment const &seg, 
+                    _RunNthPredFn runNthPredicate,
+                    SdfPathVector::const_iterator pathIterBegin,
+                    SdfPathVector::const_iterator pathIterEnd,
+                    SdfPathVector::const_iterator &pathIterInOut) const;
+        
+        
         SdfPath _prefix;
         std::vector<_Component> _components;
         std::vector<_Segment> _segments;
         std::vector<std::string> _explicitNames;
-        std::vector<ArchRegex> _regexes;
+        std::vector<Sdf_GlobPattern> _globPatterns;
 
         bool _stretchBegin;
         bool _stretchEnd;

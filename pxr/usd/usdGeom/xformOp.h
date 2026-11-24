@@ -143,11 +143,11 @@ public:
         PrecisionHalf    ///< Half-float precision
     };
 
-    // Default constructor returns an invalid XformOp.  Exists for 
-    // container classes
+    // Default constructor returns an invalid XformOp.
     UsdGeomXformOp()
+        : _opType(TypeInvalid)
+        , _isInverseOp(false)
     {
-        /* NOTHING */
     }
     
     /// Speculative constructor that will produce a valid UsdGeomXformOp when
@@ -235,7 +235,7 @@ public:
 
     /// Returns the opName as it appears in the xformOpOrder attribute.
     /// 
-    /// This will begin with "!invert!:xformOp:" if it is an inverse xform 
+    /// This will begin with "!invert!xformOp:" if it is an inverse xform 
     /// operation. If it is not an inverse xformOp, it will begin with 
     /// 'xformOp:'.
     /// 

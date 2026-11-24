@@ -24,12 +24,23 @@ TF_DEFINE_PRIVATE_TOKENS(
 
     // instancing       
     ((instancing,         "Instancing.Transform"))
+
+    // utils       
+    ((transformUtils,     "CoordUtils.Transform"))
+    ((projectionUtils,    "CoordUtils.Projection"))
+    ((depthUtilsCommon,   "CoordUtils.Depth.Common"))
+    ((depthUtilsFragment, "CoordUtils.Depth.Fragment"))
 );
 
 HdSt_VolumeShaderKey::HdSt_VolumeShaderKey()
     : glslfx(_tokens->baseGLSLFX),
       VS{ _tokens->instancing, _tokens->mainVS, TfToken() },
-      FS{ _tokens->pointIdFS, _tokens->instancing,
+      FS{ _tokens->pointIdFS,
+          _tokens->transformUtils,
+          _tokens->projectionUtils,
+          _tokens->depthUtilsCommon,
+          _tokens->depthUtilsFragment,
+          _tokens->instancing,
           _tokens->mainFS, TfToken() }
 {
 }

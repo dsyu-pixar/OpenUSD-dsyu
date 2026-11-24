@@ -412,6 +412,7 @@ HdStTextureUtils::GetHioToHgiConversion(
             hioFormat,
             premultiplyAlpha).second;
 }
+
 std::vector<HioImageSharedPtr>
 HdStTextureUtils::GetAllMipImages(
     const std::string &filePath,
@@ -427,16 +428,18 @@ HdStTextureUtils::GetAllMipImages(
 
     // Ignoring image->GetNumMipLevels() since it can be unreliable.
     for (int mip = 0; mip < maxMipReads; ++mip) {
+        constexpr bool suppressErrors = true;
+        constexpr int subimage = 0;
         HioImageSharedPtr const image =
             HioImage::OpenForReading(
-                filePath, /* subimage = */ 0, mip, sourceColorSpace);
+                filePath, subimage, mip, sourceColorSpace, suppressErrors);
 
         if (!image) {
             break;
         }
 
-        const unsigned int currHeight = image->GetWidth();
-        const unsigned int currWidth = image->GetHeight();
+        const unsigned int currWidth = image->GetWidth();
+        const unsigned int currHeight = image->GetHeight();
         if (!(currWidth < prevWidth || currHeight < prevHeight)) {
             break;
         }
@@ -448,7 +451,7 @@ HdStTextureUtils::GetAllMipImages(
     }
 
     return result;
-};
+}
 
 static
 GfVec3i

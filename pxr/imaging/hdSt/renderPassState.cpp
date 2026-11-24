@@ -6,8 +6,6 @@
 //
 #include "pxr/imaging/garch/glApi.h"
 
-#include "pxr/imaging/glf/diagnostic.h"
-
 #include "pxr/imaging/hdSt/bufferArrayRange.h"
 #include "pxr/imaging/hdSt/drawItem.h"
 #include "pxr/imaging/hdSt/geometricShader.h"
@@ -70,19 +68,79 @@ HdStRenderPassState::HdStRenderPassState(
     , _renderPassShader(renderPassShader)
     , _fallbackLightingShader(std::make_shared<HdSt_FallbackLightingShader>())
     , _clipPlanesBufferSize(0)
-    , _alphaThresholdCurrent(0)
     , _resolveMultiSampleAov(true)
-    , _useSceneMaterials(true)
 {
     _lightingShader = _fallbackLightingShader;
 }
 
 HdStRenderPassState::~HdStRenderPassState() = default;
 
-bool
-HdStRenderPassState::_UseAlphaMask() const
+void
+HdStRenderPassState::Copy(HdRenderPassState const& src)
 {
-    return (_alphaThreshold > 0.0f);
+    if (const HdStRenderPassState* st =
+            dynamic_cast<const HdStRenderPassState*>(&src)) {
+        *this = *st;
+    } else {
+        HdRenderPassState::Copy(src);
+    }
+}
+
+void
+HdStRenderPassState::CopyUniforms(HdStRenderPassState const& src)
+{
+    // Clip plane count determines the UBO layout; both states must agree.
+    if (!TF_VERIFY(_clipPlanesBufferSize == src._clipPlanesBufferSize)) {
+        return;
+    }
+
+    // All base-class fields that Prepare() uploads to _renderPassStateBar:
+
+    // Camera and framing (determine matrices and viewport uniform)
+    _camera                = src._camera;
+    _viewport              = src._viewport;
+    _framing               = src._framing;
+    _overrideWindowPolicy  = src._overrideWindowPolicy;
+
+    // Color and appearance uniforms
+    _overrideColor         = src._overrideColor;
+    _wireframeColor        = src._wireframeColor;
+    _maskColor             = src._maskColor;
+    _indicatorColor        = src._indicatorColor;
+    _pointColor            = src._pointColor;
+    _pointSize             = src._pointSize;
+    _pointSelectedSize     = src._pointSelectedSize;
+
+    // Scalar uniforms
+    _lightingEnabled           = src._lightingEnabled;
+    _enableExposureCompensation = src._enableExposureCompensation;
+    _stepSize                  = src._stepSize;
+    _stepSizeLighting          = src._stepSizeLighting;
+    _alphaThreshold            = src._alphaThreshold;
+    _tessLevel                 = src._tessLevel;
+
+    // HdStRenderPassState-specific fields used by Prepare():
+
+    // Override matrices (for render passes that call SetCameraFramingState)
+    _worldToViewMatrix = src._worldToViewMatrix;
+    _projectionMatrix  = src._projectionMatrix;
+    _clipPlanes        = src._clipPlanes;
+
+    // Derived/cached fields computed by Prepare()
+    _cullMatrix           = src._cullMatrix;
+    _clipPlanesBufferSize = src._clipPlanesBufferSize;
+
+    // The GPU uniform buffer itself
+    _renderPassStateBar = src._renderPassStateBar;
+
+    // ... and we need to re-register the renderpass state binding as well.
+    if (_renderPassShader && _renderPassStateBar) {
+        HdStBufferArrayRangeSharedPtr bar =
+            std::static_pointer_cast<HdStBufferArrayRange>(_renderPassStateBar);
+        _renderPassShader->AddBufferBinding(
+            HdStBindingRequest(HdStBinding::UBO, _tokens->renderPassState,
+                               bar, /*interleaved=*/true));
+    }
 }
 
 unsigned int
@@ -234,7 +292,6 @@ HdStRenderPassState::Prepare(
 {
     HD_TRACE_FUNCTION();
     HF_MALLOC_TAG_FUNCTION();
-    GLF_GROUP_FUNCTION();
 
     HdRenderPassState::Prepare(resourceRegistry);
 
@@ -256,9 +313,8 @@ HdStRenderPassState::Prepare(
     }
 
     // allocate bar if it does not exist
-    if (!_renderPassStateBar || 
-        _clipPlanesBufferSize < clipPlanes.size() ||
-        _alphaThresholdCurrent != _alphaThreshold) {
+    if (!_renderPassStateBar ||
+        _clipPlanesBufferSize < clipPlanes.size()) {
         HdBufferSpecVector bufferSpecs;
 
         // note: InterleavedMemoryManager computes the offsets in the packed
@@ -274,6 +330,9 @@ HdStRenderPassState::Prepare(
             HdTupleType{matType, 1});
         bufferSpecs.emplace_back(
             HdShaderTokens->projectionMatrix,
+            HdTupleType{matType, 1});
+        bufferSpecs.emplace_back(
+            HdShaderTokens->projectionInverseMatrix,
             HdTupleType{matType, 1});
         bufferSpecs.emplace_back(
             HdShaderTokens->imageToWorldMatrix,
@@ -306,18 +365,21 @@ HdStRenderPassState::Prepare(
             HdShaderTokens->lightingBlendAmount,
             HdTupleType{HdTypeFloat, 1});
         bufferSpecs.emplace_back(
+            HdShaderTokens->linearExposure,
+            HdTupleType{HdTypeFloat, 1});
+        bufferSpecs.emplace_back(
             HdShaderTokens->stepSize,
             HdTupleType{HdTypeFloat, 1});
         bufferSpecs.emplace_back(
             HdShaderTokens->stepSizeLighting,
             HdTupleType{HdTypeFloat, 1});
+        bufferSpecs.emplace_back(
+            HdShaderTokens->multisampleCount,
+            HdTupleType{HdTypeUInt32, 1});
 
-        if (_UseAlphaMask()) {
-            bufferSpecs.emplace_back(
-                HdShaderTokens->alphaThreshold,
-                HdTupleType{HdTypeFloat, 1});
-        }
-        _alphaThresholdCurrent = _alphaThreshold;
+        bufferSpecs.emplace_back(
+            HdShaderTokens->alphaThreshold,
+            HdTupleType{HdTypeFloat, 1});
 
         bufferSpecs.emplace_back(
             HdShaderTokens->tessLevel,
@@ -326,21 +388,28 @@ HdStRenderPassState::Prepare(
             HdShaderTokens->viewport,
             HdTupleType{HdTypeFloatVec4, 1});
 
-        // Avoid shader permutations when using 0-4 clip planes by always
-        // allocating storage for 4 clip planes.
-        static constexpr size_t s_minNumClipPlanes = 4;
-        _clipPlanesBufferSize =
-            std::max<size_t>(clipPlanes.size(), s_minNumClipPlanes);
-        bufferSpecs.emplace_back(
-            HdShaderTokens->clipPlanes,
-            HdTupleType{HdTypeFloatVec4, _clipPlanesBufferSize});
 
-        bufferSpecs.emplace_back(
-            HdShaderTokens->numClipPlanes,
-            HdTupleType{HdTypeUInt32, 1});
+        if (maxClipPlanes > 0) {
+            // We allocate for clip planes based on whether clip planes are
+            // supported, not whether they are enabled, to avoid costly shader
+            // recompilation when toggling clip planes on and off. When clip
+            // planes are supported (maxClipPlanes > 0), we allocate storage for
+            // up to four clip planes, limited by maxClipPlanes.
+            const size_t minNumClipPlanes =
+                std::min<size_t>(maxClipPlanes, 4UL);
+            _clipPlanesBufferSize =
+                std::max<size_t>(clipPlanes.size(), minNumClipPlanes);
 
+            bufferSpecs.emplace_back(
+                HdShaderTokens->numClipPlanes,
+                HdTupleType{HdTypeUInt32, 1});
+
+            bufferSpecs.emplace_back(
+                HdShaderTokens->clipPlanes,
+                HdTupleType{HdTypeFloatVec4, _clipPlanesBufferSize});
+        }
         // allocate interleaved buffer
-        _renderPassStateBar = 
+        _renderPassStateBar =
             hdStResourceRegistry->AllocateUniformBufferArrayRange(
                 HdTokens->drawingShader, bufferSpecs,
                 HdBufferArrayUsageHintBitsUniform);
@@ -357,6 +426,11 @@ HdStRenderPassState::Prepare(
     // Lighting hack supports different blending amounts, but we are currently
     // only using the feature to turn lighting on and off.
     float lightingBlendAmount = (_lightingEnabled ? 1.0f : 0.0f);
+
+    // Camera exposure (linear-encoded)
+    float linearExposure =
+        ((_camera && _enableExposureCompensation)
+         ? _camera->GetLinearExposureScale() : 1.0f);
 
     GfMatrix4d const& worldToViewMatrix = GetWorldToViewMatrix();
     GfMatrix4d projMatrix = GetProjectionMatrix();
@@ -389,6 +463,10 @@ HdStRenderPassState::Prepare(
         std::make_shared<HdVtBufferSource>(
             HdShaderTokens->projectionMatrix,
             projMatrix,
+            doublesSupported),
+        std::make_shared<HdVtBufferSource>(
+            HdShaderTokens->projectionInverseMatrix,
+            projMatrix.GetInverse(),
             doublesSupported),
         std::make_shared<HdVtBufferSource>(
             HdShaderTokens->imageToWorldMatrix,
@@ -424,6 +502,9 @@ HdStRenderPassState::Prepare(
             HdShaderTokens->lightingBlendAmount,
             VtValue(lightingBlendAmount)),
         std::make_shared<HdVtBufferSource>(
+            HdShaderTokens->linearExposure,
+            VtValue(linearExposure)),
+        std::make_shared<HdVtBufferSource>(
             HdShaderTokens->stepSize,
             VtValue(_stepSize)),
         std::make_shared<HdVtBufferSource>(
@@ -431,12 +512,25 @@ HdStRenderPassState::Prepare(
             VtValue(_stepSizeLighting))
     };
 
-    if (_UseAlphaMask()) {
-        sources.push_back(
-            std::make_shared<HdVtBufferSource>(
-                HdShaderTokens->alphaThreshold,
-                VtValue(_alphaThreshold)));
+    uint32_t multisampleCount = 1;
+    if (const auto& aovBindings = GetAovBindings();
+            !aovBindings.empty() && GetUseAovMultiSample()) {
+        if (const auto* renderBuffer = dynamic_cast<HdStRenderBuffer*>(
+                aovBindings.front().renderBuffer)) {
+            multisampleCount = renderBuffer->IsMultiSampled() ?
+                renderBuffer->GetMSAASampleCount() : 1;
+        }
     }
+
+    sources.push_back(
+        std::make_shared<HdVtBufferSource>(
+            HdShaderTokens->multisampleCount,
+            VtValue(multisampleCount)));
+
+    sources.push_back(
+        std::make_shared<HdVtBufferSource>(
+            HdShaderTokens->alphaThreshold,
+            VtValue(_alphaThreshold)));
 
     sources.push_back(
         std::make_shared<HdVtBufferSource>(
@@ -448,18 +542,20 @@ HdStRenderPassState::Prepare(
             VtValue(
                 _ComputeDataWindow(
                     _framing, _viewport))));
-
-    if (clipPlanes.size() > 0) {
+    if (maxClipPlanes > 0) {
         sources.push_back(
             std::make_shared<HdVtBufferSource>(
-                HdShaderTokens->clipPlanes,
-                VtValue(clipPlanes),
-                clipPlanes.size()));
+                HdShaderTokens->numClipPlanes,
+                VtValue(uint32_t(clipPlanes.size()))));
+
+        if (!clipPlanes.empty()) {
+                sources.push_back(
+                    std::make_shared<HdVtBufferSource>(
+                        HdShaderTokens->clipPlanes,
+                        VtValue(clipPlanes),
+                        clipPlanes.size()));
+        }
     }
-    sources.push_back(
-    std::make_shared<HdVtBufferSource>(
-        HdShaderTokens->numClipPlanes,
-        VtValue(uint32_t(clipPlanes.size()))));
 
     hdStResourceRegistry->AddSources(_renderPassStateBar, std::move(sources));
 
@@ -489,7 +585,7 @@ HdStRenderPassState::SetLightingShader(HdStLightingShaderSharedPtr const &lighti
     }
 }
 
-void 
+void
 HdStRenderPassState::SetRenderPassShader(
     HdStRenderPassShaderSharedPtr const &renderPassShader)
 {
@@ -502,12 +598,6 @@ HdStRenderPassState::SetRenderPassShader(
             HdStBindingRequest(HdStBinding::UBO, _tokens->renderPassState,
                                _renderPassStateBar_, /*interleaved=*/true));
     }
-}
-
-void 
-HdStRenderPassState::SetUseSceneMaterials(bool state)
-{
-    _useSceneMaterials = state;
 }
 
 HdStShaderCodeSharedPtrVector
@@ -623,7 +713,7 @@ void
 HdStRenderPassState::ApplyStateFromCamera()
 {
     // notify view-transform to the lighting shader to update its uniform block
-    // this needs to be done in execute as a multi camera setup may have been 
+    // this needs to be done in execute as a multi camera setup may have been
     // synced with a different view matrix baked in for shadows.
     // SetCamera will no-op if the transforms are the same as before.
     _lightingShader->SetCamera(GetWorldToViewMatrix(),
@@ -633,8 +723,6 @@ HdStRenderPassState::ApplyStateFromCamera()
 void
 HdStRenderPassState::Bind(HgiCapabilities const &hgiCapabilities)
 {
-    GLF_GROUP_FUNCTION();
-
     // when adding another GL state change here, please document
     // which states to be altered at the comment in the header file
 
@@ -672,7 +760,7 @@ HdStRenderPassState::Bind(HgiCapabilities const &hgiCapabilities)
     } else {
         glDisable(GL_STENCIL_TEST);
     }
-    
+
     // Line width
     if (_lineWidth > 0) {
         glLineWidth(_lineWidth);
@@ -703,7 +791,7 @@ HdStRenderPassState::Bind(HgiCapabilities const &hgiCapabilities)
     } else {
         glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
     }
-    
+
     glEnable(GL_PROGRAM_POINT_SIZE);
     GLint glMaxClipPlanes;
     glGetIntegerv(GL_MAX_CLIP_PLANES, &glMaxClipPlanes);
@@ -727,7 +815,7 @@ HdStRenderPassState::Bind(HgiCapabilities const &hgiCapabilities)
             }
         }
     }
-    
+
     if (hgiCapabilities.IsSet(HgiDeviceCapabilitiesBitsConservativeRaster)) {
         if (_conservativeRasterizationEnabled) {
             glEnable(GL_CONSERVATIVE_RASTERIZATION_NV);
@@ -738,19 +826,25 @@ HdStRenderPassState::Bind(HgiCapabilities const &hgiCapabilities)
 
     if (_multiSampleEnabled) {
         glEnable(GL_MULTISAMPLE);
+        if (!hgiCapabilities.IsSet(HgiDeviceCapabilitiesBitsRoundPoints)) {
+            // Needed to get gl_pointCoord in FS.
+            glEnable(GL_POINT_SPRITE);
+        }
     } else {
         glDisable(GL_MULTISAMPLE);
-        // If not using GL_MULTISAMPLE, use GL_POINT_SMOOTH to render points as 
+        // If not using GL_MULTISAMPLE, use GL_POINT_SMOOTH to render points as
         // circles instead of square.
         // XXX Switch points rendering to emit quad with FS that draws circle.
         glEnable(GL_POINT_SMOOTH);
     }
+
+    // Default to seamless cubemap sampling.
+    glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
 }
 
 void
 HdStRenderPassState::Unbind(HgiCapabilities const &hgiCapabilities)
 {
-    GLF_GROUP_FUNCTION();
     // restore back to the GL defaults
 
     if (!GetDepthBiasUseDefault()) {
@@ -788,6 +882,7 @@ HdStRenderPassState::Unbind(HgiCapabilities const &hgiCapabilities)
 
     glEnable(GL_MULTISAMPLE);
     glDisable(GL_POINT_SMOOTH);
+    glDisable(GL_POINT_SPRITE);
 }
 
 void
@@ -823,8 +918,7 @@ HdStRenderPassState::GetShaderHash() const
     // used.
     return TfHash::Combine(
         hash,
-        _clipPlanesBufferSize,
-        _UseAlphaMask()
+        _clipPlanesBufferSize
     );
 }
 
@@ -837,7 +931,7 @@ _GetRenderBuffer(const HdRenderPassAovBinding& aov,
         return aov.renderBuffer;
     }
 
-    return 
+    return
         dynamic_cast<HdRenderBuffer*>(
             renderIndex->GetBprim(
                 HdPrimTypeTokens->renderBuffer,
@@ -987,7 +1081,7 @@ HdStRenderPassState::MakeGraphicsCmdsDesc(
             useMultiSample && renderBuffer->IsMultiSampled();
         const VtValue rv = renderBuffer->GetResource(multiSampled);
 
-        if (!TF_VERIFY(rv.IsHolding<HgiTextureHandle>(), 
+        if (!TF_VERIFY(rv.IsHolding<HgiTextureHandle>(),
             "Invalid render buffer texture")) {
             continue;
         }
@@ -1010,10 +1104,12 @@ HdStRenderPassState::MakeGraphicsCmdsDesc(
 
         if (HdAovHasDepthSemantic(aov.aovName) ||
             HdAovHasDepthStencilSemantic(aov.aovName)) {
-            desc.depthAttachmentDesc = std::move(attachmentDesc);
-            desc.depthTexture = hgiTexHandle;
-            if (hgiResolveHandle) {
-                desc.depthResolveTexture = hgiResolveHandle;
+            if (_depthTestEnabled || _depthMaskEnabled) {
+                desc.depthAttachmentDesc = std::move(attachmentDesc);
+                desc.depthTexture = hgiTexHandle;
+                if (hgiResolveHandle) {
+                    desc.depthResolveTexture = hgiResolveHandle;
+                }
             }
         } else if (TF_VERIFY(desc.colorAttachmentDescs.size() < maxColorTex,
                    "Too many aov bindings for color attachments"))
@@ -1092,7 +1188,7 @@ HdStRenderPassState::_InitAttachmentState(
     HgiGraphicsPipelineDesc * pipeDesc,
     bool firstDrawBatch) const
 {
-    // For Metal and Vulkan, we have to pass the color and depth descriptors 
+    // For Metal and Vulkan, we have to pass the color and depth descriptors
     // down so that they are available when creating the Render Pipeline State
     // for the fragment shaders.
     HdRenderPassAovBindingVector const& aovBindings = GetAovBindings();
@@ -1103,7 +1199,7 @@ HdStRenderPassState::_InitAttachmentState(
         _InitAttachmentDesc(
             attachment, binding, binding.renderBuffer, aovIndex);
 
-        // For HgiVulkan, don't want to run a clear operation unless this is 
+        // For HgiVulkan, don't want to run a clear operation unless this is
         // the first draw batch in a graphics cmds submission.
         if (!firstDrawBatch) {
             attachment.loadOp = HgiAttachmentLoadOpLoad;
@@ -1112,7 +1208,9 @@ HdStRenderPassState::_InitAttachmentState(
 
         if (HdAovHasDepthSemantic(binding.aovName) ||
             HdAovHasDepthStencilSemantic(binding.aovName)) {
-            pipeDesc->depthAttachmentDesc = attachment;
+            if (_depthTestEnabled || _depthMaskEnabled) {
+                pipeDesc->depthAttachmentDesc = attachment;
+            }
         } else {
             pipeDesc->colorAttachmentDescs.push_back(attachment);
         }
@@ -1214,7 +1312,9 @@ HdStRenderPassState::_InitRasterizationState(
 
     rasterizationState->conservativeRaster = _conservativeRasterizationEnabled;
 
-    rasterizationState->numClipDistances = GetClipPlanes().size();
+    rasterizationState->numClipDistances =
+        geometricShader->GetUseHardwareClipPlanes()
+            ? GetClipPlanes().size() : 0;
 }
 
 void
@@ -1279,12 +1379,12 @@ HdStRenderPassState::GetGraphicsPipelineHash(
     for (HdRenderPassAovBinding const& binding : GetAovBindings()) {
         HdStRenderBuffer *renderBuffer =
             static_cast<HdStRenderBuffer*>(binding.renderBuffer);
-        
+
         const uint32_t msaaCount = renderBuffer->IsMultiSampled() ?
             renderBuffer->GetMSAASampleCount() : 1;
         const bool clear =
             firstDrawBatch ? !binding.clearValue.IsEmpty() : false;
-        
+
         hash = TfHash::Combine(hash,
                                binding.aovName,
                                renderBuffer->GetFormat(),
@@ -1294,6 +1394,5 @@ HdStRenderPassState::GetGraphicsPipelineHash(
 
     return hash;
 }
-
 
 PXR_NAMESPACE_CLOSE_SCOPE

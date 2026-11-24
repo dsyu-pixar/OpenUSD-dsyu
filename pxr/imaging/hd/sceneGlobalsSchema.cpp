@@ -48,6 +48,13 @@ HdSceneGlobalsSchema::GetFromSceneIndex(
 // --(END CUSTOM CODE: Schema Methods)--
 
 HdPathDataSourceHandle
+HdSceneGlobalsSchema::GetPrimaryCameraPrim() const
+{
+    return _GetTypedDataSource<HdPathDataSource>(
+        HdSceneGlobalsSchemaTokens->primaryCameraPrim);
+}
+
+HdPathDataSourceHandle
 HdSceneGlobalsSchema::GetActiveRenderPassPrim() const
 {
     return _GetTypedDataSource<HdPathDataSource>(
@@ -76,26 +83,56 @@ HdSceneGlobalsSchema::GetEndTimeCode() const
 }
 
 HdDoubleDataSourceHandle
+HdSceneGlobalsSchema::GetTimeCodesPerSecond() const
+{
+    return _GetTypedDataSource<HdDoubleDataSource>(
+        HdSceneGlobalsSchemaTokens->timeCodesPerSecond);
+}
+
+HdDoubleDataSourceHandle
 HdSceneGlobalsSchema::GetCurrentFrame() const
 {
     return _GetTypedDataSource<HdDoubleDataSource>(
         HdSceneGlobalsSchemaTokens->currentFrame);
 }
 
+HdIntDataSourceHandle
+HdSceneGlobalsSchema::GetSceneStateId() const
+{
+    return _GetTypedDataSource<HdIntDataSource>(
+        HdSceneGlobalsSchemaTokens->sceneStateId);
+}
+
+HdPathVectorSchema
+HdSceneGlobalsSchema::GetPrimIdToPath() const
+{
+    return HdPathVectorSchema(_GetTypedDataSource<HdVectorDataSource>(
+        HdSceneGlobalsSchemaTokens->primIdToPath));
+}
+
 /*static*/
 HdContainerDataSourceHandle
 HdSceneGlobalsSchema::BuildRetained(
+        const HdPathDataSourceHandle &primaryCameraPrim,
         const HdPathDataSourceHandle &activeRenderPassPrim,
         const HdPathDataSourceHandle &activeRenderSettingsPrim,
         const HdDoubleDataSourceHandle &startTimeCode,
         const HdDoubleDataSourceHandle &endTimeCode,
-        const HdDoubleDataSourceHandle &currentFrame
+        const HdDoubleDataSourceHandle &timeCodesPerSecond,
+        const HdDoubleDataSourceHandle &currentFrame,
+        const HdIntDataSourceHandle &sceneStateId,
+        const HdVectorDataSourceHandle &primIdToPath
 )
 {
-    TfToken _names[5];
-    HdDataSourceBaseHandle _values[5];
+    TfToken _names[9];
+    HdDataSourceBaseHandle _values[9];
 
     size_t _count = 0;
+
+    if (primaryCameraPrim) {
+        _names[_count] = HdSceneGlobalsSchemaTokens->primaryCameraPrim;
+        _values[_count++] = primaryCameraPrim;
+    }
 
     if (activeRenderPassPrim) {
         _names[_count] = HdSceneGlobalsSchemaTokens->activeRenderPassPrim;
@@ -117,11 +154,34 @@ HdSceneGlobalsSchema::BuildRetained(
         _values[_count++] = endTimeCode;
     }
 
+    if (timeCodesPerSecond) {
+        _names[_count] = HdSceneGlobalsSchemaTokens->timeCodesPerSecond;
+        _values[_count++] = timeCodesPerSecond;
+    }
+
     if (currentFrame) {
         _names[_count] = HdSceneGlobalsSchemaTokens->currentFrame;
         _values[_count++] = currentFrame;
     }
+
+    if (sceneStateId) {
+        _names[_count] = HdSceneGlobalsSchemaTokens->sceneStateId;
+        _values[_count++] = sceneStateId;
+    }
+
+    if (primIdToPath) {
+        _names[_count] = HdSceneGlobalsSchemaTokens->primIdToPath;
+        _values[_count++] = primIdToPath;
+    }
     return HdRetainedContainerDataSource::New(_count, _names, _values);
+}
+
+HdSceneGlobalsSchema::Builder &
+HdSceneGlobalsSchema::Builder::SetPrimaryCameraPrim(
+    const HdPathDataSourceHandle &primaryCameraPrim)
+{
+    _primaryCameraPrim = primaryCameraPrim;
+    return *this;
 }
 
 HdSceneGlobalsSchema::Builder &
@@ -157,6 +217,14 @@ HdSceneGlobalsSchema::Builder::SetEndTimeCode(
 }
 
 HdSceneGlobalsSchema::Builder &
+HdSceneGlobalsSchema::Builder::SetTimeCodesPerSecond(
+    const HdDoubleDataSourceHandle &timeCodesPerSecond)
+{
+    _timeCodesPerSecond = timeCodesPerSecond;
+    return *this;
+}
+
+HdSceneGlobalsSchema::Builder &
 HdSceneGlobalsSchema::Builder::SetCurrentFrame(
     const HdDoubleDataSourceHandle &currentFrame)
 {
@@ -164,15 +232,35 @@ HdSceneGlobalsSchema::Builder::SetCurrentFrame(
     return *this;
 }
 
+HdSceneGlobalsSchema::Builder &
+HdSceneGlobalsSchema::Builder::SetSceneStateId(
+    const HdIntDataSourceHandle &sceneStateId)
+{
+    _sceneStateId = sceneStateId;
+    return *this;
+}
+
+HdSceneGlobalsSchema::Builder &
+HdSceneGlobalsSchema::Builder::SetPrimIdToPath(
+    const HdVectorDataSourceHandle &primIdToPath)
+{
+    _primIdToPath = primIdToPath;
+    return *this;
+}
+
 HdContainerDataSourceHandle
 HdSceneGlobalsSchema::Builder::Build()
 {
     return HdSceneGlobalsSchema::BuildRetained(
+        _primaryCameraPrim,
         _activeRenderPassPrim,
         _activeRenderSettingsPrim,
         _startTimeCode,
         _endTimeCode,
-        _currentFrame
+        _timeCodesPerSecond,
+        _currentFrame,
+        _sceneStateId,
+        _primIdToPath
     );
 }
 
@@ -200,6 +288,16 @@ const HdDataSourceLocator &
 HdSceneGlobalsSchema::GetDefaultLocator()
 {
     static const HdDataSourceLocator locator(GetSchemaToken());
+    return locator;
+}
+
+/* static */
+const HdDataSourceLocator &
+HdSceneGlobalsSchema::GetPrimaryCameraPrimLocator()
+{
+    static const HdDataSourceLocator locator =
+        GetDefaultLocator().Append(
+            HdSceneGlobalsSchemaTokens->primaryCameraPrim);
     return locator;
 }
 
@@ -245,11 +343,41 @@ HdSceneGlobalsSchema::GetEndTimeCodeLocator()
 
 /* static */
 const HdDataSourceLocator &
+HdSceneGlobalsSchema::GetTimeCodesPerSecondLocator()
+{
+    static const HdDataSourceLocator locator =
+        GetDefaultLocator().Append(
+            HdSceneGlobalsSchemaTokens->timeCodesPerSecond);
+    return locator;
+}
+
+/* static */
+const HdDataSourceLocator &
 HdSceneGlobalsSchema::GetCurrentFrameLocator()
 {
     static const HdDataSourceLocator locator =
         GetDefaultLocator().Append(
             HdSceneGlobalsSchemaTokens->currentFrame);
+    return locator;
+}
+
+/* static */
+const HdDataSourceLocator &
+HdSceneGlobalsSchema::GetSceneStateIdLocator()
+{
+    static const HdDataSourceLocator locator =
+        GetDefaultLocator().Append(
+            HdSceneGlobalsSchemaTokens->sceneStateId);
+    return locator;
+}
+
+/* static */
+const HdDataSourceLocator &
+HdSceneGlobalsSchema::GetPrimIdToPathLocator()
+{
+    static const HdDataSourceLocator locator =
+        GetDefaultLocator().Append(
+            HdSceneGlobalsSchemaTokens->primIdToPath);
     return locator;
 } 
 

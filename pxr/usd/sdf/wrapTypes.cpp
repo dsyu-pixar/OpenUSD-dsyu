@@ -271,6 +271,18 @@ _SdfValueBlockHash(const SdfValueBlock &self)
     return TfHash{}(self);
 }
 
+static string
+_SdfAnimationBlockRepr(const SdfAnimationBlock &self) 
+{
+    return TF_PY_REPR_PREFIX + "AnimationBlock";
+}
+
+static int
+_SdfAnimationBlockHash(const SdfAnimationBlock &self)
+{
+    return TfHash{}(self);
+}
+
 SdfValueTypeName
 _FindType(const std::string& typeName)
 {
@@ -375,7 +387,6 @@ void wrapTypes()
 
     SdfPyWrapMapEditProxy<SdfDictionaryProxy>();
     SdfPyWrapMapEditProxy<SdfVariantSelectionProxy>();
-    SdfPyWrapMapEditProxy<SdfRelocatesMapProxy>();
 
     SdfPyWrapListOp<SdfPathListOp>("PathListOp");
     SdfPyWrapListOp<SdfPayloadListOp>("PayloadListOp");
@@ -444,6 +455,7 @@ void wrapTypes()
         .def_readonly("Float"          , SdfValueTypeNames->Float)
         .def_readonly("Double"         , SdfValueTypeNames->Double)
         .def_readonly("TimeCode"       , SdfValueTypeNames->TimeCode)
+        .def_readonly("Duration"       , SdfValueTypeNames->Duration)
         .def_readonly("String"         , SdfValueTypeNames->String)
         .def_readonly("Token"          , SdfValueTypeNames->Token)
         .def_readonly("Asset"          , SdfValueTypeNames->Asset)
@@ -501,6 +513,7 @@ void wrapTypes()
         .def_readonly("FloatArray"     , SdfValueTypeNames->FloatArray)
         .def_readonly("DoubleArray"    , SdfValueTypeNames->DoubleArray)
         .def_readonly("TimeCodeArray"  , SdfValueTypeNames->TimeCodeArray)
+        .def_readonly("DurationArray"  , SdfValueTypeNames->DurationArray)
         .def_readonly("StringArray"    , SdfValueTypeNames->StringArray)
         .def_readonly("TokenArray"     , SdfValueTypeNames->TokenArray)
         .def_readonly("AssetArray"     , SdfValueTypeNames->AssetArray)
@@ -554,4 +567,11 @@ void wrapTypes()
         .def("__repr__", _SdfValueBlockRepr)
         .def("__hash__", _SdfValueBlockHash);
     VtValueFromPython<SdfValueBlock>();
+
+    class_<SdfAnimationBlock>("AnimationBlock")
+        .def(self == self)
+        .def(self != self)
+        .def("__repr__", _SdfAnimationBlockRepr)
+        .def("__hash__", _SdfAnimationBlockHash);
+    VtValueFromPython<SdfAnimationBlock>();
 }

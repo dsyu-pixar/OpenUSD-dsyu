@@ -88,7 +88,11 @@
             ('topology', 'HdMeshTopologySchema', {}),
             ('subdivisionScheme', T_TOKEN, {}),
             ('subdivisionTags', 'HdSubdivisionTagsSchema', {}),
-            ('doubleSided', T_BOOL, {}),
+            ('doubleSided', T_BOOL, dict(
+                DOC = '''
+                    Deprecated. Use the prim-level surface schema instead.
+                    ''',
+            )),
         ],
 
         ADD_DEFAULT_LOCATOR = True,
@@ -102,6 +106,7 @@
         SCHEMA_TOKEN = 'topology',
         SCHEMA_INCLUDES = ['{{LIBRARY_PATH}}/subdivisionTagsSchema'],
         MEMBERS = [
+            ('ALL_MEMBERS', '', dict(ADD_LOCATOR = True)),
             ('faceVertexCounts', T_INTARRAY, {}),
             ('faceVertexIndices', T_INTARRAY, {}),
             ('holeIndices', T_INTARRAY, {}),
@@ -127,7 +132,11 @@
         MEMBERS = [
             ('ALL_MEMBERS', '', dict(ADD_LOCATOR = True)),
             ('topology', 'HdTetMeshTopologySchema', {}),
-            ('doubleSided', T_BOOL, {}),
+            ('doubleSided', T_BOOL, dict(
+                DOC = '''
+                    Deprecated. Use the prim-level surface schema instead.
+                    ''',
+            )),
         ],
 
         ADD_DEFAULT_LOCATOR = True,
@@ -172,7 +181,11 @@
             ('vRange', T_VEC2D, {}),
             ('trimCurve', 'HdNurbsPatchTrimCurveSchema', {}),
             ('orientation', T_TOKEN, {}),
-            ('doubleSided', T_BOOL, {}),
+            ('doubleSided', T_BOOL, dict(
+                DOC = '''
+                    Deprecated. Use the prim-level surface schema instead.
+                    ''',
+            )),
         ],
         
         ADD_DEFAULT_LOCATOR = True,
@@ -269,6 +282,12 @@
             ('indices', T_INTARRAY, {}),
             ('interpolation', T_TOKEN, {}),
             ('role', T_TOKEN, {}),
+            ('colorSpace', T_TOKEN, {}),
+            ('elementSize', T_INT,
+             dict(DOC = '''
+                 The number of values in the value array that must be aggregated
+                 for each element on the the primitive
+                 (same as UsdGeomPrimvar).'''))
         ],
         EXTRA_TOKENS = [
             'transform',
@@ -350,6 +369,17 @@
         SCHEMA_TOKEN = 'purpose',
         MEMBERS = [
             ('purpose', T_TOKEN, {}),
+            ('inheritable', T_BOOL,
+             dict(DOC = ('The "inheritable" flag indicates if this purpose '
+             'schema should be inherited by the '
+             'HdFlattenedPurposeDataSourceProvider.'))),
+            ('fallback', T_TOKEN,
+             dict(DOC = ('The "purpose" concept in Hydra is modelled after '+
+             'the UsdGeomImageable concept, which allows prim types to '+
+             'define a purpose fallback value to be used when no '
+             'purpose value is found on a prim or its ancestors.  The '+
+             'Hydra schema transports this fallback, if present, to apply '+
+             'it during flattening.'))),
         ],
         ADD_DEFAULT_LOCATOR = True,
     ),
@@ -363,6 +393,18 @@
             ('min', T_VEC3D, {}),
             ('max', T_VEC3D, {}),
             
+        ],
+        ADD_DEFAULT_LOCATOR = True,
+    ),
+
+    #--------------------------------------------------------------------------
+    # surface
+    dict(
+        SCHEMA_NAME = 'Surface',
+        SCHEMA_TOKEN = 'surface',
+        MEMBERS = [
+            ('ALL_MEMBERS', '', dict(ADD_LOCATOR = True)),
+            ('doubleSided', T_BOOL, {}),
         ],
         ADD_DEFAULT_LOCATOR = True,
     ),
@@ -469,13 +511,109 @@
         DOC = '''
             The MaterialInterfaceMapping schema identifies a material node
             parameter using its two members 'nodePath' and 'inputName'.  
-            
-            See MaterialNetwork schema's documentation on its 
-            'interfaceMappings' member for an example.
+
+            For example, if we are looking at some material network at
+            material/<renderContext>/... and we have a mapping target defined by
+            the following data sources:
+
+            ds at: material/<renderContext>/.../nodePath = 
+                Color_Manipulate
+
+            ds at: material/<renderContext>/.../inputName = 
+                adjustVal
+                
+            The above defines a mapping target to the material node parameter 
+            under that material network, eg:
+                
+            ds at: material/<renderContext>/nodes/Color_Manipulate/parameters/
+                adjustVal 
             ''',
         MEMBERS = [
             ('nodePath', T_TOKEN, {}),
             ('inputName', T_TOKEN, {})
+        ],
+    ),
+
+    #-------------------------------------------------------------------------
+    # materialInterfaceParameter
+    dict(
+        SCHEMA_NAME = 'MaterialInterfaceParameter',
+        DOC = '''
+            The MaterialInterfaceParameter schema describes a single interface
+            parameter (public UI parameter).
+            
+            An interface parameter defines a vector of mappings to material node
+            parameters. These mappings indicate which material node parameters 
+            should be overridden when a value is set on the interface parameter.
+
+            For example, the following data sources define a public UI 
+            "globalVal" that maps to two different node parameters:
+                
+            ds at: material/<renderContext>/interface/parameters/globalVal/
+                mappings/[0]/nodePath = Color_Manipulate
+
+            ds at: material/<renderContext>/interface/parameters/globalVal/
+                mappings/[0]/inputName = adjustVal
+
+            ds at: material/<renderContext>/interface/parameters/globalVal/
+                mappings/[1]/nodePath = Color_RetargetLayer
+
+            ds at: material/<renderContext>/interface/parameters/globalVal/
+                mappings/[1]/inputName = valRemapAmount
+                
+            The above means that the "globalVal" public UI name maps to the
+            following parameter data sources at:
+                
+            ds at: material/<renderContext>/nodes/Color_Manipulate/parameters/
+                adjustVal 
+                
+            ds at: material/<renderContext>/nodes/Color_RetargetLayer/
+                parameters/valRemapAmount
+            ''',
+        SCHEMA_INCLUDES = [
+            '{{LIBRARY_PATH}}/schemaTypeDefs'],
+        MEMBERS = [
+            ('displayGroup', T_TOKEN, 
+             dict(DOC = '''
+                Optional displayGroup. Intended for GUI organization.
+                ''')),
+            ('displayName', T_TOKEN, 
+             dict(DOC = '''
+                Optional displayName. Intended for GUI organization.
+                ''')),
+            ('mappings', 'HdMaterialInterfaceMappingVectorSchema',
+             dict(DOC = '''
+                Maps this singular interface parameter to a vector of target
+                node parameters. Each mapping target is defined by the 
+                InterfaceMappings schema.
+                ''')),
+        ],
+    ),
+
+    #--------------------------------------------------------------------------
+    # materialInterface
+    dict(
+        SCHEMA_NAME = 'MaterialInterface',
+        DOC = '''
+            The MaterialInterface schema describes a material's interface
+            parameters, also known as public UI parameters.
+            ''',
+        SCHEMA_INCLUDES = [
+            '{{LIBRARY_PATH}}/schemaTypeDefs'],
+        MEMBERS = [
+            ('parameters', 'HdMaterialInterfaceParameterContainerSchema',
+             dict(DOC = '''
+                A container for all the material's interface parameters.
+                ''')),
+            ('parameterOrder', 'HdTokenArrayDataSource',
+             dict(DOC = '''
+                Provides the intended order of the interface parameters for UI
+                purposes. Any member of 'parameters' that is not found in this 
+                list can come after all listed members.
+                  
+                The order of display groups is implicitly encoded. As this list 
+                is traversed, display groups are ordered by first encounter.
+                ''')),
         ],
     ),
 
@@ -486,36 +624,13 @@
         DOC = '''
             The MaterialNetwork schema is a container schema that defines a
             material for a specific render context. A network is composed of 
-            nodes, terminals, and interface mappings.    
-
-            Interface mappings define the material's public UI. For example, the
-            following data sources define a public UI "globalVal" that maps to 
-            two different node parameters:
-                
-            ds at: material/<renderContext>/interfaceMappings/globalVal/[0]/
-                nodePath = Color_Manipulate
-
-            ds at: material/<renderContext>/interfaceMappings/globalVal/[0]/
-                inputName = adjustVal
-
-            ds at: material/<renderContext>/interfaceMappings/globalVal/[1]/
-                nodePath = Color_RetargetLayer
-
-            ds at: material/<renderContext>/interfaceMappings/globalVal/[1]/
-                inputName = valRemapAmount
-                
-            The above means that the "globalVal" public UI name maps to the
-            following parameter data sources at:
-                
-            ds at: material/<renderContext>/nodes/Color_Manipulate/parameters/
-                adjustVal 
-                
-            ds at: material/<renderContext>/nodes/Color_RetargetLayer/
-                parameters/valRemapAmount
+            nodes, terminals, and interface.    
 
             See also the Material schema documentation for ASCII art diagram.
             ''',
-        SCHEMA_INCLUDES = ['{{LIBRARY_PATH}}/schemaTypeDefs'],
+        SCHEMA_INCLUDES = [
+            '{{LIBRARY_PATH}}/schemaTypeDefs',
+            '{{LIBRARY_PATH}}/materialInterfaceSchema'],
         MEMBERS = [
             ('nodes', 'HdMaterialNodeContainerSchema',
              dict(DOC = '''
@@ -529,11 +644,11 @@
                 Maps terminal names to material connections. Each connection
                 is a container defined by the MaterialConnection schema.
                 ''')),
-            ('interfaceMappings', 'HdMaterialInterfaceMappingsContainerSchema',
+            ('interface', 'HdMaterialInterfaceSchema',
              dict(DOC = '''
-                Maps interface names (public UI names) to vectors of material 
-                node parameters. Each mapped material node parameter is a 
-                container defined by the InterfaceMappings schema.
+                Describes the material's interface (public UI). A material's
+                public interface has user-authored order, grouping, naming, and
+                mappings.
                 ''')),
             ('config', "HdSampledDataSourceContainerSchema", {}),
         ],
@@ -559,6 +674,12 @@
         SCHEMA_TOKEN = 'material',
         EXTRA_TOKENS = [
             '(universalRenderContext, "")',
+            '(_universalRenderContextToken, "universalRenderContext")',
+            '(all, "__all")',
+            'terminals',
+            'surface',
+            'displacement',
+            'volume'
         ],
         ADD_DEFAULT_LOCATOR = True,
 
@@ -576,12 +697,14 @@
     dict(
         SCHEMA_NAME = 'MaterialOverride',
         DOC = '''
-            The MaterialOverride schema allows overrides to be made to the 
-            material's public UI. Overrides can be applied to both material or 
-            geometry scene index prim locations.
+            The MaterialOverride schema allows overrides to be made to various 
+            parts of materials, such as the public UI or shader nodes' 
+            parameters. Overrides can be applied to material scene index 
+            prim locations.
 
-            The following is an example of a material override. The data
-            source to author an override on the public UI name 
+            The following is an example of a material override affecting a 
+            material's public UI. 
+            The data source to author an override on the public UI name 
             "globalSpecularKface" would look like this:
 
             ds at: materialOverride/interfaceValues/globalSpecularKface/value =
@@ -590,11 +713,11 @@
             There needs to be an interface mapping defined for 
             "globalSpecularKface", which could look like this:
 
-            ds at: material/<renderContext>/interfaceMappings/
-                globalSpecularKface/[0]/nodePath = MaterialLayer
+            ds at: material/<renderContext>/interface/parameters/
+                globalSpecularKface/mappings/[0]/nodePath = MaterialLayer
                 
-            ds at: material/<renderContext>/interfaceMappings/
-                globalSpecularKface/[0]/inputName = specularKface
+            ds at: material/<renderContext>/interface/parameters/
+                globalSpecularKface/mappings/[0]/inputName = specularKface
 
             The above means that the "globalSpecularKface" public UI name will 
             map to the node parameter "specularKface", and for example, this 
@@ -610,6 +733,21 @@
             ds at: material/<renderContext>/nodes/MaterialLayer/parameters/
                 specularKface/value = 0.666
 
+            The following is an example of a material override affecting a 
+            shader node's input parameter value.
+            The data source to author to an override on the input parameter 
+            called "useClamp" on shader node named "ManipulateColor" would 
+            look like this:
+
+            ds at: materialOverride/parameterValues/ManipulateColor/useClamp/
+                value = 0
+
+            The data source of the node parameter's value will be replaced by 
+            the overriding value data source.
+
+            ds at: material/<renderContext>/nodes/ManipulateColor/parameters/
+                useClamp/value = 0
+
             Note that the MaterialOverride schema does not specify a render 
             context token because material overrides are high-level and do not 
             need to know about implementation details--they just need to specify
@@ -618,6 +756,10 @@
             material nodes and interface mappings--you can imagine that a 
             Renderman vs Storm implementation of a material network would be 
             quite different.    
+
+            In the event where the same parameter has conflicting overrides
+            applied both though interface and parameter values, the overrides
+            set through the interface values will take precedence.
 
             See also the Material schema documentation for ASCII art diagram.
             ''',
@@ -630,6 +772,13 @@
              dict(DOC = '''
                 Maps interface names (ie. public UI names) to overriding
                 data sources that follow the MaterialNodeParameter schema.
+                ''')),
+            ('parameterValues', 'HdNodeToInputToMaterialNodeParameterSchema',
+             dict(DOC = '''
+                Contains names of shader nodes whose parameters values are 
+                overridden. Each parameter within a shader node locator contains
+                overriding data sources that follow the MaterialNodeParameter 
+                schema.
                 ''')),
         ],
     ),
@@ -650,6 +799,7 @@
         SCHEMA_TOKEN = 'materialBindings',
         EXTRA_TOKENS = [
             '(allPurpose, "")',
+            '(_allPurposeToken, "allPurpose")',
         ],
         SCHEMA_INCLUDES = ['{{LIBRARY_PATH}}/materialBindingSchema'],
         GENERIC_MEMBER = (
@@ -815,6 +965,35 @@
     ),
 
     #--------------------------------------------------------------------------
+     # instanceProxy
+    dict(
+        SCHEMA_NAME = 'InstanceProxy',
+        SCHEMA_INCLUDES = ['{{LIBRARY_PATH}}/schemaTypeDefs'],
+        DOC = '''A schema for marking a prim as an instance proxy. An instance
+                 proxy prim represents a descendant prim beneath an instance
+                 prim, even though no such prim actually exists in the scene.
+                 This schema is in service of HdInstanceProxyViewSceneIndex
+                 that provides a topological view of the scene as though
+                 instancing were not being used.
+                 This is useful for path expression-based
+                 collection membership evaluation, and for UI tools like the
+                 Hydra Scene Debugger.''',
+        
+        SCHEMA_TOKEN = 'instanceProxy',
+        ADD_DEFAULT_LOCATOR = True,
+        MEMBERS = [
+            ('pathToPrimInPrototype', T_PATH,
+             dict(DOC = '''The path to the prim in the propagated prototype 
+                hierarchy that this instance proxy prim corresponds to.
+                This is modeled after the UsdPrim::GetPrimInPrototype() API. ''')),
+            ('instancingContext', 'HdInstanceVectorSchema',
+             dict(DOC = '''Starting from the outer most, lists the instancer, 
+                  prototype index and instance index for each level of instancing
+                  leading to this instance proxy prim.''')),
+        ],
+    ),
+
+    #--------------------------------------------------------------------------
     # legacyDisplayStyle
     dict(
         SCHEMA_NAME = 'LegacyDisplayStyle',
@@ -825,12 +1004,25 @@
             ('refineLevel', T_INT, {}),
             ('flatShadingEnabled', T_BOOL, {}),
             ('displacementEnabled', T_BOOL, {}),
+            ('displayInOverlay', T_BOOL, {}),
             ('occludedSelectionShowsThrough', T_BOOL, {}),
             ('pointsShadingEnabled', T_BOOL, {}),
             ('materialIsFinal', T_BOOL, {}),
             ('shadingStyle', T_TOKEN, {}),
             ('reprSelector', T_TOKENARRAY, {}),
             ('cullStyle', T_TOKEN, {}),
+        ],
+    ),
+
+    #--------------------------------------------------------------------------
+    # builtinMaterial
+    dict(
+        SCHEMA_NAME = "BuiltinMaterial",
+        SCHEMA_TOKEN = "builtinMaterial",
+        ADD_DEFAULT_LOCATOR = True,
+        MEMBERS = [
+            ('ALL_MEMBERS', '', dict(ADD_LOCATOR=True)),
+            ('builtinMaterial', T_BOOL, {}),
         ],
     ),
 
@@ -898,13 +1090,16 @@
         SCHEMA_INCLUDES = ['{{LIBRARY_PATH}}/schemaTypeDefs'],
         MEMBERS = [
             ('ALL_MEMBERS', '', dict(ADD_LOCATOR = True)),
-            ('namespacedSettings', T_CONTAINER, {}),
+            ('namespacedSettings', 'HdSampledDataSourceContainerSchema', {}),
             ('active', T_BOOL, {}),
+            ('camera', T_PATH, {}),
+            ('disableMotionBlur', T_BOOL, {}),
+            ('disableDepthOfField', T_BOOL, {}),
             ('renderProducts', 'HdRenderProductVectorSchema', {}),
             ('includedPurposes', T_TOKENARRAY, {}),
             ('materialBindingPurposes', T_TOKENARRAY, {}),
             ('renderingColorSpace', T_TOKEN, {}),
-            ('shutterInterval', T_VEC2D,
+            ('unionedSamplingInterval', T_VEC2D,
              dict(DOC = '''
                 Frame-relative time interval representing the sampling window for 
                 data relevant to motion blur. Renderers can use this interval when
@@ -916,6 +1111,41 @@
                       times and is expected to span the union of the shutter
                       intervals of cameras used in generating the render
                       artifacts.''')),
+            ('useForLegacyRenderDelegateSettings', T_BOOL,
+             dict(DOC = '''
+                A temporary field to transition to in-band render settings.
+
+                This field will not exist in a pure Hydra 2.0 world since
+                render settings are always communicated in-band through the
+                scene index. It mitigates the risk for HdRenderDelegate's
+                implementing both in-band render settings and the legacy
+                HdRenderDelegate::SetRenderSettings and those implementations
+                interact in complicated ways. That is, applications can use,
+                for example, an env var to switch between the new mechanism
+                and direct calls to HdRenderDelegate::SetRenderSettings to
+                revert to the old behavior while we address fall-out.
+
+                This field changes the emulation layer
+                HdRenderDelegateAdapterRenderer, to
+                set the legacy render settings on the legacy render delegate
+                using HdRenderDelegate::SetRenderSetting with the values
+                provided by this schema.''')),
+        ],
+    ),
+
+    #--------------------------------------------------------------------------
+    # renderSettingDescriptor
+    dict(
+        SCHEMA_NAME = 'RenderSettingDescriptor',
+        SCHEMA_TOKEN = 'renderSettingDescriptor',
+        DOC = '''Describes render setting advertised by a renderer through
+                 HdRendererPlugin::GetSceneIndexCreateArgs, see
+                 HdSceneIndexCreateArgsSchema::GetRenderSettings.''',
+        MEMBERS = [
+            ('name', T_STRING,
+             dict(DOC = '''Human-readable name of the render setting, suitable
+                           for display in a UI.''')),
+            ('defaultValue', T_SAMPLED, {})
         ],
     ),
 
@@ -1011,6 +1241,14 @@
     ),
 
     #--------------------------------------------------------------------------
+    # volume
+    dict(
+        SCHEMA_NAME = 'Volume',
+        SCHEMA_TOKEN = 'volume',
+        ADD_DEFAULT_LOCATOR = True,
+    ),
+
+    #--------------------------------------------------------------------------
     # volumeField
     dict(
         SCHEMA_NAME = 'VolumeField',
@@ -1031,6 +1269,7 @@
         SCHEMA_NAME = 'Camera',
         SCHEMA_TOKEN = 'camera',
         SCHEMA_INCLUDES = [
+            '{{LIBRARY_PATH}}/backPlateSchema',
             '{{LIBRARY_PATH}}/schemaTypeDefs',
             '{{LIBRARY_PATH}}/splitDiopterSchema',
             '{{LIBRARY_PATH}}/lensDistortionSchema'],
@@ -1048,15 +1287,52 @@
             ('focusDistance', T_FLOAT, {}),
             ('shutterOpen', T_DOUBLE, dict(ADD_LOCATOR = True)),
             ('shutterClose', T_DOUBLE, dict(ADD_LOCATOR = True)),
-            ('exposure', T_FLOAT, {}),
+            ('exposure', T_FLOAT, dict(ADD_LOCATOR = True)),
+            ('exposureTime', T_FLOAT, dict(ADD_LOCATOR = True)),
+            ('exposureIso', T_FLOAT, dict(ADD_LOCATOR = True)),
+            ('exposureFStop', T_FLOAT, dict(ADD_LOCATOR = True)),
+            ('exposureResponsivity', T_FLOAT, dict(ADD_LOCATOR = True)),
+            ('linearExposureScale', T_FLOAT, dict(ADD_LOCATOR = True)),
             ('focusOn', T_BOOL, {}),
             ('dofAspect', T_FLOAT, {}),
             ('splitDiopter', 'HdSplitDiopterSchema', {}),
             ('lensDistortion', 'HdLensDistortionSchema', {}),
             ('namespacedProperties', 'HdSampledDataSourceContainerContainerSchema', dict(ADD_LOCATOR = True)),
+            ('backPlate', 'HdBackPlateContainerSchema', dict(ADD_LOCATOR = True)),
         ],
         STATIC_TOKEN_DATASOURCE_BUILDERS = [ # optional for shared token ds's
             ('projection', ['perspective', 'orthographic']),
+        ],
+    ),
+
+    #--------------------------------------------------------------------------
+    # backPlate
+    dict(
+        SCHEMA_NAME = 'BackPlate',
+        SCHEMA_TOKEN = 'backPlate',
+        DOC = '''The {{ SCHEMA_CLASS_NAME }} specifies a container that will 
+                 hold "back plate" data.  This data is parallel to the 
+                 properties defined in UsdGeomBackPlateAPI and more details can 
+                 be found at usdGeom/backPlateAPI.h''',
+        SCHEMA_INCLUDES = [
+            '{{LIBRARY_PATH}}/schemaTypeDefs'],
+        MEMBERS = [
+            ('scaleTweak', T_VEC2F, {}),
+            ('rotateXYZTweak', T_VEC3F, {}),
+            ('translateTweak', T_VEC3F, {}),
+            ('image', T_ASSETPATH, {}),
+            ('alphaImage', T_ASSETPATH, {}),
+            ('depthImage', T_ASSETPATH, {}),
+            ('depthMinOffset', T_FLOAT, {}),
+            ('depthNormalizingFactor', T_FLOAT, {}),
+            ('depthCameraSpaceOffset', T_FLOAT, {}),
+            ('lumaSlope', T_VEC3F, {}),
+            ('lumaOffset', T_VEC3F, {}),
+            ('lumaPower', T_VEC3F, {}),
+            ('plateVisibility', T_TOKEN, {}),
+        ],
+        STATIC_TOKEN_DATASOURCE_BUILDERS = [ # optional for shared token ds's
+            ('plateVisibility', ['all', 'solo', 'none']),
         ],
     ),
 
@@ -1234,8 +1510,11 @@
         ADD_DEFAULT_LOCATOR = True,
         MEMBERS = [
             ('height', T_DOUBLE, {}),
-            # deprecated in favor of radiusTop and radiusBottom
-            ('radius', T_DOUBLE, {}), 
+            ('radius', T_DOUBLE,
+             dict(DOC = '''
+                Deprecated. Only use if no radiusTop or radiusBottom data
+                source. Comes from UsdGeom Cylinder which has been deprecated
+                in favor of Cylinder_1.''')),
             ('radiusTop', T_DOUBLE, {}),
             ('radiusBottom', T_DOUBLE, {}),
             ('axis', T_TOKEN, {}),
@@ -1254,8 +1533,11 @@
         ADD_DEFAULT_LOCATOR = True,
         MEMBERS = [
             ('height', T_DOUBLE, {}),
-            # deprecated in favor of radiusTop and radiusBottom
-            ('radius', T_DOUBLE, {}), 
+            ('radius', T_DOUBLE,
+             dict(DOC = '''
+                Deprecated. Only use if no radiusTop or radiusBottom data
+                source. Comes from UsdGeom Capsule which has been deprecated
+                in favor of Capsule_1.''')),
             ('radiusTop', T_DOUBLE, {}),
             ('radiusBottom', T_DOUBLE, {}),
             ('axis', T_TOKEN, {}),
@@ -1274,7 +1556,11 @@
         SCHEMA_TOKEN = 'plane',
         ADD_DEFAULT_LOCATOR = True,
         MEMBERS = [
-            ('doubleSided', T_BOOL, {}),
+            ('doubleSided', T_BOOL, dict(
+                DOC = '''
+                    Deprecated. Use the prim-level surface schema instead.
+                    ''',
+            )),
             ('axis', T_TOKEN, {}),
             ('length', T_DOUBLE, {}),
             ('width', T_DOUBLE, {}),
@@ -1300,21 +1586,44 @@
     ),
 
     #--------------------------------------------------------------------------
+    # primId
+    dict(
+        SCHEMA_NAME = 'PrimId',
+        SCHEMA_TOKEN = 'primId',
+        DOC = '''Unique id assigned to all imageable prims. Inverse map is in
+                 SceneGlobals.
+                 For example, these can be assigned by the HdsiPrimIdSceneIndex
+                 and used for an Id buffer for picking.''',
+        ADD_DEFAULT_LOCATOR = True,
+        MEMBERS = [
+            ('primId', 'HdPrimIdDataSource', {}),
+        ],
+    ),
+
+    #--------------------------------------------------------------------------
     # selection
     dict(
         SCHEMA_NAME = 'Selection',
         SCHEMA_INCLUDES = ['{{LIBRARY_PATH}}/schemaTypeDefs'],
         MEMBERS = [
-            ('fullySelected', T_BOOL, {}),
+            ('fullySelected', T_BOOL,
+             dict(DOC = '''
+                The (entire) prim is selected rather than just some of its
+                faces, for example. A future version of this schema will include
+                additional data sources to indicate that some faces, edges,
+                vertices of the prim are selected.''')),
             ('nestedInstanceIndices', 'HdInstanceIndicesVectorSchema',
              dict(DOC = '''
-                Starting with the outer most, list for each nesting
-                level of instancing what instances are selected.''')),
+                Present if this prim has an instanced by schema pointing
+                to an instancer. Indicates what instances of this prim
+                are selected. For nested instancing, the vector starts with
+                the outer most instancer.''')),
         ],
     ),
 
     #--------------------------------------------------------------------------
     # instanceIndices
+    # XXX WBN to rename this schema.
     dict(
         SCHEMA_NAME = 'InstanceIndices',
         MEMBERS = [
@@ -1332,9 +1641,10 @@
                  render. It currently houses the active render settings
                  and pass prim paths that describe the information
                  necessary to generate images from a single invocation
-                 of a renderer, and the active time sample range and current  
+                 of a renderer, the active time sample range and current  
                  frame number that may be relevant to downstream scene indices 
-                 (e.g. procedural evaluation).
+                 (e.g. procedural evaluation), the time codes per second (sometimes
+                 informally referred to as FPS), and the primary camera.
 
                  We shall use the convention of a container data source at the root prim
                  of the scene index that is populated with this global state.
@@ -1344,11 +1654,16 @@
         ADD_DEFAULT_LOCATOR = True,
         MEMBERS = [
             ('ALL_MEMBERS', '', dict(ADD_LOCATOR = True)),
+            ('primaryCameraPrim', T_PATH, {}),
             ('activeRenderPassPrim', T_PATH, {}),
             ('activeRenderSettingsPrim', T_PATH, {}),
             ('startTimeCode', T_DOUBLE, {}),
             ('endTimeCode', T_DOUBLE, {}),
+            ('timeCodesPerSecond', T_DOUBLE, {}),
             ('currentFrame', T_DOUBLE, {}),
+            ('sceneStateId', T_INT, {}),
+            ('primIdToPath', 'HdPathVectorSchema',
+             dict(DOC = '''Maps id's from PrimId schema to prim paths.''')),
         ],
     ),
 
@@ -1385,6 +1700,74 @@
         ADD_DEFAULT_LOCATOR = True,
     ),
 
+
+    #--------------------------------------------------------------------------
+    # rendererCreateArgs
+    dict(
+        SCHEMA_NAME = 'RendererCreateArgs',
+        DOC = '''Arguments to HdRendererPlugin::IsSupported and
+                 CreateRenderer.''',
+        SCHEMA_TOKEN = 'rendererCreateArgs',
+        ADD_DEFAULT_LOCATOR = True,
+        SCHEMA_INCLUDES = [
+            '{{LIBRARY_PATH}}/schemaTypeDefs',
+        ],
+        MEMBERS = [
+            ('ALL_MEMBERS', '', dict(ADD_LOCATOR = True)),
+            ('gpuEnabled', T_BOOL,
+             dict(DOC = '''Is a GPU available.''')),
+            ('drivers', 'HdSampledDataSourceContainerSchema',
+             dict(DOC = '''Drivers such as Hgi that renderer can use.''')),
+        ],
+        EXTRA_TOKENS = [
+            'hgi',
+        ],
+    ),
+
+    #--------------------------------------------------------------------------
+    # sceneIndexCreateArgsSchema
+    dict(
+        SCHEMA_NAME = 'SceneIndexCreateArgs',
+        DOC = '''Schema for the container data source returned by
+        HdRendererPlugin::GetSceneIndexCreateArgs. The application forwards it (possibly
+        overlayed with its own container data source) to the scene index constructors
+        or scene index plugins. In other words, HdRendererPlugin::GetSceneIndexCreateArgs
+        gives a renderer the opportunity to configure scene indices.
+
+        Examples are: A scene index might use execution which is non-lazy and needs to
+        cache values or even samples for motion blur in advance. The renderer can
+        advertise whether it actually supports motion blur and we need to cache these
+        samples. This similarly applies to the material networks for different
+        render contexts such as glslflx which is understood by Storm but not Prman,
+        for example.
+        ''',
+        SCHEMA_INCLUDES = ['{{LIBRARY_PATH}}/schemaTypeDefs'],
+        MEMBERS = [
+            ('motionBlurSupport', T_BOOL,
+             dict(DOC = '''Does consumer (most likely HdRenderer) of scene indices need
+                           samples for motion blur? This is relevant, for example, for
+                           scene indices using execution which is non-lazy and needs to
+                           know for what times to cache samples.''')),
+            ('cameraMotionBlurSupport', T_BOOL,
+             dict(DOC = '''Does consumer (most likely HdRenderer) of scene indices need
+                           samples for motion blur for cameras? This is a variation
+                           of motionBlurSupport. It is here, for example, for renderers
+                           that use an image shader for camera motion blur.''')),
+            ('legacyRenderDelegateInfo', 'HdRenderDelegateInfoDataSource',
+             dict(DOC = '''Used for HdRenderIndexAdapterSceneIndex. In particular,
+                           this is used when USDIMAGINGGL_ENGINE_ENABLE_SCENE_INDEX is
+                           false: the UsdImagingDelegate is querying an emulation
+                           render delegate for information to resolve, for example,
+                           the material render contexts correctly.''')),
+            ('renderSettingDescriptors', 'HdRenderSettingDescriptorContainerSchema',
+             dict(DOC = '''Render settings advertised by rendererer.''')),
+            ('excludedPurposesHint', T_TOKENARRAY,
+             dict(DOC = '''Hint listing prim purposes (e.g. render, proxy, guide) that
+             are typically excluded (i.e. not consumed or rendered) by the
+             renderer. See UsdGeomImageable and HdPurposeSchema for more information.'''))
+        ],
+    ),
+
     #--------------------------------------------------------------------------
     # legacyTask
     dict(
@@ -1405,4 +1788,18 @@
             ('renderTags', 'HdTokenVectorDataSource', {}),
         ],
     ),
+
+    #--------------------------------------------------------------------------
+    # particleField
+    dict(
+        SCHEMA_NAME = 'ParticleField',
+        SCHEMA_TOKEN = 'particleField',
+        DOC = '''Schema for representing configuration information about
+                 particleField prims.''',
+        ADD_DEFAULT_LOCATOR = True,
+        MEMBERS = [
+            ('kernelType', T_TOKEN, {}),
+        ],
+    ),
+    
 ]

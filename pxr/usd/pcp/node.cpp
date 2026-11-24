@@ -105,6 +105,7 @@ PCP_DEFINE_GET_API(const PcpMapExpression&, GetMapToParent, mapToParent);
 PCP_DEFINE_GET_API(const PcpMapExpression&, GetMapToRoot, mapToRoot);
 
 PCP_DEFINE_API(bool, HasSymmetry, SetHasSymmetry, smallInts.hasSymmetry);
+PCP_DEFINE_API(bool, HasValueClips, SetHasValueClips, smallInts.hasValueClips);
 PCP_DEFINE_API(SdfPermission, GetPermission, SetPermission, smallInts.permission);
 PCP_DEFINE_API(bool, IsRestricted, _SetRestricted, smallInts.permissionDenied);
 
@@ -136,13 +137,14 @@ PcpNodeRef::SetCulled(bool culled)
         _graph->_finalized = false;
     }
 
-    // If we've culled this node, we've definitely restricted contributions.
-    // If we've unculled this node, some other flags may be restriction
-    // contributions, so we don't know.
-    _RecordRestrictionDepth(
-        culled ? _Restricted::Yes : _Restricted::Unknown);
-
     _graph->_unshared[_nodeIdx].culled = culled;
+
+    // If we've culled this node, we've definitely restricted contributions.  If
+    // we've unculled this node, some other flags may be restriction
+    // contributions, so we don't know.  This must follow the update above,
+    // since _RecordRestrictionDepth consults CanContributeSpecs which looks at
+    // `culled`.
+    _RecordRestrictionDepth(culled ? _Restricted::Yes : _Restricted::Unknown);
 }
 
 void
@@ -188,7 +190,11 @@ PcpNodeRef::_RecordRestrictionDepth(_Restricted isRestricted)
     if (!contributionRestricted) {
         currDepth = 0;
     }
-    else {
+    else if (currDepth == 0) {
+        // Only change the restriction depth if we're currently not
+        // restricted. We want to keep the previous restriction depth
+        // otherwise because it reflects the location in namespace
+        // where this node was first restricted.
         size_t newDepth = GetPath().GetPathElementCount();
 
         // XXX:
@@ -219,6 +225,34 @@ PcpNodeRef::SetIsDueToAncestor(bool isDueToAncestor)
     _graph->_unshared[_nodeIdx].isDueToAncestor = isDueToAncestor;
 }
 
+void
+PcpNodeRef::SetHasTransitiveDirectDependency(bool hasArc)
+{
+    TF_DEV_AXIOM(_nodeIdx < _graph->_unshared.size());
+    _graph->_unshared[_nodeIdx].hasTransitiveDirectArc = hasArc;
+}
+
+bool
+PcpNodeRef::HasTransitiveDirectDependency() const
+{
+    TF_DEV_AXIOM(_nodeIdx < _graph->_unshared.size());
+    return _graph->_unshared[_nodeIdx].hasTransitiveDirectArc;
+}
+
+void
+PcpNodeRef::SetHasTransitiveAncestralDependency(bool hasArc)
+{
+    TF_DEV_AXIOM(_nodeIdx < _graph->_unshared.size());
+    _graph->_unshared[_nodeIdx].hasTransitiveAncestralArc = hasArc;
+}
+
+bool
+PcpNodeRef::HasTransitiveAncestralDependency() const
+{
+    TF_DEV_AXIOM(_nodeIdx < _graph->_unshared.size());
+    return _graph->_unshared[_nodeIdx].hasTransitiveAncestralArc;
+}
+
 bool
 PcpNodeRef::HasSpecs() const
 {
@@ -244,6 +278,16 @@ PcpLayerStackSite
 PcpNodeRef::GetSite() const
 {
     return PcpLayerStackSite(GetLayerStack(), GetPath());
+}
+
+bool
+PcpNodeRef::HasSameSiteAs(const PcpNodeRef &node) const
+{
+    // A PcpLayerStackSite is just a pair of PcpLayerStackRefPtr & SdfPath, so
+    // this test is equivalent to its operator==, but avoids the reference
+    // counting done when constructing a PcpLayerStackSite.
+    return GetLayerStack() == node.GetLayerStack() &&
+           GetPath()       == node.GetPath();
 }
 
 bool 

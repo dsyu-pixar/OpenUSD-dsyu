@@ -43,6 +43,8 @@ TF_DECLARE_PUBLIC_TOKENS(HdSelectionSchemaTokens, HD_API,
 //-----------------------------------------------------------------------------
 
 
+/// \class HdSelectionSchema
+///
 class HdSelectionSchema : public HdSchema
 {
 public:
@@ -60,11 +62,16 @@ public:
     /// \name Member accessor
     /// @{
 
+    /// The (entire) prim is selected rather than just some of its faces, for
+    /// example. A future version of this schema will include additional data
+    /// sources to indicate that some faces, edges, vertices of the prim are
+    /// selected.
     HD_API
     HdBoolDataSourceHandle GetFullySelected() const;
 
-    /// Starting with the outer most, list for each nesting level of
-    /// instancing what instances are selected.
+    /// Present if this prim has an instanced by schema pointing to an
+    /// instancer. Indicates what instances of this prim are selected. For
+    /// nested instancing, the vector starts with the outer most instancer.
     HD_API
     HdInstanceIndicesVectorSchema GetNestedInstanceIndices() const; 
 

@@ -28,6 +28,7 @@
 #include "pxr/base/tf/envSetting.h"
 #include "pxr/base/tf/registryManager.h"
 #include "pxr/base/tf/type.h"
+#include "pxr/base/trace/trace.h"
 
 #include <mutex>
 
@@ -113,7 +114,7 @@ HgiGL::CreateComputeCmds(
 }
 
 HgiTextureHandle
-HgiGL::CreateTexture(HgiTextureDesc const & desc)
+HgiGL::_CreateTexture(HgiTextureDesc const & desc)
 {
     return HgiTextureHandle(new HgiGLTexture(desc), GetUniqueId());
 }
@@ -125,7 +126,7 @@ HgiGL::DestroyTexture(HgiTextureHandle* texHandle)
 }
 
 HgiTextureViewHandle
-HgiGL::CreateTextureView(HgiTextureViewDesc const & desc)
+HgiGL::_CreateTextureView(HgiTextureViewDesc const & desc)
 {
     if (!desc.sourceTexture) {
         TF_CODING_ERROR("Source texture is null");
@@ -162,7 +163,7 @@ HgiGL::DestroySampler(HgiSamplerHandle* smpHandle)
 }
 
 HgiBufferHandle
-HgiGL::CreateBuffer(HgiBufferDesc const & desc)
+HgiGL::_CreateBuffer(HgiBufferDesc const & desc)
 {
     return HgiBufferHandle(new HgiGLBuffer(desc), GetUniqueId());
 }
@@ -201,7 +202,7 @@ HgiGL::DestroyShaderProgram(HgiShaderProgramHandle* shaderProgramHandle)
 }
 
 HgiResourceBindingsHandle
-HgiGL::CreateResourceBindings(HgiResourceBindingsDesc const& desc)
+HgiGL::_CreateResourceBindings(HgiResourceBindingsDesc const& desc)
 {
     return HgiResourceBindingsHandle(
         new HgiGLResourceBindings(desc), GetUniqueId());
@@ -287,6 +288,26 @@ HgiGL::EndFrame()
     }
 }
 
+void
+HgiGL::GarbageCollect()
+{
+    #if defined(GL_KHR_debug)
+    if (GARCH_GLAPI_HAS(KHR_debug)) {
+        glPushDebugGroup(GL_DEBUG_SOURCE_THIRD_PARTY, 0, -1, 
+            "Garbage Collection");
+    }
+    #endif
+
+    _garbageCollector.PerformGarbageCollection();
+    _device->GarbageCollect();
+
+    #if defined(GL_KHR_debug)
+    if (GARCH_GLAPI_HAS(KHR_debug)) {
+        glPopDebugGroup();
+    }
+    #endif
+}
+
 HgiGLContextArenaHandle
 HgiGL::CreateContextArena()
 {
@@ -315,6 +336,7 @@ HgiGL::_SubmitCmds(HgiCmds* cmds, HgiSubmitWaitType wait)
     bool result = Hgi::_SubmitCmds(cmds, wait);
 
     if (wait == HgiSubmitWaitTypeWaitUntilCompleted) {
+        TRACE_SCOPE("HgiGL GPU Wait...");
         // CPU - GPU synchronization (stall) by client request only.
         static const uint64_t timeOut = 100000000000;
 

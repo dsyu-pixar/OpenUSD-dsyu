@@ -85,21 +85,22 @@ _LogShaderCacheLookupForDrawBatch(
     return false;
 }
 
+}
+
 bool
-_LogShaderCacheLookup()
+HdSt_DrawBatch::_LogShaderCacheLookup() const
 {
-    return TfDebug::IsEnabled(HDST_LOG_DRAWING_SHADER_PROGRAM_MISSES) ||
-           TfDebug::IsEnabled(HDST_LOG_DRAWING_SHADER_PROGRAM_HITS);
+    return (TfDebug::IsEnabled(HDST_LOG_DRAWING_SHADER_PROGRAM_MISSES) ||
+            TfDebug::IsEnabled(HDST_LOG_DRAWING_SHADER_PROGRAM_HITS)) &&
+        _LogShaderCacheLookupForDrawBatch(_drawItemInstances);
 }
-
-}
-
 
 HdSt_DrawBatch::HdSt_DrawBatch(
     HdStDrawItemInstance * drawItemInstance,
     bool const allowTextureResourceRebinding)
     : _allowTextureResourceRebinding(allowTextureResourceRebinding)
     , _shaderHash(0)
+    , _geometricShaderHash(0)
 {
 }
 
@@ -114,6 +115,26 @@ HdSt_DrawBatch::_Init(HdStDrawItemInstance * drawItemInstance)
     // significant way such that the shader needs to be recompiled, that value
     // should be part of the shader hash and this shouldn't be required.
     _shaderHash = 0;
+
+    // Remember the geometric shader the batch is built for, so validation
+    // can detect when it changes.
+    HdStDrawItem const *drawItem = drawItemInstance->GetDrawItem();
+    HdSt_GeometricShaderSharedPtr const &geometricShader =
+        drawItem->GetGeometricShader();
+    _geometricShaderHash = geometricShader ? geometricShader->ComputeHash() : 0;
+}
+
+bool
+HdSt_DrawBatch::_GeometricShaderChanged() const
+{
+    if (_drawItemInstances.empty()) {
+        return false;
+    }
+    HdSt_GeometricShaderSharedPtr const &geometricShader =
+        _drawItemInstances.front()->GetDrawItem()->GetGeometricShader();
+    HdStShaderCode::ID const hash =
+        geometricShader ? geometricShader->ComputeHash() : 0;
+    return hash != _geometricShaderHash;
 }
 
 HdSt_DrawBatch::~HdSt_DrawBatch()
@@ -350,11 +371,6 @@ HdSt_DrawBatch::_GetDrawingProgram(HdStRenderPassStateSharedPtr const &state,
 
     HdSt_MaterialNetworkShaderSharedPtr materialNetworkShader =
         firstDrawItem->GetMaterialNetworkShader();
-    
-    if (!state->GetUseSceneMaterials() &&
-        !firstDrawItem->GetMaterialIsFinal() ) {
-        materialNetworkShader = _GetFallbackMaterialNetworkShader();
-    }
 
     size_t materialNetworkShaderHash =
         materialNetworkShader ? materialNetworkShader->ComputeHash() : 0;
@@ -376,9 +392,7 @@ HdSt_DrawBatch::_GetDrawingProgram(HdStRenderPassStateSharedPtr const &state,
         
         _program.SetMaterialNetworkShader(materialNetworkShader);
 
-        const bool logCacheLookup =
-            _LogShaderCacheLookup() &&
-            _LogShaderCacheLookupForDrawBatch(_drawItemInstances);
+        const bool logCacheLookup = _LogShaderCacheLookup();
 
         // Try to compile the shader and if it fails to compile we go back
         // to use the specified fallback material network shader.
@@ -387,8 +401,8 @@ HdSt_DrawBatch::_GetDrawingProgram(HdStRenderPassStateSharedPtr const &state,
 
             // While the code should gracefully handle shader compilation
             // failures, it is also undesirable for shaders to silently fail.
-            TF_CODING_ERROR("Failed to compile shader for prim %s.",
-                            firstDrawItem->GetRprimID().GetText());
+            TF_WARN("Failed to compile shader for prim %s.",
+                    firstDrawItem->GetRprimID().GetText());
 
             // If we failed to compile the material network, replace it
             // either with the invalid material network shader OR the

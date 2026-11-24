@@ -9,6 +9,7 @@
 
 #include "pxr/pxr.h"
 #include "pxr/usd/usd/api.h"
+#include "pxr/usd/sdf/layerOffset.h"
 #include "pxr/usd/sdf/timeCode.h"
 #include "pxr/base/arch/hints.h"
 #include "pxr/base/tf/staticTokens.h"
@@ -24,7 +25,8 @@ PXR_NAMESPACE_OPEN_SCOPE
 
 #define USD_TIME_CODE_TOKENS \
     (DEFAULT) \
-    (EARLIEST)
+    (EARLIEST) \
+    (PRE_TIME)
 
 TF_DECLARE_PUBLIC_TOKENS(UsdTimeCodeTokens, USD_API, USD_TIME_CODE_TOKENS);
 
@@ -64,14 +66,31 @@ TF_DECLARE_PUBLIC_TOKENS(UsdTimeCodeTokens, USD_API, USD_TIME_CODE_TOKENS);
 /// UsdTimeCode::EarliestTime() is provided to aid clients who wish
 /// to retrieve the first authored timesample for any attribute.
 ///
+/// A UsdTimeCode can also represent a 'pre-time' value, which means the limit 
+/// as time approaches the value from the left. Refer UsdAttribute::Get() for
+/// details on usage of UsdTimeCode::PreTime().
+///
 class UsdTimeCode {
 public:
-    /// Construct with optional time value.  Impilicitly convert from double.
+    /// Construct with optional time value.  Implicitly convert from double.
     constexpr UsdTimeCode(double t = 0.0) noexcept : _value(t) {}
 
-    /// Construct and implicitly cast from SdfTimeCode.
-    constexpr UsdTimeCode(const SdfTimeCode &timeCode) noexcept 
+    /// Construct and implicitly cast from GfTimeCode.
+    constexpr UsdTimeCode(const GfTimeCode &timeCode) noexcept 
         : _value(timeCode.GetValue()) {}
+
+    /// Produces a UsdTimeCode representing a pre-time at \p t.
+    ///
+    /// \sa UsdAttribute::Get()
+    static constexpr UsdTimeCode PreTime(double t) noexcept {
+        return UsdTimeCode(t, /*isPreTime=*/true);
+    }
+
+    /// Produces a UsdTimeCode representing a pre-time using GfTimeCode \p 
+    /// timeCode.
+    static constexpr UsdTimeCode PreTime(const GfTimeCode& timeCode) noexcept {
+        return UsdTimeCode(timeCode.GetValue(), /*isPreTime=*/true);
+    }
 
     /// Produce a UsdTimeCode representing the lowest/earliest possible
     /// timeCode.  Thus, for any given timeSample \em s, its time ordinate 
@@ -111,6 +130,11 @@ public:
             maxValue * maxCompression * 2.0;
     }
 
+    /// Return true if this timeCode represents a pre-value, false otherwise.
+    bool IsPreTime() const {
+        return _isPreTime;
+    }
+
     /// Return true if this time represents the lowest/earliest possible
     /// timeCode, false otherwise.
     bool IsEarliestTime() const {
@@ -139,8 +163,11 @@ public:
 
     /// Equality comparison.
     friend bool operator==(const UsdTimeCode &lhs, const UsdTimeCode& rhs) {
-        return lhs.IsDefault() == rhs.IsDefault() &&
-            (lhs.IsDefault() || (lhs.GetValue() == rhs.GetValue()));
+        if (lhs.IsDefault() && rhs.IsDefault()) {
+            return true;
+        }
+        return lhs._value == rhs._value && 
+               lhs._isPreTime == rhs._isPreTime;
     }
 
     /// Inequality comparison.
@@ -148,12 +175,20 @@ public:
         return !(lhs == rhs);
     }
 
-    /// Less-than.  Default() times are less than all numeric times,
+    /// Less-than.  
+    ///
+    /// Default() times are less than all numeric times,
+    /// Numeric times are ordered by their value,
+    /// If numeric times are equal, pre-time times are less than non pre-time 
+    /// times.
     /// \em including EarliestTime()
     friend bool operator<(const UsdTimeCode &lhs, const UsdTimeCode &rhs) {
-        return (lhs.IsDefault() && rhs.IsNumeric()) ||
-            (lhs.IsNumeric() && rhs.IsNumeric() &&
-             lhs.GetValue() < rhs.GetValue());
+        if (lhs.IsDefault() || rhs.IsDefault()) {
+            return lhs.IsDefault() && !rhs.IsDefault();
+        }
+        return lhs._value < rhs._value ||
+               (lhs._value == rhs._value && 
+                lhs._isPreTime && !rhs._isPreTime);
     }
 
     /// Greater-equal.  Default() times are less than all numeric times,
@@ -162,11 +197,9 @@ public:
         return !(lhs < rhs);
     }
 
-    /// Less-equal.  Default() times are less than all numeric times,
-    /// \em including EarliestTime().
+    /// Less-equal.  
     friend bool operator<=(const UsdTimeCode &lhs, const UsdTimeCode &rhs) {
-        return lhs.IsDefault() || 
-            (rhs.IsNumeric() && lhs.GetValue() <= rhs.GetValue());
+        return !(rhs < lhs);
     }
 
     /// Greater-than.  Default() times are less than all numeric times,
@@ -177,14 +210,18 @@ public:
 
     /// Hash function.
     friend size_t hash_value(const UsdTimeCode &time) {
-        return TfHash()(time._value);
+        return TfHash::Combine(time._value, time._isPreTime);
     }
 
 private:
+    constexpr UsdTimeCode(double t, bool isPreTime) noexcept 
+        : _value(t), _isPreTime(isPreTime) {}
+
     USD_API
     void _IssueGetValueOnDefaultError() const;
 
     double _value;
+    bool _isPreTime = false;
 };
 
 // Stream I/O operators.
@@ -194,6 +231,12 @@ std::ostream& operator<<(std::ostream& os, const UsdTimeCode& time);
 USD_API
 std::istream& operator>>(std::istream& is, UsdTimeCode& time);
 
+/// Applies the given layer `offset` to the given UsdTimeCode, resulting in
+/// a scaled and offset UsdTimeCode.
+///
+/// This function is an identity function for default and earliest UsdTimeCodes.
+USD_API
+UsdTimeCode operator*(const SdfLayerOffset& offset, const UsdTimeCode& time);
 
 PXR_NAMESPACE_CLOSE_SCOPE
 

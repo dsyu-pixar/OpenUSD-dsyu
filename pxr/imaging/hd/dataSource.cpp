@@ -5,6 +5,9 @@
 // https://openusd.org/license.
 //
 #include "pxr/imaging/hd/dataSource.h"
+#include "pxr/imaging/hd/timeSampleArray.h"
+
+#include "pxr/base/trace/trace.h"
 
 #include <iostream>
 
@@ -48,6 +51,12 @@ HdContainerDataSource::Get(
     return child;
 }
 
+VtValue 
+HdSampledDataSource::_GetDefaultValue() 
+{ 
+    return VtValue(); 
+}
+
 // ----------------------------------------------------------------------------
 
 // Wrapper around std::set_union to compute the set-wise union of two
@@ -72,31 +81,41 @@ HdGetMergedContributingSampleTimesForInterval(
     const HdSampledDataSource::Time endTime,
     std::vector<HdSampledDataSource::Time> * const outSampleTimes)
 {
+    TRACE_FUNCTION();
+
     bool result = false;
+
+    std::vector<HdSampledDataSource::Time> sampleTimes;
+
     for (size_t i = 0; i < count; i++) {
         if (!inputDataSources[i]) {
             continue;
         }
         std::vector<HdSampledDataSource::Time> times;
         if (!inputDataSources[i]->GetContributingSampleTimesForInterval(
-                startTime, endTime, &times)) {
-            continue;
-        }
-        if (times.empty()) {
+                startTime, endTime, outSampleTimes ? &times : nullptr)) {
             continue;
         }
         result = true;
         if (!outSampleTimes) {
             continue;
         }
-        if (outSampleTimes->empty()) {
-            *outSampleTimes = std::move(times);
+        if (sampleTimes.empty()) {
+            sampleTimes = std::move(times);
         } else {
-            *outSampleTimes = _Union(*outSampleTimes, times);
+            sampleTimes = _Union(sampleTimes, times);
         }
     }
 
-    return result;
+    if (!result) {
+        return false;
+    }
+
+    return
+        HdGetContributingSampleTimesForInterval(
+            sampleTimes.size(), sampleTimes.data(),
+            startTime, endTime,
+            outSampleTimes);
 }
 
 void
@@ -107,9 +126,8 @@ HdDebugPrintDataSource(
 {
     if (HdContainerDataSourceHandle handle =
             HdContainerDataSource::Cast(dataSource)) {
-        TfTokenVector names = handle->GetNames();
-        std::sort(names.begin(), names.end(), std::less<TfToken>());
-
+        TfTokenVector nameVec(handle->GetNames());
+        std::set<TfToken> names(nameVec.begin(), nameVec.end());
         for (TfToken const &name : names) {
             // null children from a container should be treated as not present
             if (HdDataSourceBaseHandle childhandle = handle->Get(name)) {

@@ -5,7 +5,6 @@
 # Licensed under the terms set forth in the LICENSE.txt file available at
 # https://openusd.org/license.
 #
-from __future__ import print_function
 import argparse, sys, os
 from pxr import Sdf, Usd
 
@@ -38,11 +37,11 @@ def main():
 
     args = parser.parse_args()
 
-    print('Usd crate software version', Usd.CrateInfo().GetSoftwareVersion())
+    print('Usd crate software version', Sdf.CrateInfo().GetSoftwareVersion())
 
     for fname in args.inputFiles:
         try:
-            info = Usd.CrateInfo.Open(fname)
+            info = Sdf.CrateInfo.Open(fname)
             if not info:
                 Err('Failed to read %s' % fname)
                 continue

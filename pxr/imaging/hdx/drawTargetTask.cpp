@@ -7,7 +7,6 @@
 #include "pxr/imaging/garch/glApi.h"
 
 #include "pxr/imaging/cameraUtil/conformWindow.h"
-#include "pxr/imaging/glf/diagnostic.h"
 #include "pxr/imaging/hd/camera.h"
 #include "pxr/imaging/hdx/drawTargetTask.h"
 #include "pxr/imaging/hdx/tokens.h"
@@ -271,11 +270,16 @@ HdxDrawTargetTask::_ComputeRenderPassInfos(HdRenderIndex * const renderIndex)
     for (_DrawTargetEntry const &entry : drawTargetEntries) {
         if (HdStDrawTarget * const drawTarget = entry.drawTarget) {
             if (drawTarget->IsEnabled()) {
+
+                HdStResourceRegistrySharedPtr registry =
+                    std::dynamic_pointer_cast<HdStResourceRegistry>(
+                        renderIndex->GetResourceRegistry());
+                const Hgi* hgi = registry ? registry->GetHgi() : nullptr;
                 result.push_back(
                     { std::make_unique<HdSt_RenderPass>(
                             renderIndex, HdRprimCollection()),
                       std::make_shared<HdStRenderPassState>(),
-                      std::make_shared<HdStSimpleLightingShader>(),
+                      std::make_shared<HdStSimpleLightingShader>(hgi),
                       drawTarget,
                       0 });
             }
@@ -509,7 +513,6 @@ HdxDrawTargetTask::Execute(HdTaskContext* ctx)
 {
     HD_TRACE_FUNCTION();
     HF_MALLOC_TAG_FUNCTION();
-    GLF_GROUP_FUNCTION();
 
     // Apply polygon offset to whole pass.
     // XXX TODO: Move to an appropriate home

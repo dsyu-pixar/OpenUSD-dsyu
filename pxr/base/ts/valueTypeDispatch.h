@@ -18,6 +18,12 @@
 
 PXR_NAMESPACE_OPEN_SCOPE
 
+#define _MAKE_CLAUSE(unused, tuple)                                         \
+if (valueType == Ts_GetType<TS_SPLINE_VALUE_CPP_TYPE(tuple)>())             \
+{                                                                           \
+    Cls<TS_SPLINE_VALUE_CPP_TYPE(tuple)>()(std::forward<Args>(args)...);    \
+    return;                                                                 \
+}
 
 // Makes a call to a template functor based on a dynamic type.  No return value;
 // obtain outputs with out-params.  Supports all valid spline value types.
@@ -47,24 +53,30 @@ template <
 void TsDispatchToValueTypeTemplate(
     TfType valueType, Args&&... args)
 {
-    if (valueType == Ts_GetType<double>())
-    {
-        Cls<double>()(std::forward<Args>(args)...);
-    }
-    else if (valueType == Ts_GetType<float>())
-    {
-        Cls<float>()(std::forward<Args>(args)...);
-    }
-    else if (valueType == Ts_GetType<GfHalf>())
-    {
-        Cls<GfHalf>()(std::forward<Args>(args)...);
-    }
-    else
-    {
-        TF_CODING_ERROR("Unsupported spline value type");
-    }
+TF_PP_SEQ_FOR_EACH(_MAKE_CLAUSE, ~, TS_SPLINE_SUPPORTED_VALUE_TYPES)
+    TF_CODING_ERROR("Unsupported spline value type");
 }
 
+// Makes a call to a template functor based on dynamic type, dispatching
+// templated calls using the storage type of T. For example, GfTimeCode
+// dispatches to double.
+template <
+    template <typename T> class Cls,
+    typename... Args>
+void TsDispatchToStorageValueTypeTemplate(
+    TfType valueType, Args&&... args)
+{
+TF_PP_SEQ_FOR_EACH(_MAKE_CLAUSE, ~, TS_SPLINE_STORAGE_VALUE_TYPES)
+
+    if (valueType == Ts_GetType<GfTimeCode>() ||
+        valueType == Ts_GetType<GfDuration>())
+    {
+        Cls<double>()(std::forward<Args>(args)...);
+        return;
+    }
+    TF_CODING_ERROR("Unsupported spline value type for storage");
+}
+#undef _MAKE_CLAUSE
 
 PXR_NAMESPACE_CLOSE_SCOPE
 

@@ -24,16 +24,14 @@
 PXR_NAMESPACE_OPEN_SCOPE
 
 
-HdEngine::HdEngine() 
+HdEngine::HdEngine()
  : _taskContext()
 {
 }
 
-HdEngine::~HdEngine()
-{
-}
+HdEngine::~HdEngine() = default;
 
-void 
+void
 HdEngine::SetTaskContextData(const TfToken &id, const VtValue &data)
 {
     // See if the token exists in the context and if not add it.
@@ -86,6 +84,9 @@ HdEngine::Execute(HdRenderIndex *index, HdTaskSharedPtrVector *tasks)
     // Some render tasks may need access to the same rendering context / driver
     // as the render delegate. For example some tasks use Hgi.
     _taskContext[HdTokens->drivers] = VtValue(index->GetDrivers());
+
+    HdRenderDelegate *renderDelegate = index->GetRenderDelegate();
+    renderDelegate->BeginExecute();
 
     // --------------------------------------------------------------------- //
     // DATA DISCOVERY PHASE
@@ -148,7 +149,6 @@ HdEngine::Execute(HdRenderIndex *index, HdTaskSharedPtrVector *tasks)
             "==============================================================\n"
             " HdEngine [Data Commit Phase](RenderDelegate::CommitResources)\n"
             "--------------------------------------------------------------\n");
-    HdRenderDelegate *renderDelegate = index->GetRenderDelegate();
     renderDelegate->CommitResources(&index->GetChangeTracker());
 
     // --------------------------------------------------------------------- //
@@ -170,6 +170,8 @@ HdEngine::Execute(HdRenderIndex *index, HdTaskSharedPtrVector *tasks)
             task->Execute(&_taskContext);
         }
     }
+
+    renderDelegate->EndExecute();
 }
 
 void
@@ -195,5 +197,31 @@ HdEngine::Execute(HdRenderIndex * const index,
     }
     Execute(index, &tasks);
 }
+
+bool
+HdEngine::AreTasksConverged(HdRenderIndex * const index,
+                            const SdfPathVector &taskPaths)
+{
+    for (const SdfPath &taskPath : taskPaths) {
+        if (taskPath.IsEmpty()) {
+            TF_CODING_ERROR(
+                "Empty task path given to HdEngine::Execute()");
+            continue;
+        }
+        HdTaskSharedPtr const task = index->GetTask(taskPath);
+        if (!task) {
+            TF_CODING_ERROR(
+                "No task at %s in render index in HdEngine::Execute()",
+                taskPath.GetText());
+            continue;
+        }
+        if (!task->IsConverged()) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 
 PXR_NAMESPACE_CLOSE_SCOPE

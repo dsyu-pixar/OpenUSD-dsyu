@@ -10,12 +10,8 @@
 #include "pxr/pxr.h"
 #include "pxr/base/gf/vec4d.h"
 #include "pxr/base/vt/dictionary.h"
-
 #include "pxr/base/tf/declarePtrs.h"
-
 #include "pxr/usdImaging/usdImagingGL/engine.h"
-#include "pxr/usdImaging/usdImaging/delegate.h"
-
 #include <string>
 #include <vector>
 
@@ -61,6 +57,7 @@ public:
     std::string const & GetOutputFilePath() const { return _outputFilePath; }
 
     std::string const & GetCameraPath() const { return _cameraPath; }
+    std::string const & GetPickCameraPath() const { return _pickCameraPath; }
     std::vector<GfVec4d> const & GetClipPlanes() const { return _clipPlanes; }
     std::vector<double> const& GetTimes() const { return _times; }
     GfVec4f const & GetClearColor() const { return _clearColor; }
@@ -68,12 +65,29 @@ public:
     VtDictionary const &GetRenderSettings() const { return _renderSettings; }
     TfToken const & GetRendererAov() const { return _rendererAov; }
     std::string const &GetPerfStatsFile() const { return _perfStatsFile; }
+    std::string const &GetSceneIndexOutputFilePath() const {
+        return _sceneIndexOutputFilePath;
+    }
+
+    // Controls how much detail WriteSceneIndexToFile emits per prim.
+    enum class SceneIndexDumpMode {
+        // Write "<path> type = <primType>" per prim only.
+        PathAndType,
+        // Write path/type plus the full data source tree via
+        // HdDebugPrintDataSource.
+        PathTypeAndDataSource,
+    };
+
+    SceneIndexDumpMode GetSceneIndexDumpMode() const {
+        return _sceneIndexDumpMode;
+    }
     float GetPixelAspectRatio() const { return _pixelAspectRatio; }
     GfRange2f const & GetDisplayWindow() const { return _displayWindow; }
     GfRect2i const & GetDataWindow() const { return _dataWindow; }
     CameraUtilConformWindowPolicy const &
     GetWindowPolicy() const { return _windowPolicy; }
     UsdImagingGLCullStyle GetCullStyle() const { return _cullStyle; }
+    int GetNumErrorsAllowed() const { return _numErrorsAllowed; }
 
     void RunTest(int argc, char *argv[]);
 
@@ -97,15 +111,19 @@ public:
                                TfToken const &aovName,
                                std::string const &filename);
 
+    // Dump the terminal scene index (excluding task controller prims) to a text
+    // file with prims paths lexicographically sorted and pointer addresses
+    // in data sources scrubbed for diff stability.
+    static void WriteSceneIndexToFile(
+        UsdImagingGLEngine *engine,
+        std::string const &filename,
+        SceneIndexDumpMode mode = SceneIndexDumpMode::PathTypeAndDataSource);
+
 protected:
     float _GetComplexity() const { return _complexity; }
     bool _ShouldFrameAll() const { return _shouldFrameAll; }
     TfToken _GetRenderer() const { return _renderer; }
 
-    HdRenderIndex *_GetRenderIndex(UsdImagingGLEngine *engine) {
-        return engine->_GetRenderIndex();
-    }
-    
     void _Render(UsdImagingGLEngine *engine, 
                  const UsdImagingGLRenderParams &params) {
         SdfPathVector roots(1, SdfPath::AbsoluteRootPath());
@@ -122,8 +140,10 @@ private:
     bool _sceneLights;
     bool _cameraLight;
     std::string _cameraPath;
+    std::string _pickCameraPath;
     bool _enableSceneMaterials;
     bool _unloadedAsBounds;
+    bool _skipTestPlugins;
 
     std::string _stageFilePath;
     std::string _outputFilePath;
@@ -149,12 +169,16 @@ private:
     TfToken _rendererAov;
     std::string _perfStatsFile;
     std::string _traceFile;
+    std::string _sceneIndexOutputFilePath;
+    SceneIndexDumpMode _sceneIndexDumpMode;
 
     bool _showGuides;
     bool _showRender;
     bool _showProxy;
     bool _presentComposite;
     bool _presentDisabled;
+
+    int _numErrorsAllowed;
 };
 
 

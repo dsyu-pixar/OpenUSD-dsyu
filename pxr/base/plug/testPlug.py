@@ -117,6 +117,41 @@ class TestPlug(unittest.TestCase):
         allPlugins = Plug.Registry().GetAllPlugins()
         self.assertTrue(len(allPlugins) >= 8)
 
+    def test_RegexCharsInPath(self):
+        """Verify that regex special characters that appear in valid file paths
+        are correctly escaped."""
+
+        def _assertPluginRegistrationStatus(registered, notRegistered):
+            plugins = set(p.name for p in Plug.Registry().GetAllPlugins())
+
+            for p in registered:
+                self.assertIn(p, plugins)
+            for p in notRegistered:
+                self.assertNotIn(p, plugins)
+
+        pluginRoot = os.path.join(os.getcwd(), 'RegexCharsInPath')
+        self.assertTrue(os.path.isdir(pluginRoot))
+
+        plugRegistry = Plug.Registry()
+
+        # regex special char in the fixed prefix (before the '**').
+        plugRegistry.RegisterPlugins(pluginRoot + '/foo(bar)/**/')
+        _assertPluginRegistrationStatus(
+            ['TestPlugParenPrefix'], 
+            ['TestPlugParenTail', 'TestPlugParenWildcard'])
+        
+        # regex special char in the wildcard tail (after the '**').
+        plugRegistry.RegisterPlugins(pluginRoot + '/**/TestParen(1)/')
+        _assertPluginRegistrationStatus(
+            ['TestPlugParenPrefix', 'TestPlugParenTail'], 
+            ['TestPlugParenWildcard'])
+
+        # regex special char discovered during wildcard search (in the **)
+        plugRegistry.RegisterPlugins(pluginRoot + '/charInWildcard/**/')
+        _assertPluginRegistrationStatus(
+            ['TestPlugParenPrefix', 'TestPlugParenTail', 
+             'TestPlugParenWildcard'], [])
+
     def test_ManufacturingCppDerivedClasses(self):
         # Construct and verify an instance of _TestPlugBase<1>
         tb1 = Plug._TestPlugBase1()
@@ -275,10 +310,18 @@ class TestPlug(unittest.TestCase):
         self.assertEqual(listener.numReceived, 0)
 
         # try to load an unloadable plugin
-        badPlugin = Plug.Registry().GetPluginForType('TestPlugUnloadable')
-        self.assertIsNotNone(badPlugin)
-        with self.assertRaises(RuntimeError):
-            badPlugin.Load()
+        # XXX:
+        # On Windows ARM64 loading TestPlugUnloadable (which intentionally uses
+        # an undefined external symbol) unexpectedly crashes in the underlying
+        # LoadLibrary system call with an EXCEPTION_ACCESS_VIOLATION, instead of
+        # returning NULL as it does on x64, which should be the intended behaviour.
+        # For now we just skip this test on Windows ARM64. More discussion at:
+        # https://github.com/PixarAnimationStudios/OpenUSD/pull/3430.
+        if "ARMv" not in os.environ.get('PROCESSOR_IDENTIFIER', ''):
+            badPlugin = Plug.Registry().GetPluginForType('TestPlugUnloadable')
+            self.assertIsNotNone(badPlugin)
+            with self.assertRaises(RuntimeError):
+                badPlugin.Load()
 
         # try to load an unloadable plugin python module
         badPlugin = Plug.Registry().GetPluginForType('TestPlugPythonUnloadable')

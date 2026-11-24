@@ -52,7 +52,7 @@ RenderMan installation and will be built when :makevar:`PXR_ENABLE_OSL_SUPPORT` 
 OFF. Users should only build one of these plugins.
 
 For more information see our page on `Advanced Build Configuration
-<https://github.com/PixarAnimationStudios/OpenUSD/blob/release/BUILDING.md>`_.
+<https://github.com/PixarAnimationStudios/OpenUSD/blob/v26.11/BUILDING.md>`_.
 
 Running hdPrman
 ***************
@@ -68,9 +68,6 @@ variables. We'll refer to the install location of your USD build with
    * - Environment Variable
      - Meaning
      - Value
-   * - :envvar:`PYTHONPATH`
-     - This is a path list which Python uses to find modules.
-     - :filename:`$PYTHONPATH:<inst>/lib/python`
    * - :envvar:`RMANTREE`
      - Directory where Pixar's RenderMan is installed
      - Required

@@ -5,19 +5,18 @@
 # https://openusd.org/license.
 #
 
-from __future__ import print_function
 
 from pxr import Tf
 Tf.PreparePythonModule()
 
 import sys, argparse, os
 
-from .qt import QtWidgets, QtCore
-from .common import Timer
+from .qt import QtCore, QtGui, QtWidgets
+from .common import Timer, GetIconPath
 from .appController import AppController
 from .settings import ConfigManager
 
-from pxr import UsdAppUtils
+from pxr import Sdf, UsdUtils, UsdAppUtils
 
 
 class InvalidUsdviewOption(Exception):
@@ -25,6 +24,16 @@ class InvalidUsdviewOption(Exception):
     Launcher.ValidateOptions or any methods which override it.
     """
     pass
+
+
+def _AbsoluteFilePath(argStr):
+    """This should be used for args that are meant to absolute file paths (as
+    opposed to ones that may get resolved.  This is especially useful if you
+    have an app that uses this launcher but also changes the dir.
+    """
+    if argStr is None:
+        return None
+    return os.path.abspath(argStr)
 
 
 class Launcher(object):
@@ -67,6 +76,14 @@ class Launcher(object):
                 traceCollector.enabled = True
 
             app, appController = self.LaunchPreamble(arg_parse_result)
+
+            if arg_parse_result.viewportSize and appController._stageView:
+                w, h = arg_parse_result.viewportSize
+                appController._stageView.SetPhysicalWindowSize(w, h)
+
+            if arg_parse_result.dumpFirstImage:
+                appController.SaveViewerImageToFile(arg_parse_result.dumpFirstImage)
+
             self.LaunchProcess(arg_parse_result, app, appController)
 
         if traceCollector:
@@ -97,8 +114,9 @@ class Launcher(object):
         register positional arguments on the ArgParser
         '''
         parser.add_argument('usdFile', action='store',
+                            nargs='?',
                             type=str,
-                            help='The file to view')
+                            help='The file to view (Optional)')
 
     def RegisterOptions(self, parser):
         '''
@@ -108,7 +126,8 @@ class Launcher(object):
 
         UsdAppUtils.rendererArgs.AddCmdlineArgs(parser,
                 altHelpText=("Which render backend to use (named as it "
-                            "appears in the menu)."))
+                            "appears in the menu). 'GL' and 'Storm' currently"
+                            "alias to the same renderer, Storm."))
         
         parser.add_argument('--select', action='store', default='/',
                             dest='primPath', type=str,
@@ -177,7 +196,7 @@ class Launcher(object):
                             help='Enable asynchronous hydra scene processing')
 
         parser.add_argument('--traceToFile', action='store',
-                            type=str,
+                            type=_AbsoluteFilePath,
                             dest='traceToFile',
                             default=None,
                             help='Start tracing at application startup and '
@@ -203,6 +222,19 @@ class Launcher(object):
                             dest='mallocTagStats', type=str,
                             choices=['none', 'stage', 'stageAndImaging'],
                             help='Use the Pxr MallocTags memory accounting system to profile USD, saving results to a tmp file, with a summary to the console.  Will have no effect if MallocTags are not supported in the USD installation.')
+
+        parser.add_argument('--dumpFirstImage', action='store',
+                            type=_AbsoluteFilePath,
+                            dest='dumpFirstImage',
+                            default=None,
+                            help='Dumps the first image to file (as png)')
+
+        parser.add_argument('--viewportSize', action='store',
+                            type=lambda s: tuple(int(x) for x in s.split('x')),
+                            dest='viewportSize',
+                            default=None,
+                            help='Fix the viewport to a specific size (WxH) '
+                                 'for deterministic rendering, e.g. 601x458')
 
         parser.add_argument('--numThreads', action='store',
                             type=int, default=0,
@@ -304,6 +336,13 @@ class Launcher(object):
 
         # Verify that the camera path is either an absolute path, or is just
         # the name of a camera.
+        if not arg_parse_result.camera:
+            from pxr import Sdf
+            primaryCameraName = UsdUtils.GetPrimaryCameraName()
+            if primaryCameraName:
+                arg_parse_result.camera = Sdf.Path(primaryCameraName)
+            else:
+                arg_parse_result.camera = Sdf.Path.emptyPath
         if arg_parse_result.camera:
             camPath = arg_parse_result.camera
             if camPath.isEmpty:
@@ -344,10 +383,15 @@ class Launcher(object):
         context is provided.  For usdview, configuring an asset context by
         default is reasonable, and allows clients that embed usdview to 
         achieve different behavior when needed.
+        
+        If usdFile path is not provided, it returns default context.
         """
         from pxr import Ar
         
         r = Ar.GetResolver()
+        
+        if not usdFile:
+            return r.CreateDefaultContext()
 
         # ConfigureResolverForAsset no longer exists under Ar 2.0; this
         # is here for backwards compatibility with Ar 1.0.
@@ -376,8 +420,54 @@ class Launcher(object):
         if arg_parse_result.clearSettings:
             AppController.clearSettings()
 
+        # On Windows, set the AppUserModelID so that the taskbar groups
+        # usdview as its own application rather than under "Python".
+        if sys.platform == 'win32':
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                'pxr.usd.usdview')
+
+        # On MacOS, override the bundle name so the menu bar and Dock
+        # show "usdview" rather than "Python"
+        if sys.platform == 'darwin':
+            import ctypes
+            import ctypes.util
+            objc_lib = ctypes.util.find_library('objc')
+            if objc_lib:
+                objc = ctypes.cdll.LoadLibrary(objc_lib)
+                objc.objc_getClass.restype = ctypes.c_void_p
+                objc.sel_registerName.restype = ctypes.c_void_p
+                objc.objc_msgSend.restype = ctypes.c_void_p
+                objc.objc_msgSend.argtypes = [
+                    ctypes.c_void_p, ctypes.c_void_p]
+
+                NSBundle = objc.objc_getClass(b'NSBundle')
+                mainBundle = objc.objc_msgSend(
+                    NSBundle, objc.sel_registerName(b'mainBundle'))
+                info = objc.objc_msgSend(
+                    mainBundle, objc.sel_registerName(b'infoDictionary'))
+
+                objc.objc_msgSend.argtypes = [
+                    ctypes.c_void_p, ctypes.c_void_p, ctypes.c_char_p]
+                NSString = objc.objc_getClass(b'NSString')
+                strSel = objc.sel_registerName(b'stringWithUTF8String:')
+                setSel = objc.sel_registerName(b'setObject:forKey:')
+
+                for key in (b'CFBundleName', b'CFBundleDisplayName'):
+                    objc.objc_msgSend.argtypes = [
+                        ctypes.c_void_p, ctypes.c_void_p,
+                        ctypes.c_char_p]
+                    nsKey = objc.objc_msgSend(NSString, strSel, key)
+                    nsVal = objc.objc_msgSend(NSString, strSel, b'usdview')
+                    objc.objc_msgSend.argtypes = [
+                        ctypes.c_void_p, ctypes.c_void_p,
+                        ctypes.c_void_p, ctypes.c_void_p]
+                    objc.objc_msgSend(info, setSel, nsVal, nsKey)
+
         # Create the Qt application
         app = QtWidgets.QApplication(sys.argv)
+        app.setApplicationName("usdview")
+        app.setApplicationDisplayName("usdview")
 
         contextCreator = lambda usdFile: self.GetResolverContext(usdFile)
         appController = AppController(arg_parse_result, contextCreator)

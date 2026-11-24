@@ -17,8 +17,12 @@ try:
 except ImportError:
     pass
 
-# Maya-specific test framework isn't always built.
-try:
-    from .TsTest_MayapyEvaluator import TsTest_MayapyEvaluator
-except ImportError:
-    pass
+# The Ts.LoopParams class is deprecated
+import warnings
+class LoopParams(_LoopParams):
+    def __init__(self, *args, **kw):
+        from pxr import Tf
+        if not Tf.GetEnvSetting("PXR_DISABLE_INNER_LOOPING_WARNINGS"):
+            warnings.warn("Ts.Spline inner looping is deprecated.",
+                          FutureWarning)
+        super().__init__(*args, **kw)

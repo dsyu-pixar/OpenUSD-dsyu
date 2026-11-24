@@ -5,12 +5,25 @@
 # Licensed under the terms set forth in the LICENSE.txt file available at
 # https://openusd.org/license.
 
-from pxr import Ar, UsdUtils, Sdf, Usd
+from pxr import Ar, Tf, UsdUtils, Sdf, Usd, Plug
 from pathlib import Path
 import os
 import unittest
 
 class TestUsdUtilsDependencies(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # Register test file format plugin
+        # Test plugins are installed relative to this script
+        testRoot = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "UsdUtilsPlugins")
+
+        pr = Plug.Registry()
+
+        testFileFormatPath = os.path.join(testRoot,
+            "lib/TestUsdUtilsLocalizeExternalAssetDependencies*/Resources/")
+        pr.RegisterPlugins(testFileFormatPath)
+
     def test_ComputeAllDependencies(self):
         """Basic test for UsdUtils.ComputeAllDependencies"""
 
@@ -112,6 +125,23 @@ class TestUsdUtilsDependencies(unittest.TestCase):
                     os.path.abspath("computeAllDependenciesUdims/" + f))
                     for f in ["image_d.<UDIM>.exr",
                             "image_e.<UDIM>.exr"]]))
+
+    def test_ComputeAllDependenciesSdfFormatArgs(self):
+        """Test that SDF_FORMAT_ARGS are stripped before resolving assets."""
+
+        rootLayer = "computeAllDependenciesFormatArgs/root.usda"
+        layers, assets, unresolved = \
+            UsdUtils.ComputeAllDependencies(rootLayer)
+
+        self.assertEqual(set(layers), set([Sdf.Layer.Find(rootLayer)]))
+
+        expectedAsset = os.path.abspath(
+            "computeAllDependenciesFormatArgs/material.sbsar")
+        self.assertEqual(
+            set([os.path.normcase(f) for f in assets]),
+            set([os.path.normcase(expectedAsset)]))
+
+        self.assertEqual(unresolved, [])
 
     def test_ComputeAllDependenciesAnonymousLayer(self):
         """Test for resolving dependencies of anonymous layers"""
@@ -294,6 +324,130 @@ class TestUsdUtilsDependencies(unittest.TestCase):
         self.assertEqual(unresolved, ["missing.png",
                                       "missing_in_package.png", 
                                       "missing_in_reference.png"])
+        
+    def test_ComputeAllDependenciesInvalidPayload(self):
+        """Tests that invalid payloads are detected and reported"""
+
+        def TestDirPath(path):
+            return os.path.normcase(
+                os.path.abspath(os.path.join(testDir, path)))
+
+        testDir = "computeAllDependenciesInvalidPayload"
+        stagePath = "root.usda"
+
+        delegate = UsdUtils.CoalescingDiagnosticDelegate()
+
+        layers, references, unresolved = UsdUtils.ComputeAllDependencies(TestDirPath(stagePath))
+        self.assertEqual(len(layers), 1)
+        self.assertEqual(os.path.normcase(layers[0].identifier), TestDirPath(stagePath))
+        self.assertEqual(len(references), 0)
+        self.assertEqual(len(unresolved), 0)
+
+        unfiltered = delegate.TakeUncoalescedDiagnostics()
+        self.assertEqual(len(unfiltered), 1)
+        self.assertTrue(unfiltered[0].commentary.startswith("Failed to open dependency layer: ./invalid.usd "))
+
+    def test_ComputeAllDependenciesExternalAssets(self):
+        """Tests that external asset dependencies are included in the output"""
+        testFolder = "computeAllDependenciesExternalAssets"
+
+        layers, assets, unresolved = \
+            UsdUtils.ComputeAllDependencies(f"{testFolder}/root.usda")
+
+        expectedLayers = [
+            Sdf.Layer.FindOrOpen(os.path.join(testFolder, "root.usda")),
+            Sdf.Layer.FindOrOpen(
+                os.path.join(testFolder, "asset", "asset.testformat"))]
+        self.assertEqual(layers, expectedLayers)
+
+        expectedAssets = [
+            os.path.normcase(os.path.abspath(
+                os.path.join(testFolder, "aboveAssetRoot.external"))),
+            os.path.normcase(os.path.abspath(
+                os.path.join(testFolder, "asset", "file1.external"))),
+            os.path.normcase(os.path.abspath(
+                os.path.join(testFolder,"asset", "subdir", "file2.external")))
+        ]
+
+        self.assertEqual([os.path.normcase(f) for f in assets], expectedAssets)
+        self.assertEqual(unresolved, [])
+
+    def test_ComputeAllDependenciesVariableExpressions(self):
+        """Tests that external asset dependencies are included in the output"""
+        testFolder = "computeAllDependenciesVariableExpressions"
+
+        layers, assets, unresolved = \
+            UsdUtils.ComputeAllDependencies(f"{testFolder}/root.usda")
+
+        expectedLayers = [
+            Sdf.Layer.FindOrOpen(os.path.join(testFolder, "root.usda")),
+            Sdf.Layer.FindOrOpen(os.path.join(testFolder, "compose_pay.usda")),
+            Sdf.Layer.FindOrOpen(os.path.join(testFolder, "compose_ref.usda")),
+            Sdf.Layer.FindOrOpen(os.path.join(testFolder, "payload.usda")),
+            Sdf.Layer.FindOrOpen(os.path.join(testFolder, "ref.usda")),
+            Sdf.Layer.FindOrOpen(os.path.join(testFolder, "sub.usda"))]
+        self.assertEqual(layers, expectedLayers)
+
+        expectedAssets = [
+            os.path.join(testFolder, "attr.txt"),
+            os.path.join(testFolder, "metadata.txt"),
+            os.path.join(testFolder, "metadata_arr.txt")
+        ]
+
+        self.assertEqual(
+            set([os.path.normcase(f) for f in assets]),
+            set([os.path.normcase(os.path.abspath(f)) for f in expectedAssets]))
+
+        expectedUnresolved = [
+        ]
+
+        self.assertEqual(expectedUnresolved, unresolved)
+
+    def test_ComputeAllDependenciesUserFuncFilterSkipsTraversal(self):
+        """Tests that layers filtered by the processing func are not
+        traversed for further dependencies"""
+
+        def CreateLayerWithRef(layerPath, refPath):
+            layer = Sdf.Layer.CreateNew(layerPath)
+            prim = Sdf.CreatePrimInLayer(layer, "/test")
+            prim.specifier = Sdf.SpecifierDef
+            prim.referenceList.Prepend(Sdf.Reference(refPath))
+            layer.Save()
+            return layer
+
+        # Each filtered layer references a missing layer, which would be
+        # reported as unresolved if the filtered layer were traversed.
+        testDir = "filterSkipsTraversal"
+        os.mkdir(testDir)
+        CreateLayerWithRef(f"{testDir}/kept.usda", "./keptMissing.usda")
+        CreateLayerWithRef(f"{testDir}/excluded.usda", "./missing.usda")
+        CreateLayerWithRef(f"{testDir}/excludedExpr.usda", "./missingExpr.usda")
+
+        root = Sdf.Layer.CreateNew(f"{testDir}/root.usda")
+        root.expressionVariables = {"NAME": "excludedExpr"}
+        prim = Sdf.CreatePrimInLayer(root, "/test")
+        prim.specifier = Sdf.SpecifierDef
+        prim.referenceList.Prepend(Sdf.Reference("./kept.usda"))
+        prim.referenceList.Prepend(Sdf.Reference("./excluded.usda"))
+        prim.referenceList.Prepend(Sdf.Reference('`"./${NAME}.usda"`'))
+        root.Save()
+
+        def FilterExcluded(layer, depInfo):
+            if "excluded" in depInfo.assetPath:
+                return UsdUtils.DependencyInfo()
+            return depInfo
+
+        layers, references, unresolved = \
+            UsdUtils.ComputeAllDependencies(root.identifier, FilterExcluded)
+
+        self.assertEqual(
+            [os.path.normcase(l.realPath) for l in layers],
+            [os.path.normcase(os.path.abspath(p)) for p in
+             (f"{testDir}/root.usda", f"{testDir}/kept.usda")])
+        self.assertEqual(references, [])
+        self.assertEqual(
+            [os.path.normcase(p) for p in unresolved],
+            [os.path.normcase(os.path.abspath(f"{testDir}/keptMissing.usda"))])
 
 if __name__=="__main__":
     unittest.main()

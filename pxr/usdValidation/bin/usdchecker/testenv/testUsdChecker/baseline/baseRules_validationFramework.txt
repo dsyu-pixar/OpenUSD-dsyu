@@ -1,3 +1,8 @@
+[usdGeomValidators:EncapsulationChecker]:
+	Doc: Validates there are no nested Gprims.
+	Keywords: UsdGeomValidators
+	SchemaTypes: UsdGeomBoundable
+	isSuite: False
 [usdGeomValidators:StageMetadataChecker]:
 	Doc: All stages must declare their 'upAxis' and 'metersPerUnit'.
 	Keywords: UsdGeomValidators
@@ -12,9 +17,65 @@
 	Keywords: UsdGeomValidators, UsdGeomSubset
 	SchemaTypes: UsdGeomSubset
 	isSuite: False
-[usdShadeValidators:EncapsulationRulesValidator]:
-	Doc: Connectable prims (e.g. Shader, Material, etc) can only be nested inside other Container-like Connectable prims. Container-like prims include Material, NodeGraph, Light, LightFilter. Shader is not a Container-like prim.
+[usdLodValidators:DistanceHeuristicThresholds]:
+	Doc: thresholds must be strictly increasing; blendThresholds (if present) must satisfy thresholds[i] <= blendThresholds[i] <= thresholds[i+1].
+	Keywords: UsdLodValidators
+	SchemaTypes: UsdLodDistanceHeuristic
+	isSuite: False
+[usdLodValidators:HeuristicLodDomain]:
+	Doc: lod:domain on a UsdLodHeuristic must be non-empty.
+	Keywords: UsdLodValidators
+	SchemaTypes: UsdLodHeuristic
+	isSuite: False
+[usdLodValidators:LodOverrideApiMode]:
+	Doc: lod:override:mode must be one of the allowed tokens; if mode is indexedLOD, lod:override:index must be readable.
+	Keywords: UsdLodValidators
+	SchemaTypes: UsdLodOverrideAPI
+	isSuite: False
+[usdLodValidators:LodRootApiHeuristics]:
+	Doc: lod:heuristics relationship targets must resolve to prims that IsA UsdLodHeuristic.
+	Keywords: UsdLodValidators
+	SchemaTypes: UsdLodRootAPI
+	isSuite: False
+[usdLodValidators:ScreenSizeHeuristicThresholds]:
+	Doc: thresholds must be strictly decreasing; blendThresholds (if present) must satisfy thresholds[i+1] <= blendThresholds[i] <= thresholds[i]; projectionMethod must be a valid token; extent (if present) must be empty or have exactly 2 elements.
+	Keywords: UsdLodValidators
+	SchemaTypes: UsdLodScreenSizeHeuristic
+	isSuite: False
+[usdLuxValidators:EncapsulationRulesValidator]:
+	Doc: Connectable prims in UsdLux (e.g. Light, LightFilters) can only be nested inside other Container-like Connectable prims (UsdShadeNodeGraph, UsdLuxLight or UsdLuxLightFilter).
+	Keywords: UsdLuxValidators
+	SchemaTypes: UsdLuxLightAPI, UsdLuxLightFilter
+	isSuite: False
+[usdPhysicsValidators:ArticulationChecker]:
+	Doc: Validates all of the UsdPhysicsArticulationRootAPIs applied to a prim.
+	Keywords: UsdPhysicsValidators, UsdPhysicsArticulationRootAPI
+	SchemaTypes: UsdPhysicsArticulationRootAPI
+	isSuite: False
+[usdPhysicsValidators:ColliderChecker]:
+	Doc: Validates all of the UsdPhysicsCollisionAPIs applied to a prim.
+	Keywords: UsdPhysicsValidators, UsdPhysicsCollisionAPI
+	SchemaTypes: UsdPhysicsCollisionAPI
+	isSuite: False
+[usdPhysicsValidators:PhysicsJointChecker]:
+	Doc: Validates all of the UsdPhysicsJoint prims.
+	Keywords: UsdPhysicsValidators, UsdPhysicsJoint
+	SchemaTypes: UsdPhysicsJoint
+	isSuite: False
+[usdPhysicsValidators:RigidBodyChecker]:
+	Doc: Validates all of the UsdPhysicsRigidBodyAPIs applied to a prim.
+	Keywords: UsdPhysicsValidators, UsdPhysicsRigidBodyAPI
+	SchemaTypes: UsdPhysicsRigidBodyAPI
+	isSuite: False
+[usdShadeValidators:EncapsulationMaterialValidator]:
+	Doc: UsdShadeNodeGraph derived and UsdShadeShader derived are the only connectable types found within a UsdShadeMaterial prim, but not UsdShadeMaterial (which is UsdShadeNodeGraph derived) itself. Additionally no imageable prims should be found within a UsdShadeMaterial.
 	Keywords: UsdShadeValidators
+	SchemaTypes: UsdShadeMaterial
+	isSuite: False
+[usdShadeValidators:EncapsulationRulesValidator]:
+	Doc: Connectable prims (e.g. Shader, Material, etc) can only be nested inside other Container-like Connectable prims. Container-like prims include Material, NodeGraph. Shader is not a Container-like prim.
+	Keywords: UsdShadeValidators
+	SchemaTypes: UsdShadeShader, UsdShadeMaterial, UsdShadeNodeGraph
 	isSuite: False
 [usdShadeValidators:MaterialBindingApiAppliedValidator]:
 	Doc: Verify a prim has the MaterialBindingAPI applied if it has a material binding relationship.
@@ -23,7 +84,7 @@
 [usdShadeValidators:MaterialBindingCollectionValidator]:
 	Doc: Verify that a collection defining a material binding is well-formed
 	Keywords: UsdShadeValidators
-	SchemaTypes: MaterialBindingAPI
+	SchemaTypes: UsdShadeMaterialBindingAPI
 	isSuite: False
 [usdShadeValidators:MaterialBindingRelationships]:
 	Doc: All properties named 'material:binding' or in that namespace should be relationships.
@@ -58,9 +119,33 @@
 	Keywords: UsdSkelValidators
 	SchemaTypes: UsdSkelBindingAPI
 	isSuite: False
+[usdUtilsValidators:FileExtensionValidator]:
+	Doc: Only valid core layer extensions (.usd, .usda, .usdc, .usdz), valid core texture extensions (.exr, .jpg, .jpeg, .png) and embedded audio files (.M4A, .MP3, .WAV) are allowed in a package.
+	Keywords: UsdUtilsValidators, UsdzValidators
+	isSuite: False
 [usdUtilsValidators:MissingReferenceValidator]:
 	Doc: The composed USD stage should not contain any unresolvable asset dependencies (in every possible variation of the asset), when using the default asset resolver.
 	Keywords: UsdUtilsValidators
+	isSuite: False
+[usdUtilsValidators:PackageEncapsulationValidator]:
+	Doc: If the root layer is a package, then it's recommended for the composed stage to not contain references to files outside the package. The package should be self-contained, warn if not.
+	Keywords: UsdUtilsValidators, UsdzValidators
+	isSuite: False
+[usdUtilsValidators:RootPackageValidator]:
+	Doc: Files within the root usdz package should not be compressed or encrypted, and should be aligned to 64 bytes. Nested usdz packages are not tested.
+	Keywords: UsdUtilsValidators, UsdzValidators
+	isSuite: False
+[usdUtilsValidators:UsdzPackageValidator]:
+	Doc: Files within all usdz packages within a stage should not be compressed or encrypted, and should be aligned to 64 bytes.
+	Keywords: UsdUtilsValidators, UsdzValidators
+	isSuite: False
+[usdValidation:AttributeSpecValueTypeMismatch]:
+	Doc: Checks that the authored default, time sample, and spline values of each attribute spec hold the value type declared by that spec's typeName.
+	Keywords: UsdCoreValidators
+	isSuite: False
+[usdValidation:AttributeTypeMismatch]:
+	Doc: Checks that every property spec contributing to a composed attribute is an attribute spec declaring the attribute's composed type, and that each spec's authored values hold the spec's declared type.
+	Keywords: UsdCoreValidators
 	isSuite: False
 [usdValidation:CompositionErrorTest]:
 	Doc: Validator aims at providing all composition errors, which were generated while composing the stage.
@@ -70,6 +155,3 @@
 	Doc: Stages that can be consumed as referenceable assets must have a valid 'defaultPrim' specified.
 	Keywords: UsdCoreValidators
 	isSuite: False
-
-Validation Result with no explicit variants set
-Success!

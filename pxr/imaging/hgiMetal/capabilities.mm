@@ -82,6 +82,10 @@ HgiMetalCapabilities::HgiMetalCapabilities(id<MTLDevice> device)
     
     _SetFlag(HgiDeviceCapabilitiesBitsIndirectCommandBuffers, icbSupported);
 
+    _SetFlag(HgiDeviceCapabilitiesBitsSingleSlotResourceArrays, true);
+
+    _SetFlag(HgiDeviceCapabilitiesForceEarlyFragmentTest, true);
+
     // This is done to decide whether to use a workaround for post tess
     // patch primitive ID lookup. The bug causes the firstPatch offset
     // to be included incorrectly in the primitive ID. Our workaround
@@ -114,6 +118,7 @@ HgiMetalCapabilities::HgiMetalCapabilities(id<MTLDevice> device)
     _uniformBufferOffsetAlignment = 16;
     _maxClipDistances             = 8;
     _pageSizeAlignment            = 4096;
+    _maxSamplersPerShaderStage    = [device maxArgumentBufferSamplerCount];
 
     // Apple Silicon only support memory barriers between vertex stages after
     // macOS 12.3.

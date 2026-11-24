@@ -25,9 +25,11 @@ wrapFrameRecorder()
 
     scope s = class_<This, noncopyable>("FrameRecorder")
         .def(init<>())
-        .def(init<const TfToken&, bool>(
-            (arg("rendererPluginId") = TfToken(), 
-             arg("gpuEnabled") = true)))
+        .def(init<const TfToken&, bool, bool, const VtArray<std::string>&>(
+            (arg("rendererPluginId") = TfToken(),
+             arg("gpuEnabled") = true,
+             arg("drawModeEnabled") = true,
+             arg("batchCommandLine") = VtArray<std::string>())))
         .def("GetCurrentRendererId", &This::GetCurrentRendererId)
         .def("SetActiveRenderPassPrimPath",
             &This::SetActiveRenderPassPrimPath)
@@ -39,6 +41,7 @@ wrapFrameRecorder()
         .def("SetDomeLightVisibility", &This::SetDomeLightVisibility)
         .def("SetComplexity", &This::SetComplexity)
         .def("SetColorCorrectionMode", &This::SetColorCorrectionMode)
+        .def("SetPrimaryCameraPrimPath", &This::SetPrimaryCameraPrimPath)
         .def("SetIncludedPurposes", &This::SetIncludedPurposes,
              (arg("purposes")))
         .def(

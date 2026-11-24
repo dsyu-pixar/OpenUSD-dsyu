@@ -12,12 +12,15 @@
 #include "pxr/usd/sdf/fileIO_Common.h"
 #include "pxr/usd/sdf/pathExpression.h"
 
-#include "pxr/base/ts/valueTypeDispatch.h"
-
 #include "pxr/base/tf/stringUtils.h"
+#include "pxr/base/ts/valueTypeDispatch.h"
+#include "pxr/base/vt/array.h"
+#include "pxr/base/vt/arrayEdit.h"
+#include "pxr/base/vt/value.h"
 
 #include <cctype>
 #include <functional>
+#include <sstream>
 
 using std::map;
 using std::ostream;
@@ -140,13 +143,19 @@ _StringFromValue(const TfToken& s)
 static string
 _StringFromValue(const SdfAssetPath& assetPath)
 {
-    return _StringFromAssetPath(assetPath.GetAssetPath());
+    return _StringFromAssetPath(assetPath.GetAuthoredPath());
 }
 
 static string
 _StringFromValue(const SdfPathExpression& pathExpr)
 {
     return Sdf_FileIOUtility::Quote(pathExpr.GetText());
+}
+
+static string
+_StringFromValue(const GfDuration& duration)
+{
+    return TfStringify(duration);
 }
 
 template <class T>
@@ -168,19 +177,66 @@ _StringFromVtArray(
     valueStr->append("]");
 }
 
+template <class T>
+static void
+_StringFromVtArrayEdit(
+    string *valueStr,
+    const VtArrayEdit<T> &arrayEdit)
+{
+    std::stringstream sstr;
+    arrayEdit.StreamCustom(
+        sstr, [&](T const &elem) { return _StringFromValue(elem); });
+    *valueStr = sstr.str();
+}
+
 // Helper for creating strings for VtValues holding certain types
 // that can't use TfStringify, and arrays of those types.
-template <class T>
+template <class T, class UpgradeFn>
 static bool
-_StringFromVtValueHelper(string* valueStr, const VtValue& value)
+_StringFromVtValueHelper(string* valueStr, const VtValue& value,
+                         UpgradeFn &&requestUpgrade)
 {
     if (value.IsHolding<T>()) {
+        if constexpr (std::is_same_v<T, GfDuration>) {
+            std::forward<UpgradeFn>(requestUpgrade)(
+                SdfFileVersion(1,4,0),
+                "A GfDuration value was detected which requires usda"
+                " version 1.4.");
+        }
+
         *valueStr = _StringFromValue(value.UncheckedGet<T>());
+
         return true;
     }
     else if (value.IsHolding<VtArray<T> >()) {
+        if constexpr (std::is_same_v<T, GfDuration>) {
+            std::forward<UpgradeFn>(requestUpgrade)(
+                SdfFileVersion(1,4,0),
+                "A GfDuration value was detected which requires usda"
+                " version 1.4.");
+        }
+
         const VtArray<T>& valArray = value.UncheckedGet<VtArray<T> >();
         _StringFromVtArray(valueStr,valArray);
+
+        return true;
+    }
+    else if (value.IsHolding<VtArrayEdit<T>>()) {
+        if constexpr (std::is_same_v<T, GfDuration>) {
+            std::forward<UpgradeFn>(requestUpgrade)(
+                SdfFileVersion(1,4,0),
+                "A GfDuration value was detected which requires usda"
+                " version 1.4.");
+        } else {
+            std::forward<UpgradeFn>(requestUpgrade)(
+                SdfFileVersion(1,2,0),
+                "A VtArrayEdit instance was detected which requires usda "
+                "version 1.2.");
+        }
+
+        const VtArrayEdit<T> &arrayEdit = value.UncheckedGet<VtArrayEdit<T>>();
+        _StringFromVtArrayEdit(valueStr, arrayEdit);
+
         return true;
     }
     return false;
@@ -262,7 +318,7 @@ struct _ListOpWriter<SdfReference>
     {
         bool multiLineRefMetaData = !ref.GetCustomData().empty();
     
-        Sdf_FileIOUtility::Write(out, indent, "");
+        Sdf_FileIOUtility::Puts(out, indent, "");
 
         if (!ref.GetAssetPath().empty()) {
             Sdf_FileIOUtility::WriteAssetPath(out, 0, ref.GetAssetPath());
@@ -303,7 +359,7 @@ struct _ListOpWriter<SdfPayload>
     static void Write(
         Sdf_TextOutput& out, size_t indent, const SdfPayload& payload)
     {
-        Sdf_FileIOUtility::Write(out, indent, "");
+        Sdf_FileIOUtility::Puts(out, indent, "");
 
         if (!payload.GetAssetPath().empty()) {
             Sdf_FileIOUtility::WriteAssetPath(out, 0, payload.GetAssetPath());
@@ -475,7 +531,7 @@ Sdf_FileIOUtility::WriteDefaultValue(
     }
 
     // General case value to string conversion and write-out.
-    std::string valueString = Sdf_FileIOUtility::StringFromVtValue(value);
+    std::string valueString = Sdf_FileIOUtility::StringFromVtValue(value, out);
     Sdf_FileIOUtility::Write(out, 0, " = %s", valueString.c_str());
 }
 
@@ -533,7 +589,7 @@ Sdf_FileIOUtility::WriteTimeSamples(
             if (i->second.IsHolding<SdfPath>()) {
                 WriteSdfPath(out, 0, i->second.Get<SdfPath>() );
             } else {
-                Puts(out, 0, StringFromVtValue( i->second ));
+                Puts(out, 0, StringFromVtValue(i->second, out));
             }
             Puts(out, 0, ",\n");
         }
@@ -552,6 +608,11 @@ static void _WriteSplineExtrapolation(
     const char *label,
     const TsExtrapolation &extrap)
 {
+    // Examples:
+    //   pre: linear,
+    //   post: sloped(0.57),
+    //   post: repeat,
+    //   post: repeat(5.1),
     if (extrap == TsExtrapolation()) {
         return;
     }
@@ -561,6 +622,15 @@ static void _WriteSplineExtrapolation(
             label,
             Sdf_FileIOUtility::Stringify(extrap.mode),
             TfStringify(extrap.slope).c_str());
+    } else if (extrap.IsLooping() && extrap.loopBoundaryTime.has_value()) {
+        out.RequestWriteVersionUpgrade(
+            SdfFileVersion(1,3,0),
+            "loopBoundaryTime parameter on spline looping extrapolation"
+            " was detected which requires version 1.3.");
+        Sdf_FileIOUtility::Write(out, indent + 1, "%s: %s(%s),\n",
+            label,
+            Sdf_FileIOUtility::Stringify(extrap.mode),
+            TfStringify(extrap.loopBoundaryTime.value()).c_str());
     } else {
         Sdf_FileIOUtility::Write(out, indent + 1, "%s: %s,\n",
             label,
@@ -611,15 +681,13 @@ namespace
                 if (interp == TsInterpCurve) {
                     const bool isBez = (curveType == TsCurveTypeBezier);
 
-                    TsTime width = 0;
                     T slope = 0;
                     knot.GetPreTanSlope(&slope);
-                    if (isBez) {
-                        width = knot.GetPreTanWidth();
-                    }
+                    TsTime width = knot.GetPreTanWidth();
+                    TsTangentAlgorithm algo = knot.GetPreTanAlgorithm();
 
                     _WriteTangent(
-                        out, "pre", isBez, width, slope);
+                        out, "pre", isBez, width, slope, algo);
                 }
 
                 // Pre-segment finished.  Switch to post-segment.
@@ -629,15 +697,13 @@ namespace
                 if (interp == TsInterpCurve) {
                     const bool isBez = (curveType == TsCurveTypeBezier);
 
-                    TsTime width = 0;
                     T slope = 0;
                     knot.GetPostTanSlope(&slope);
-                    if (isBez) {
-                        width = knot.GetPostTanWidth();
-                    }
+                    TsTime width = knot.GetPostTanWidth();
+                    TsTangentAlgorithm algo = knot.GetPostTanAlgorithm();
 
                     _WriteTangent(
-                        out, "post curve", isBez, width, slope);
+                        out, "post curve", isBez, width, slope, algo);
                 }
 
                 // If no post-tangent, write next segment interp method.
@@ -664,21 +730,32 @@ namespace
             const char* const label,
             const bool isBez,
             const TsTime width,
-            const T slope)
+            const T slope,
+            const TsTangentAlgorithm algo)
         {
             if (isBez) {
                 // Bezier, standard form: width and slope.
                 Sdf_FileIOUtility::Write(
-                    out, 0, "; %s (%s, %s)",
+                    out, 0, "; %s (%s, %s",
                     label,
                     TfStringify(width).c_str(),
                     TfStringify(slope).c_str());
             } else {
                 // Hermite, standard form: slope.
                 Sdf_FileIOUtility::Write(
-                    out, 0, "; %s (%s)",
+                    out, 0, "; %s (%s",
                     label,
                     TfStringify(slope).c_str());
+            }
+            if (algo != TsTangentAlgorithmNone) {
+                out.RequestWriteVersionUpgrade(
+                    SdfFileVersion(1,1,0),
+                    "A tangent algorithm was detected which requires usda"
+                    " version 1.1.");
+                Sdf_FileIOUtility::Write(
+                    out, 0, ", %s)", Sdf_FileIOUtility::Stringify(algo));
+            } else {
+                Sdf_FileIOUtility::Write(out, 0, ")");
             }
         }
     };
@@ -703,7 +780,9 @@ Sdf_FileIOUtility::WriteSpline(
     const TsKnotMap knotMap = spline.GetKnots();
 
     // Spline type, if significant.
-    if (knotMap.HasCurveSegments()) {
+    if (knotMap.HasCurveSegments() ||
+        spline.GetCurveType() == TsCurveTypeHermite)
+    {
         Write(out, indent + 1, "%s,\n",
             Stringify(spline.GetCurveType()));
     }
@@ -714,6 +793,10 @@ Sdf_FileIOUtility::WriteSpline(
     _WriteSplineExtrapolation(
         out, indent, "post", spline.GetPostExtrapolation());
 
+    // Do not generate compiler warnings for the deprecated inner looping
+    // methods
+    ARCH_PRAGMA_PUSH
+    ARCH_PRAGMA_DEPRECATED
     // Inner loop params, if present.
     if (spline.GetInnerLoopParams() != TsLoopParams()) {
         const TsLoopParams lp = spline.GetInnerLoopParams();
@@ -724,6 +807,7 @@ Sdf_FileIOUtility::WriteSpline(
             lp.numPostLoops,
             TfStringify(lp.valueOffset).c_str());
     }
+    ARCH_PRAGMA_POP
 
     // Knots.
     TsDispatchToValueTypeTemplate<_SplineKnotWriter>(
@@ -768,20 +852,24 @@ Sdf_FileIOUtility::WriteRelocates(
     return _WriteRelocates(out, indent, multiLine, relocates);
 }
 
-bool 
-Sdf_FileIOUtility::WriteRelocates(
-    Sdf_TextOutput &out, size_t indent, bool multiLine,
-    const SdfRelocatesMap &reloMap)
-{
-    return _WriteRelocates(out, indent, multiLine, reloMap);
-}
-
 void
 Sdf_FileIOUtility::_WriteDictionary(
     Sdf_TextOutput &out, size_t indent, bool multiLine,
     Sdf_FileIOUtility::_OrderedDictionary &dictionary,
     bool stringValuesOnly)
 {
+    for (auto it = dictionary.begin(); it != dictionary.end(); ) {
+        if (it->second->IsEmpty()) {
+            TF_WARN(
+                "Skipping dictionary entry '%s' because its value is empty",
+                it->first->c_str());
+            it = dictionary.erase(it);
+        }
+        else {
+            ++it;
+        }
+    }
+
     Puts(out, 0, multiLine ? "{\n" : "{ ");
     size_t counter = dictionary.size();
     TF_FOR_ALL(i, dictionary) {
@@ -801,8 +889,8 @@ Sdf_FileIOUtility::_WriteDictionary(
             } else {
                 // CODE_COVERAGE_OFF
                 // This is not possible to hit with the current public API.
-                TF_RUNTIME_ERROR("Dictionary has a non-string value under key "
-                                 "\"%s\"; skipping", i->first->c_str());
+                TF_CODING_ERROR("Dictionary has a non-string value under key "
+                                "\"%s\"; skipping", i->first->c_str());
                 // CODE_COVERAGE_ON
             }
         } else {
@@ -828,16 +916,7 @@ Sdf_FileIOUtility::_WriteDictionary(
                 Write(out, multiLine ? indent+1 : 0, "%s %s = ",
                       typeName.GetText(), keyName.c_str());
 
-                // XXX: The logic here is very similar to that in
-                //      WriteDefaultValue. WBN to refactor.
-                string str;
-                if (_StringFromVtValueHelper<string>(&str, value) || 
-                    _StringFromVtValueHelper<TfToken>(&str, value) ||
-                    _StringFromVtValueHelper<SdfAssetPath>(&str, value)) {
-                    Puts(out, 0, str);
-                } else {
-                    Puts(out, 0, TfStringify(value));
-                }
+                Puts(out, 0, StringFromVtValue(value, out));
                 if (multiLine) {
                     Puts(out, 0, "\n");
                 }
@@ -943,10 +1022,8 @@ Sdf_FileIOUtility::WriteLayerOffset(
 }
 
 string
-Sdf_FileIOUtility::Quote(const string &str)
+Sdf_FileIOUtility::Quote(const string &str, const bool allowTripleQuotes)
 {
-    const bool allowTripleQuotes = true;
-
     string result;
 
     // Choose quotes, double quote preferred.
@@ -1030,19 +1107,33 @@ Sdf_FileIOUtility::Quote(const string &str)
 }
 
 string 
-Sdf_FileIOUtility::Quote(const TfToken &token)
+Sdf_FileIOUtility::Quote(const TfToken &token, const bool allowTripleQuotes)
 {
-    return Quote(token.GetString());
+    return Quote(token.GetString(), allowTripleQuotes);
 }
 
 string
-Sdf_FileIOUtility::StringFromVtValue(const VtValue &value)
+Sdf_FileIOUtility::QuoteAssetPath(const string &path)
+{
+    return _StringFromAssetPath(path);
+}
+
+template <class Fn>
+static string
+_StringFromVtValueImpl(const VtValue &value, Fn &&upgrade)
 {
     string s;
-    if (_StringFromVtValueHelper<string>(&s, value) || 
-        _StringFromVtValueHelper<TfToken>(&s, value) ||
-        _StringFromVtValueHelper<SdfAssetPath>(&s, value) ||
-        _StringFromVtValueHelper<SdfPathExpression>(&s, value)) {
+    if (_StringFromVtValueHelper<string>(
+            &s, value, std::forward<Fn>(upgrade)) || 
+        _StringFromVtValueHelper<TfToken>(
+            &s, value, std::forward<Fn>(upgrade)) ||
+        _StringFromVtValueHelper<SdfAssetPath>(
+            &s, value, std::forward<Fn>(upgrade)) ||
+        _StringFromVtValueHelper<SdfPathExpression>(
+            &s, value, std::forward<Fn>(upgrade)) ||
+        _StringFromVtValueHelper<GfDuration>(
+            &s, value, std::forward<Fn>(upgrade)))
+    {
         return s;
     }
     
@@ -1057,6 +1148,28 @@ Sdf_FileIOUtility::StringFromVtValue(const VtValue &value)
     }
 
     return TfStringify(value);
+}
+
+string
+Sdf_FileIOUtility::StringFromVtValue(
+    const VtValue &value,
+    Sdf_TextOutput &eventualOutput)
+{
+    return _StringFromVtValueImpl(
+        value,
+        [&eventualOutput](SdfFileVersion ver, char const *msg) {
+            eventualOutput.RequestWriteVersionUpgrade(ver, msg);
+        });
+}
+
+string
+Sdf_FileIOUtility::StringFromVtValue(const VtValue &value)
+{
+    return _StringFromVtValueImpl(
+        value,
+        [](SdfFileVersion, char const *) {
+            /* do nothing */
+        });
 }
 
 const char* Sdf_FileIOUtility::Stringify( SdfPermission val )
@@ -1138,6 +1251,18 @@ const char* Sdf_FileIOUtility::Stringify(TsInterpMode interp)
     }
 
     TF_CODING_ERROR("unknown value");
+    return "";
+}
+
+const char* Sdf_FileIOUtility::Stringify(TsTangentAlgorithm algorithm)
+{
+    switch (algorithm) {
+      case TsTangentAlgorithmNone: return "none";
+      case TsTangentAlgorithmCustom: return "custom";
+      case TsTangentAlgorithmAutoEase: return "autoEase";
+    }
+
+    TF_CODING_ERROR("unknown tangent algorithm value");
     return "";
 }
 

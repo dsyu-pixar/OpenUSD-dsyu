@@ -8,10 +8,7 @@ pxr_library(ar
         tf
         plug
         vt
-        ${TBB_tbb_LIBRARY}
-
-    INCLUDE_DIRS
-        ${TBB_INCLUDE_DIRS}
+        TBB::tbb
 
     PUBLIC_CLASSES
         asset
@@ -81,12 +78,13 @@ pxr_test_scripts(
     testenv/testArDefaultResolver.py
     testenv/testArOpenAsset.py
     testenv/testArPackageUtils.py
+    testenv/testArPackageResolver.py
     testenv/testArResolvedPath.py
     testenv/testArResolverContext.py
     testenv/testArTimestamp.py
 )
 
-pxr_build_test_shared_lib(TestArAdvancedAPI
+pxr_build_test_plugin(TestArAdvancedAPI
     INSTALL_PREFIX ArPlugins
     LIBRARIES
         tf
@@ -95,7 +93,7 @@ pxr_build_test_shared_lib(TestArAdvancedAPI
         testenv/TestArAdvancedAPI_plugin.cpp
 ) 
 
-pxr_build_test_shared_lib(TestArPackageResolver
+pxr_build_test_plugin(TestArPackageResolver
     INSTALL_PREFIX ArPlugins
     LIBRARIES
         tf
@@ -104,7 +102,7 @@ pxr_build_test_shared_lib(TestArPackageResolver
         testenv/TestArPackageResolver_plugin.cpp
 ) 
 
-pxr_build_test_shared_lib(TestArOptionalImplementation
+pxr_build_test_plugin(TestArOptionalImplementation
     INSTALL_PREFIX ArPlugins
     LIBRARIES
         tf
@@ -117,34 +115,10 @@ pxr_test_scripts(
     testenv/testArOptionalImplementation.py
 )
 
-pxr_install_test_dir(
-    SRC testenv/testArOptionalImplementation
-    DEST testArOptionalImplementation_1
-)
-
-pxr_install_test_dir(
-    SRC testenv/testArOptionalImplementation
-    DEST testArOptionalImplementation_2
-)
-
-pxr_install_test_dir(
-    SRC testenv/testArOptionalImplementation
-    DEST testArOptionalImplementation_3
-)
-
-pxr_install_test_dir(
-    SRC testenv/testArOptionalImplementation
-    DEST testArOptionalImplementation_4
-)
-
-pxr_install_test_dir(
-    SRC testenv/testArOptionalImplementation
-    DEST testArOptionalImplementation_5
-)
-
 pxr_register_test(testArOptionalImplementation_1
     PYTHON
     COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testArOptionalImplementation _TestResolver"
+    TESTENV testenv/testArOptionalImplementation
     STDOUT_REDIRECT base.txt
     DIFF_COMPARE base.txt
 )
@@ -152,6 +126,7 @@ pxr_register_test(testArOptionalImplementation_1
 pxr_register_test(testArOptionalImplementation_2
     PYTHON
     COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testArOptionalImplementation _TestResolverWithContextMethods"
+    TESTENV testenv/testArOptionalImplementation
     STDOUT_REDIRECT resolver_with_context.txt
     DIFF_COMPARE resolver_with_context.txt
 )
@@ -159,6 +134,7 @@ pxr_register_test(testArOptionalImplementation_2
 pxr_register_test(testArOptionalImplementation_3
     PYTHON
     COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testArOptionalImplementation _TestDerivedResolverWithContextMethods"
+    TESTENV testenv/testArOptionalImplementation
     STDOUT_REDIRECT derived_resolver_with_context.txt
     DIFF_COMPARE derived_resolver_with_context.txt
 )
@@ -166,6 +142,7 @@ pxr_register_test(testArOptionalImplementation_3
 pxr_register_test(testArOptionalImplementation_4
     PYTHON
     COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testArOptionalImplementation _TestResolverWithCacheMethods"
+    TESTENV testenv/testArOptionalImplementation
     STDOUT_REDIRECT resolver_with_cache.txt
     DIFF_COMPARE resolver_with_cache.txt
 )
@@ -173,6 +150,7 @@ pxr_register_test(testArOptionalImplementation_4
 pxr_register_test(testArOptionalImplementation_5
     PYTHON
     COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testArOptionalImplementation _TestDerivedResolverWithCacheMethods"
+    TESTENV testenv/testArOptionalImplementation
     STDOUT_REDIRECT derived_resolver_with_cache.txt
     DIFF_COMPARE derived_resolver_with_cache.txt
 )
@@ -181,7 +159,7 @@ pxr_register_test(testArOptionalImplementation_5
 # The build system currently doesn't support this for static library
 # builds, so we only enable this test on shared library builds.
 if (BUILD_SHARED_LIBS)
-    pxr_build_test_shared_lib(TestArURIResolver
+    pxr_build_test_plugin(TestArURIResolver
         INSTALL_PREFIX ArPlugins
         LIBRARIES
             tf
@@ -275,6 +253,11 @@ pxr_register_test(testArDefaultResolver_CPP
 pxr_register_test(testArOpenAsset
     PYTHON
     COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testArOpenAsset"
+)
+
+pxr_register_test(testArPackageResolver
+    PYTHON
+    COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testArPackageResolver"
 )
 
 pxr_register_test(testArPackageUtils

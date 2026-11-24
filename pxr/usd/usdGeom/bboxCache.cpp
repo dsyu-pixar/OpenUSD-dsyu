@@ -154,13 +154,22 @@ public:
         // that won't be traversed when resolving other bounding boxes.
         _ThreadXformCache xfCache;
 
+        // Establish the root prototypes upfront before dispatching work.
+        // Otherwise, once we dispatch a task, we can't tell whether a
+        // prototype with numDependencies == 0 is a true root or a non-root
+        // that was executed by a previously-dispatched task.  In the
+        // latter case, we would erroneously execute it again.
+        std::vector<_PrimContext> rootPrototypes;
         for (const auto& t : prototypeTasks) {
             if (t.second.numDependencies == 0) {
-                _owner->_dispatcher.Run(
-                    &_PrototypeBBoxResolver::_ExecuteTaskForPrototype,
-                    this, t.first, &prototypeTasks, &xfCache,
-                    &_owner->_dispatcher);
+                rootPrototypes.push_back(t.first);
             }
+        }
+        for (const auto& rootPrototype : rootPrototypes) {
+            _owner->_dispatcher.Run(
+                &_PrototypeBBoxResolver::_ExecuteTaskForPrototype,
+                this, rootPrototype, &prototypeTasks, &xfCache,
+                &_owner->_dispatcher);
         }
         _owner->_dispatcher.Wait();
     }
@@ -305,6 +314,8 @@ UsdGeomBBoxCache::UsdGeomBBoxCache(UsdGeomBBoxCache const &other)
     , _ignoreVisibility(other._ignoreVisibility)
 {
 }
+
+UsdGeomBBoxCache::~UsdGeomBBoxCache() = default;
 
 UsdGeomBBoxCache &
 UsdGeomBBoxCache::operator=(UsdGeomBBoxCache const &other)
@@ -1274,7 +1285,8 @@ UsdGeomBBoxCache::_ResolvePrim(const _BBoxTask* task,
         VtVec3fArray extent;
         if (boundableObj.ComputeExtent(_time, &extent)) {
             GfBBox3d &bboxForPurpose = (*bboxes)[entry->purposeInfo.purpose];
-            bboxForPurpose.SetRange(GfRange3d(extent[0], extent[1]));
+            const VtVec3fArray &extentConst = extent;
+            bboxForPurpose.SetRange(GfRange3d(extentConst[0], extentConst[1]));
         }
     }
     else {

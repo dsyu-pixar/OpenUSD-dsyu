@@ -57,6 +57,29 @@ TestErrorCases()
         wrapper.GetStream() << "Into the bit bucket..." << endl;
         TF_AXIOM(!wrapper.GetStream().good());
     }
+
+    // Can't open files beneath a broken symlink
+    {
+        if (TfPathExists("broken_symlink")) {
+            TF_AXIOM(ArchUnlinkFile("broken_symlink") == 0);
+        }
+        if (TfPathExists("dir-does-not-exist")) {
+            TF_AXIOM(ArchRmDir("dir-does-not-exist") == 0);
+        }
+
+        TF_AXIOM(TfMakeDir("dir-does-not-exist"));
+        TF_AXIOM(TfSymlink("dir-does-not-exist", "broken_symlink"));
+        TF_AXIOM(ArchRmDir("dir-does-not-exist") == 0);
+
+        {
+            std::string error;
+            TfAtomicOfstreamWrapper wrapper("broken_symlink/foo.txt");
+            const bool openedBrokenSymlink = wrapper.Open(&error);
+
+            fprintf(stderr, "Expected error: %s\n", error.c_str());
+            TF_AXIOM(!openedBrokenSymlink);
+        }
+    }
 }
 
 static void
@@ -225,6 +248,13 @@ TestFilePermissions()
 #if !defined(ARCH_OS_WINDOWS)
     const mode_t testUmask = 00002;
     const mode_t mask = umask(testUmask);
+#endif
+
+#ifdef ARCH_OS_WASM_VM
+    // These defines are not present in sys/stat.h when building WASM, so we
+    // will define some reasonable values for this test.
+    #define ACCESSPERMS 0666
+    #define DEFFILEMODE 0666
 #endif
 
     {

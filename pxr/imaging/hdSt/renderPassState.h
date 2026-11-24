@@ -59,6 +59,20 @@ public:
     void
     Prepare(HdResourceRegistrySharedPtr const &resourceRegistry) override;
 
+    HDST_API
+    void Copy(HdRenderPassState const& src) override;
+
+    /// Copy the uniform buffer state from src into this object. Note this copies
+    /// both the member variables as well as the bar pointer for the uniform
+    /// buffer we upload these to.  Validates that updated uniform buffer state
+    /// will not cause a layout change.
+    ///
+    /// The intent of this function is to allow the caller to make late edits to
+    /// uniforms (e.g. camera matrices) without invalidating any pipeline
+    /// compilation that may have already happened.
+    HDST_API
+    void CopyUniforms(HdStRenderPassState const& src);
+
     /// XXX: Bind and Unbind set./restore the following GL state.
     /// This will be reworked to use Hgi in the near future.
     /// Following states may be changed and restored to
@@ -115,13 +129,6 @@ public:
     HDST_API
     void ApplyStateFromCamera();
 
-    /// scene materials
-    HDST_API
-    void SetUseSceneMaterials(bool state);
-    bool GetUseSceneMaterials() const {
-        return _useSceneMaterials;
-    }
-
     /// returns shaders (lighting/renderpass)
     HDST_API
     HdStShaderCodeSharedPtrVector GetShaders() const;
@@ -141,7 +148,7 @@ public:
                                GfMatrix4d const &projectionMatrix,
                                GfVec4d const &viewport,
                                ClipPlanesVector const & clipPlanes);
-    
+
     GfMatrix4d GetCullMatrix() const { return _cullMatrix; }
 
     /// Overrides the case when no HdCamera is given. In the case, uses
@@ -204,7 +211,6 @@ public:
     ComputeImageToHorizontallyNormalizedFilmback() const;
 
 private:
-    bool _UseAlphaMask() const;
     unsigned int _GetFramebufferHeight() const;
     GfRange2f _ComputeFlippedFilmbackWindow() const;
 
@@ -230,7 +236,7 @@ private:
     // ---------------------------------------------------------------------- //
     // Camera state used when no HdCamera available
     // ---------------------------------------------------------------------- //
-    
+
     GfMatrix4d _worldToViewMatrix;
     GfMatrix4d _projectionMatrix;
     ClipPlanesVector _clipPlanes;
@@ -246,9 +252,7 @@ private:
 
     HdBufferArrayRangeSharedPtr _renderPassStateBar;
     size_t _clipPlanesBufferSize;
-    float _alphaThresholdCurrent;
     bool _resolveMultiSampleAov;
-    bool _useSceneMaterials;
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

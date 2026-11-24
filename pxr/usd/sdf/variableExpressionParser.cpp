@@ -8,22 +8,43 @@
 #include "pxr/usd/sdf/variableExpressionParser.h"
 
 #include "pxr/usd/sdf/debugCodes.h"
+#include "pxr/usd/sdf/variableExpressionAST.h"
 #include "pxr/usd/sdf/variableExpressionImpl.h"
 
 #include "pxr/base/pegtl/pegtl.hpp"
 #include "pxr/base/pegtl/pegtl/contrib/trace.hpp"
 #include "pxr/base/tf/stringUtils.h"
 
+#include <array>
 #include <tuple>
 
 using namespace PXR_PEGTL_NAMESPACE;
 
 PXR_NAMESPACE_OPEN_SCOPE
 
+namespace SdfVariableExpressionASTNodes
+{
+
+// Helper for calling private constructors on the various
+// SdfVariableExpressionASTNodes::Node subclasses.
+class _NodeCreator
+{
+public:
+    template <class NodeType, class... Args>
+    static auto MakeNode(Args&&... nodeArgs)
+    {
+        return std::unique_ptr<NodeType>(
+            new NodeType(std::forward<Args>(nodeArgs)...));
+    }
+};
+
+} // end namespace SdfVariableExpressionASTNodes
+
 namespace
 {
 
 namespace Impl = Sdf_VariableExpressionImpl;
+namespace ASTNodes = SdfVariableExpressionASTNodes;
 
 // Node creators -----------------------------------------------
 // These objects are responsible for saving intermediate values as
@@ -35,20 +56,110 @@ class NodeCreator
 public:
     virtual ~NodeCreator();
     virtual std::unique_ptr<Impl::Node> CreateNode(std::string* errMsg) = 0;
+    virtual std::unique_ptr<ASTNodes::Node> CreateASTNode(
+        std::string* errMsg) = 0;
 };
 
 NodeCreator::~NodeCreator() = default;
+
+static
+std::vector<std::unique_ptr<Impl::Node>>
+_CreateNodes(
+    const std::vector<std::unique_ptr<NodeCreator>>& creators,
+    std::string* errMsg)
+{
+    std::vector<std::unique_ptr<Impl::Node>> nodes;
+    nodes.reserve(creators.size());
+    for (auto& c : creators) {
+        nodes.push_back(c->CreateNode(errMsg));
+    }
+
+    return nodes;
+}
+
+static
+ASTNodes::NodeList
+_CreateASTNodeList(
+    const std::vector<std::unique_ptr<NodeCreator>>& creators,
+    std::string* errMsg)
+{
+    std::vector<std::unique_ptr<ASTNodes::Node>> nodes;
+    nodes.reserve(creators.size());
+    for (auto& c : creators) {
+        nodes.push_back(c->CreateASTNode(errMsg));
+    }
+    return ASTNodes::NodeList(std::move(nodes));
+}
 
 class StringNodeCreator
     : public NodeCreator
 {
 public:
+    // A single piece of a string being assembled. Mirrors
+    // Impl::StringNode::Part
+    struct Part
+    {
+        std::string content;
+        bool isVariable = false;
+        std::unique_ptr<NodeCreator> fallback;
+    };
+
     std::unique_ptr<Impl::Node> CreateNode(std::string* errMsg) override
     {
-        return std::make_unique<Impl::StringNode>(std::move(parts));
+        std::vector<Impl::StringNode::Part> stringNodeParts;
+        stringNodeParts.reserve(parts.size());
+
+        for (auto& part : parts) {
+            std::unique_ptr<Impl::Node> fallbackNode;
+            if (part.fallback) {
+                fallbackNode = part.fallback->CreateNode(errMsg);
+                if (!errMsg->empty()) {
+                    return nullptr;
+                }
+            }
+
+            stringNodeParts.push_back(
+                { part.content, part.isVariable, std::move(fallbackNode) });
+        }
+
+        return std::make_unique<Impl::StringNode>(std::move(stringNodeParts));
     }
-    
-    using Part = Impl::StringNode::Part;
+
+    std::unique_ptr<ASTNodes::Node>
+    CreateASTNode(std::string* errMsg) override
+    {
+        std::string s;
+        for (const auto& part : parts) {
+            if (part.isVariable) {
+                s += "${" + part.content;
+                if (part.fallback) {
+                    std::unique_ptr<ASTNodes::Node> fallbackAST =
+                        part.fallback->CreateASTNode(errMsg);
+                    if (!errMsg->empty()) {
+                        return nullptr;
+                    }
+
+                    const std::string fallbackExpr =
+                        fallbackAST->GetExpression().GetString();
+
+                    // GetString() above returns the fallback expression wrapped
+                    // in enclosing backticks via SdfVariableExpression 
+                    // conversion in GetExpression().
+                    if (TF_VERIFY(fallbackExpr.size() >= 2)) {
+                        s += ":" +
+                            fallbackExpr.substr(1, fallbackExpr.size() - 2);
+                    }
+                }
+                s += "}";
+            } else {
+                s += part.content;
+            }
+        }
+
+        return ASTNodes::_NodeCreator::MakeNode<ASTNodes::LiteralNode>(
+            std::move(s));
+    }
+
     std::vector<Part> parts;
 };
 
@@ -58,10 +169,30 @@ class VariableNodeCreator
 public:
     std::unique_ptr<Impl::Node> CreateNode(std::string* errMsg) override
     {
-        return std::make_unique<Impl::VariableNode>(std::move(var));
+        std::unique_ptr<Impl::Node> fallbackNode;
+        if (fallbackValue) {
+            fallbackNode = fallbackValue->CreateNode(errMsg);
+
+            // Fail if there was a problem creating the fallback node
+            if (!errMsg->empty()) {
+                return nullptr;
+            }
+        }
+
+        return std::make_unique<Impl::VariableNode>(
+            std::move(var), std::move(fallbackNode));
+    }
+
+    std::unique_ptr<ASTNodes::Node>
+    CreateASTNode(std::string* errMsg) override
+    {
+        return ASTNodes::_NodeCreator::MakeNode<ASTNodes::VariableNode>(
+            std::move(var), 
+            fallbackValue ? fallbackValue->CreateASTNode(errMsg) : nullptr);
     }
     
     std::string var;
+    std::unique_ptr<NodeCreator> fallbackValue;
 };
 
 template <class Type>
@@ -72,6 +203,12 @@ public:
     std::unique_ptr<Impl::Node> CreateNode(std::string* errMsg) override
     {
         return std::make_unique<Impl::ConstantNode<Type>>(value);
+    }
+
+    std::unique_ptr<ASTNodes::Node>
+    CreateASTNode(std::string* errMsg) override
+    {
+        return ASTNodes::_NodeCreator::MakeNode<ASTNodes::LiteralNode>(value);
     }
     
     Type value;
@@ -88,6 +225,12 @@ public:
     {
         return std::make_unique<Impl::NoneNode>();
     }
+
+    std::unique_ptr<ASTNodes::Node>
+    CreateASTNode(std::string* errMsg) override
+    {
+        return ASTNodes::_NodeCreator::MakeNode<ASTNodes::LiteralNode>();
+    }
 };
 
 class ListNodeCreator
@@ -96,10 +239,28 @@ class ListNodeCreator
 public:
     std::unique_ptr<Impl::Node> CreateNode(std::string* errMsg) final
     {
-        return std::make_unique<Impl::ListNode>(std::move(elements));
+        std::vector<std::unique_ptr<Impl::Node>> elemNodes = 
+            _CreateNodes(elements, errMsg);
+        if (!errMsg->empty()) {
+            return nullptr;
+        }
+
+        return std::make_unique<Impl::ListNode>(std::move(elemNodes));
     };
 
-    std::vector<std::unique_ptr<Impl::Node>> elements;
+    std::unique_ptr<ASTNodes::Node>
+    CreateASTNode(std::string* errMsg) override
+    {
+        ASTNodes::NodeList astNodes = _CreateASTNodeList(elements, errMsg);
+        if (!errMsg->empty()) {
+            return nullptr;
+        }
+
+        return ASTNodes::_NodeCreator::MakeNode<ASTNodes::ListNode>(
+            std::move(astNodes));
+    }
+
+    std::vector<std::unique_ptr<NodeCreator>> elements;
 };
 
 // List that defines the set of functions recognized by the expression parser.
@@ -119,6 +280,7 @@ using AvailableFunctions = std::tuple<
     Impl::LogicalNotNode,
 
     Impl::ContainsNode,
+    Impl::MatchesRegexNode,
     Impl::AtNode,
     Impl::LenNode,
 
@@ -140,8 +302,20 @@ public:
             errMsg, &matchedFunctionName, (AvailableFunctions*)(nullptr));
     }
 
+    std::unique_ptr<ASTNodes::Node>
+    CreateASTNode(std::string* errMsg) final
+    {
+        ASTNodes::NodeList astNodes = _CreateASTNodeList(functionArgs, errMsg);
+        if (!errMsg->empty()) {
+            return nullptr;
+        }
+
+        return ASTNodes::_NodeCreator::MakeNode<ASTNodes::FunctionNode>(
+            std::move(functionName), std::move(astNodes));
+    }
+
     std::string functionName;
-    std::vector<std::unique_ptr<Impl::Node>> functionArgs;
+    std::vector<std::unique_ptr<NodeCreator>> functionArgs;
 
 private:
     // Search the list of available function nodes for one whose name matches
@@ -199,7 +373,15 @@ private:
                 functionName.c_str(), NodeType::MinNumArgs);
             return nullptr;
         }
-        return std::make_unique<NodeType>(std::move(functionArgs));
+
+        std::vector<std::unique_ptr<Impl::Node>> argNodes =
+            _CreateNodes(functionArgs, errMsg);
+        if (!errMsg->empty()) {
+            return nullptr;
+        }
+        
+
+        return std::make_unique<NodeType>(std::move(argNodes));
     }
 
     // Construct an instance of NodeType if it's a function that requires a
@@ -220,7 +402,15 @@ private:
     std::unique_ptr<Impl::Node> _CreateFunctionNode(
         std::string* errMsg, std::index_sequence<I...>)
     { 
-        return std::make_unique<NodeType>(std::move(functionArgs[I])...);
+        std::array<std::unique_ptr<Impl::Node>, sizeof...(I)> argNodes = {
+            functionArgs[I]->CreateNode(errMsg)...
+        };
+
+        if (!errMsg->empty()) {
+            return nullptr;
+        }
+
+        return std::make_unique<NodeType>(std::move(argNodes[I])...);
     }
 };
 
@@ -231,6 +421,13 @@ private:
 class ParserContext
 {
 public:
+    ParserContext() = default;
+    ParserContext(const ParserContext&) = delete;
+    ParserContext(ParserContext&&) = default;
+
+    ParserContext& operator=(const ParserContext&) = delete;
+    ParserContext& operator=(ParserContext&&) = default;
+
     // Create and push a node creator of type CreatorType onto the stack,
     // passing in any given args to CreatorType c'tor, and return it.
     template <class CreatorType, class... Args>
@@ -238,6 +435,17 @@ public:
     {
         _nodeStack.push_back(std::make_unique<CreatorType>(args...));
         return static_cast<CreatorType*>(_nodeStack.back().get());
+    }
+
+    std::unique_ptr<NodeCreator> PopNodeCreator()
+    {
+        if (!TF_VERIFY(!_nodeStack.empty()) || !TF_VERIFY(_nodeStack.back())) {
+            return nullptr;
+        }
+
+        std::unique_ptr<NodeCreator> creator = std::move(_nodeStack.back());
+        _nodeStack.pop_back();
+        return creator;
     }
 
     // Return pointer to the node creator on the top of the stack if
@@ -282,6 +490,22 @@ public:
         return creator->CreateNode(errMsg);
     }
 
+    // Pop the node creator from the top of the stack and use it to
+    // create an AST node.
+    std::unique_ptr<ASTNodes::Node>
+    CreateASTNode(std::string* errMsg)
+    {
+        if (!TF_VERIFY(!_nodeStack.empty()) || !TF_VERIFY(_nodeStack.back())) {
+            *errMsg = "Unknown error";
+            return nullptr;
+        }
+
+        std::unique_ptr<NodeCreator> creator = std::move(_nodeStack.back());
+        _nodeStack.pop_back();
+
+        return creator->CreateASTNode(errMsg);
+    }
+
 private:
     std::vector<std::unique_ptr<NodeCreator>> _nodeStack;
 };
@@ -307,6 +531,42 @@ void _ThrowParseError(const Input& in, const std::string& msg)
 // Parser grammar -----------------------------------------------
 // Parsing rules for the expression grammar.
 
+struct Integer
+    : seq<
+        opt<one<'-'>>,
+        plus<ascii::digit>
+    >
+{};
+
+// ----------------------------------------
+
+// We allow "True", "true", "False", "false" because these
+// are the representations used in the two primary languages supported
+// by USD -- C++ and Python -- and that correspondence may make it easier
+// for users working in those languages while writing expressions.
+struct BooleanTrue
+    : sor<
+        PXR_PEGTL_KEYWORD("True"),
+        PXR_PEGTL_KEYWORD("true")
+    >
+{};
+
+struct BooleanFalse
+    : sor<
+        PXR_PEGTL_KEYWORD("False"),
+        PXR_PEGTL_KEYWORD("false")
+    >
+{};
+
+struct Boolean
+    : sor<
+        BooleanTrue,
+        BooleanFalse
+    >
+{};
+
+// ----------------------------------------
+
 // XXX: 
 // When given a variable with illegal characters, like "${FO-OO}",
 // this rule yields a confusing error message stating that there's a
@@ -326,11 +586,55 @@ struct VariableName
     : identifier
 {};
 
+// Allow VariableFallbackValue below to reference quoted strings as a
+// value type.
+template <char QuoteChar> struct QuotedString;
+using SingleQuotedString = QuotedString<'\''>;
+using DoubleQuotedString = QuotedString<'"'>;
+
+// String typed fallback values do not allow inline variable references.
+template <char QuoteChar> struct FallbackQuotedString;
+using FallbackSingleQuotedString = FallbackQuotedString<'\''>;
+using FallbackDoubleQuotedString = FallbackQuotedString<'"'>;
+
+// List typed fallback values do not allow inline variable references for string
+// literals.
+struct FallbackListExpression;
+
+// If another type is added as an acceptable fallback value, ensure that
+// VariableNode::SetFallbackValue's validation logic is updated as well.
+struct VariableFallbackValue
+    : sor<
+        Integer,
+        Boolean,
+        FallbackSingleQuotedString,
+        FallbackDoubleQuotedString,
+        FallbackListExpression
+    >
+{};
+
+struct VariableFallbackSeparator 
+    : one<':'>
+{};
+
+struct VariableFallback
+    : if_must<
+        VariableFallbackSeparator,
+        VariableFallbackValue
+    > 
+{};
+
+struct OptionalVariableFallback
+    : opt<VariableFallback>
+{};
+
+
 template <class C>
 struct VariableImpl
     : if_must<
         VariableStart,
         VariableName<C>,
+        OptionalVariableFallback,
         VariableEnd
     > 
 {
@@ -398,7 +702,7 @@ struct QuotedStringBody
 template <char QuoteChar>
 struct QuotedString
     : if_must<
-        QuotedStringStart<QuoteChar>, 
+        QuotedStringStart<QuoteChar>,
         QuotedStringBody<QuoteChar>,
         QuotedStringEnd<QuoteChar>
     >
@@ -408,44 +712,36 @@ struct QuotedString
     using End = QuotedStringEnd<QuoteChar>;
 };
 
-using DoubleQuotedString = QuotedString<'"'>;
-using SingleQuotedString = QuotedString<'\''>;
-
 // ----------------------------------------
 
-struct Integer
-    : seq<
-        opt<one<'-'>>,
-        plus<ascii::digit>
+// This rule will match so we can trigger an error if there is a variable
+// reference in a string typed fallback value.
+struct QuotedStringDisallowedVariable
+    : VariableStart
+{};
+
+template <char QuoteChar>
+struct FallbackQuotedStringBody
+    : star<
+        sor<
+            QuotedStringDisallowedVariable,
+            QuotedStringChars<QuoteChar>
+        >
     >
 {};
 
-// ----------------------------------------
-
-// We allow "True", "true", "False", "false" because these
-// are the representations used in the two primary languages supported
-// by USD -- C++ and Python -- and that correspondence may make it easier
-// for users working in those languages while writing expressions.
-struct BooleanTrue
-    : sor<
-        PXR_PEGTL_KEYWORD("True"),
-        PXR_PEGTL_KEYWORD("true")
+template <char QuoteChar>
+struct FallbackQuotedString
+    : if_must<
+        QuotedStringStart<QuoteChar>,
+        FallbackQuotedStringBody<QuoteChar>,
+        QuotedStringEnd<QuoteChar>
     >
-{};
-
-struct BooleanFalse
-    : sor<
-        PXR_PEGTL_KEYWORD("False"),
-        PXR_PEGTL_KEYWORD("false")
-    >
-{};
-
-struct Boolean
-    : sor<
-        BooleanTrue,
-        BooleanFalse
-    >
-{};
+{
+    using Start = QuotedStringStart<QuoteChar>;
+    using Body = FallbackQuotedStringBody<QuoteChar>;
+    using End = QuotedStringEnd<QuoteChar>;
+};
 
 // ----------------------------------------
 
@@ -537,8 +833,39 @@ struct ListElements
 
 struct ListExpression
     : if_must<
-        ListStart, 
+        ListStart,
         ListElements,
+        ListEnd>
+{};
+
+// ----------------------------------------
+
+// A list used as a fallback value which supports literals. Strings in a list
+// typed fallback value may not contain variable references.
+struct FallbackListElementValue
+    : sor<
+        FallbackDoubleQuotedString,
+        FallbackSingleQuotedString,
+        Integer,
+        Boolean
+    >
+{};
+
+struct FallbackListElement
+    : public FallbackListElementValue
+{};
+
+struct FallbackListElements
+    : sor<
+        list<FallbackListElement, one<','>, one<' '>>,
+        star<one<' '>>
+    >
+{};
+
+struct FallbackListExpression
+    : if_must<
+        ListStart,
+        FallbackListElements,
         ListEnd>
 {};
 
@@ -592,8 +919,36 @@ struct Action<QuotedStringVariable::Name>
     template <typename ActionInput>
     static void apply(const ActionInput& in, ParserContext& context)
     {
-        context.GetNodeCreator<StringNodeCreator>()
-            ->parts.push_back({ in.string(), /* isVar = */ true });
+        // Variable + fallback parsing within string
+        context.PushNodeCreator<VariableNodeCreator>()->var = in.string();
+    }
+};
+
+template <>
+struct Action<QuotedStringVariable>
+{
+    template <typename ActionInput>
+    static void apply(const ActionInput& in, ParserContext& context)
+    {
+        std::unique_ptr<NodeCreator> creator = context.PopNodeCreator();
+        VariableNodeCreator* variableCreator =
+            dynamic_cast<VariableNodeCreator*>(creator.get());
+        if (!variableCreator) {
+            _ThrowParseError(in,
+                "Internal error: variable creator not at top of stack");
+        }
+
+        StringNodeCreator* stringCreator =
+            context.GetExistingNodeCreator<StringNodeCreator>();
+        if (!stringCreator) {
+            _ThrowParseError(in,
+                "Internal error: string creator not at expected stack "
+                "location");
+        }
+
+        stringCreator->parts.push_back(
+            { std::move(variableCreator->var), /* isVariable = */ true,
+              std::move(variableCreator->fallbackValue) });
     }
 };
 
@@ -609,6 +964,17 @@ struct Action<QuotedStringStart<QuoteChar>>
         // is empty we'll never activate those actions. So we create the
         // StringNodeCreator here but leave it empty.
         context.GetNodeCreator<StringNodeCreator>();
+    }
+};
+
+template <>
+struct Action<QuotedStringDisallowedVariable>
+{
+    template <typename ActionInput>
+    static void apply(const ActionInput& in, ParserContext& context)
+    {
+        _ThrowParseError(in,
+            "Variable references are not allowed in fallback string values");
     }
 };
 
@@ -661,6 +1027,30 @@ struct Action<BooleanFalse>
 };
 
 template <>
+struct Action<VariableFallbackValue>
+{
+    template <typename ActionInput>
+    static void apply(const ActionInput& in, ParserContext& context)
+    {
+        std::unique_ptr<NodeCreator> valueCreator = context.PopNodeCreator();
+        if (!valueCreator) {
+            _ThrowParseError(in,
+                "Internal error: value creator not at top of stack");
+        }
+
+        VariableNodeCreator* variableCreator =
+            context.GetExistingNodeCreator<VariableNodeCreator>();
+        if (!variableCreator) {
+            _ThrowParseError(in, "Internal error: "
+                "variable creator not at expected stack location");
+        }
+
+        variableCreator->fallbackValue = std::move(valueCreator);
+    }
+};
+
+
+template <>
 struct Action<None>
 {
     template <typename ActionInput>
@@ -680,26 +1070,43 @@ struct Action<ListStart>
     }
 };
 
+template <typename ActionInput>
+static void
+_AppendListElement(const ActionInput& in, ParserContext& context)
+{
+    std::unique_ptr<NodeCreator> elemCreator = context.PopNodeCreator();
+    if (!elemCreator) {
+        _ThrowParseError(in,
+            "Internal error: could not pop node creator stack");
+    }
+
+    ListNodeCreator* listCreator =
+        context.GetExistingNodeCreator<ListNodeCreator>();
+    if (!listCreator) {
+        _ThrowParseError(in,
+            "Internal error: list creator not at top of stack");
+    }
+
+    listCreator->elements.push_back(std::move(elemCreator));
+}
+
 template<>
 struct Action<ListElement>
 {
     template <typename ActionInput>
     static void apply(const ActionInput& in, ParserContext& context)
     {
-        std::string errMsg;
-        std::unique_ptr<Impl::Node> elemNode = 
-            context.CreateExpressionNode(&errMsg);
-        if (!elemNode) {
-            _ThrowParseError(in, errMsg);
-        }
+        _AppendListElement(in, context);
+    }
+};
 
-        ListNodeCreator* listCreator =
-            context.GetExistingNodeCreator<ListNodeCreator>();
-        if (!listCreator) {
-            _ThrowParseError(in, "Unknown error");
-        }
-
-        listCreator->elements.push_back(std::move(elemNode));
+template<>
+struct Action<FallbackListElement>
+{
+    template <typename ActionInput>
+    static void apply(const ActionInput& in, ParserContext& context)
+    {
+        _AppendListElement(in, context);
     }
 };
 
@@ -719,20 +1126,20 @@ struct Action<FunctionArgument>
     template <typename ActionInput>
     static void apply(const ActionInput& in, ParserContext& context)
     {
-        std::string errMsg;
-        std::unique_ptr<Impl::Node> argNode = 
-            context.CreateExpressionNode(&errMsg);
-        if (!argNode) {
-            _ThrowParseError(in, errMsg);
+        std::unique_ptr<NodeCreator> elemCreator = context.PopNodeCreator();
+        if (!elemCreator) {
+            _ThrowParseError(in,
+                "Internal error: could not pop node creator stack");
         }
 
         FunctionNodeCreator* fnCreator =
             context.GetExistingNodeCreator<FunctionNodeCreator>();
         if (!fnCreator) {
-            _ThrowParseError(in, "Unknown error");
+            _ThrowParseError(in,
+                "Internal error: function creator not at top of stack");
         }
 
-        fnCreator->functionArgs.push_back(std::move(argNode));
+        fnCreator->functionArgs.push_back(std::move(elemCreator));
     }
 };
 
@@ -756,7 +1163,9 @@ struct Errors
 
 // Should never hit these errors because of how the rules are defined.
 MATCH_ERROR(ListElements, "");
+MATCH_ERROR(FallbackListElements, "");
 MATCH_ERROR(FunctionArguments, "");
+MATCH_ERROR(OptionalVariableFallback, "");
 
 MATCH_ERROR(ListEnd, "Missing ending ']'");
 MATCH_ERROR(FunctionArgumentEnd, "Missing ending ')'");
@@ -766,6 +1175,9 @@ MATCH_ERROR(ExpressionEnd, "Missing ending '`'");
 
 MATCH_ERROR(
     Variable::Name, "Variables must be a C identifier");
+MATCH_ERROR(VariableFallbackSeparator, "Expected ':' before fallback value");
+MATCH_ERROR(VariableFallbackValue, "Expected a fallback value after ':'");
+
 MATCH_ERROR(
     QuotedStringVariable::Name, "Variables must be a C identifier");
 MATCH_ERROR(VariableEnd, "Missing ending '}'");
@@ -776,10 +1188,19 @@ MATCH_ERROR(DoubleQuotedString::End, R"(Missing ending '"')");
 MATCH_ERROR(SingleQuotedString::Body, "Invalid string contents");
 MATCH_ERROR(SingleQuotedString::End, R"(Missing ending "'")");
 
+MATCH_ERROR(FallbackDoubleQuotedString::Body, "Invalid string contents");
+MATCH_ERROR(FallbackSingleQuotedString::Body, "Invalid string contents");
+
+struct ParseResult
+{
+    std::optional<ParserContext> context;
+    std::vector<std::string> errMsg;
+};
+
 } // end anonymous namespace
 
-Sdf_VariableExpressionParserResult
-Sdf_ParseVariableExpression(const std::string& expr)
+static ParseResult
+Sdf_ParseVariableExpressionImpl(const std::string& expr)
 {
     namespace pegtl = PXR_PEGTL_NAMESPACE;
 
@@ -794,12 +1215,12 @@ Sdf_ParseVariableExpression(const std::string& expr)
             pegtl::parse<Expression, Action, Errors>(in, context);
         
         if (!parseSuccess) {
-            return { nullptr, { "Unable to parse expression" } };
+            return { std::nullopt, { "Unable to parse expression" } };
         }
     }
     catch (const pegtl::parse_error& e) {
         return { 
-            nullptr, 
+            std::nullopt,
 
             // XXX: "at character" is probably incorrect if the expression
             // contains Unicode strings?
@@ -810,15 +1231,45 @@ Sdf_ParseVariableExpression(const std::string& expr)
         };
      }
 
+    return { std::move(context), {} };
+}
+
+Sdf_VariableExpressionParserResult
+Sdf_ParseVariableExpression(const std::string& expr)
+{
+    ParseResult result = Sdf_ParseVariableExpressionImpl(expr);
+    if (!result.context) {
+        return { nullptr, std::move(result.errMsg) };
+    }
+
     std::string errMsg;
     std::unique_ptr<Impl::Node> exprNode = 
-        context.CreateExpressionNode(&errMsg);
+        result.context->CreateExpressionNode(&errMsg);
 
     if (!exprNode) {
         return { nullptr, { std::move(errMsg) } };
     }
 
     return { std::move(exprNode), {} };
+}
+
+Sdf_VariableExpressionASTParserResult
+Sdf_ParseVariableExpressionAST(const std::string& expr)
+{
+    ParseResult result = Sdf_ParseVariableExpressionImpl(expr);
+    if (!result.context) {
+        return { nullptr, std::move(result.errMsg) };
+    }
+
+    std::string errMsg;
+    std::unique_ptr<ASTNodes::Node> astNode = 
+        result.context->CreateASTNode(&errMsg);
+
+    if (!astNode) {
+        return { nullptr, { std::move(errMsg) } };
+    }
+
+    return { std::move(astNode), {} };
 }
 
 bool

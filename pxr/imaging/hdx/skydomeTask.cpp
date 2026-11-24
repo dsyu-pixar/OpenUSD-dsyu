@@ -15,6 +15,7 @@
 #include "pxr/imaging/hdSt/simpleLightingShader.h"
 #include "pxr/imaging/hdSt/textureHandle.h"
 #include "pxr/imaging/hdSt/textureObject.h"
+#include "pxr/imaging/hdSt/samplerObject.h"
 
 #include "pxr/imaging/hd/renderDelegate.h"
 #include "pxr/imaging/hd/tokens.h"
@@ -36,6 +37,7 @@ HdxSkydomeTask::HdxSkydomeTask(HdSceneDelegate* delegate, SdfPath const& id)
     , _setupTask()
     , _settingsVersion(0)
     , _skydomeVisibility(true)
+    , _parameterData({GfMatrix4f(1.0f), GfMatrix4f(1.0f), GfMatrix4f(1.0f)})
 {
 }
 
@@ -138,11 +140,27 @@ HdxSkydomeTask::Execute(HdTaskContext* ctx)
 
     const bool haveColorAOV = !gfxCmdsDesc.colorTextures.empty();
 
+    // Don't try to render the skydome in an incompatible AOV, for example
+    // when doing primId visualization.
+    const bool colorAovIsNonFloatFormat =
+        haveColorAOV &&
+        !gfxCmdsDesc.colorAttachmentDescs.empty() &&
+        !HgiIsFloatFormat(gfxCmdsDesc.colorAttachmentDescs[0].format);
+
+    const bool needClear =
+        (gfxCmdsDesc.depthAttachmentDesc.loadOp == HgiAttachmentLoadOpClear) ||
+        (!gfxCmdsDesc.colorAttachmentDescs.empty() &&
+         (gfxCmdsDesc.colorAttachmentDescs[0].loadOp == HgiAttachmentLoadOpClear));
+
     // If the skydome is not camera visible in a colorAOV or there is no
-    // domelight/skydomeTexture, clear the AOVs
-    if (!_skydomeVisibility || !haveColorAOV ||
+    // domelight/skydomeTexture, we can bail.
+    if (!_skydomeVisibility || !haveColorAOV || colorAovIsNonFloatFormat ||
         !haveDomeLight || !_GetSkydomeTexture(ctx)) {
-        _GetHgi()->SubmitCmds(_GetHgi()->CreateGraphicsCmds(gfxCmdsDesc).get());
+        if (needClear) {
+            // If we need to clear, do so before the early out.
+            _GetHgi()->SubmitCmds(
+                _GetHgi()->CreateGraphicsCmds(gfxCmdsDesc).get());
+        }
         return;
     }
 
@@ -156,13 +174,14 @@ HdxSkydomeTask::Execute(HdTaskContext* ctx)
         hdStRenderPassState->GetWorldToViewMatrix().GetInverse());
 
     // Update the Parameter Buffer if needed
-    if (_UpdateParameterBuffer(invProjMatrix, viewToWorldMatrix, lightTransform)){
+    if (_UpdateParameterBuffer(
+                invProjMatrix, viewToWorldMatrix, lightTransform)){
         constexpr size_t byteSize = sizeof(_ParameterBuffer);
         _compositor->SetShaderConstants(byteSize, &_parameterData);
     }
     
     // Bind the skydome texture 
-    _compositor->BindTextures({_skydomeTexture});
+    _compositor->BindTextures({_skydomeTexture}, {_skydomeSampler});
 
     // Get the viewport size
     GfVec4i viewport = hdStRenderPassState->ComputeViewport();
@@ -178,6 +197,15 @@ HdxSkydomeTask::Execute(HdTaskContext* ctx)
         : gfxCmdsDesc.colorResolveTextures[0];
     HgiTextureHandle depthDst = gfxCmdsDesc.depthTexture;
     HgiTextureHandle depthResolveDst = gfxCmdsDesc.depthResolveTexture;
+
+    // Pass in clear info.
+    if (needClear) {
+        GfVec4f clearColor = gfxCmdsDesc.colorAttachmentDescs.empty()
+            ? GfVec4f(0)
+            : gfxCmdsDesc.colorAttachmentDescs[0].clearValue;
+        GfVec4f clearDepth = gfxCmdsDesc.depthAttachmentDesc.clearValue;
+        _compositor->SetClearState(clearColor, clearDepth);
+    }
 
     // Draw the Skydome 
     _compositor->Draw(colorDst, colorResolveDst,
@@ -214,23 +242,30 @@ HdxSkydomeTask::_GetSkydomeTexture(HdTaskContext* ctx)
     if (!haveLightingShader) {
         return false;
     }
-    HdStSimpleLightingShader *simpleLightingShader = 
-        dynamic_cast<HdStSimpleLightingShader*>(lightingShader.get());
+    const auto * const simpleLightingShader = 
+        dynamic_cast<const HdStSimpleLightingShader*>(lightingShader.get());
     if (!simpleLightingShader) {
         return false;
     }
-    HdStTextureHandleSharedPtr domeLightTextureHandle = 
-        simpleLightingShader->GetDomeLightEnvironmentTextureHandle();
-    if (!domeLightTextureHandle) {
+    const HdStTextureHandleSharedPtr domeLightCubemapHandle = 
+        simpleLightingShader->GetDomeLightEnvironmentCubemapTextureHandle();
+    if (!domeLightCubemapHandle) {
         return false;
     }
-    const HdStUvTextureObject *const domeLightTextureObject =
-        dynamic_cast<HdStUvTextureObject*>(
-            domeLightTextureHandle->GetTextureObject().get());
+    const auto * const domeLightTextureObject =
+        dynamic_cast<const HdStUvTextureObject*>(
+            domeLightCubemapHandle->GetTextureObject().get());
     if (!domeLightTextureObject->IsValid()) {
         return false;
     }
+    const auto * const domeLightSamplerObject =
+        dynamic_cast<const HdStUvSamplerObject*>(
+            domeLightCubemapHandle->GetSamplerObject().get());
+    if (!domeLightSamplerObject) {
+        return false;
+    }
     _skydomeTexture = domeLightTextureObject->GetTexture();
+    _skydomeSampler = domeLightSamplerObject->GetSampler();
 
     return true;
 }
@@ -243,16 +278,22 @@ HdxSkydomeTask::_SetFragmentShader()
     fragDesc.shaderStage = HgiShaderStageFragment;
 
     HgiShaderFunctionAddStageInput(&fragDesc, "uvOut", "vec2");
-    HgiShaderFunctionAddTexture(&fragDesc, "skydomeTexture");
+    HgiShaderFunctionAddTexture(&fragDesc,
+        "skydomeTexture",
+        /* bindIndex = */0,
+        /* dimensions = */2,
+        HgiFormatFloat16Vec4,
+        HgiShaderTextureTypeCubemapTexture);
     HgiShaderFunctionAddStageOutput(&fragDesc, "hd_FragColor", "vec4", "color");
     HgiShaderFunctionAddStageOutput(
-        &fragDesc, "gl_FragDepth", "float", "depth(any)");
+        &fragDesc, "gl_FragDepth", "float", HgiShaderKeywordTokens->hdDepthAny);
 
     // The order of the constant parameters has to match the order in the 
     // _ParameterBuffer struct
     HgiShaderFunctionAddConstantParam(&fragDesc, "invProjMatrix", "mat4");
     HgiShaderFunctionAddConstantParam(&fragDesc, "viewToWorld", "mat4");
     HgiShaderFunctionAddConstantParam(&fragDesc, "lightTransform", "mat4");
+    // XXX: add farPlane in case we mess with depth range?
 
     _compositor->SetProgram(
         HdxPackageSkydomeShader(), _tokens->skydomeFrag, fragDesc);

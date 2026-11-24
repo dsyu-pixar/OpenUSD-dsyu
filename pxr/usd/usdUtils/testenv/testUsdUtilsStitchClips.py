@@ -5,9 +5,8 @@
 # Licensed under the terms set forth in the LICENSE.txt file available at
 # https://openusd.org/license.
 
-from __future__ import print_function
 
-from pxr import Sdf, Tf, UsdUtils, Vt, Gf
+from pxr import Sdf, Tf, Usd, UsdUtils, Vt, Gf, Ts
 import unittest
 
 class TestUsdUtilsStitchClips(unittest.TestCase):
@@ -253,6 +252,46 @@ class TestUsdUtilsStitchClips(unittest.TestCase):
         for k in ['active', 'times', 'manifestAssetPath',
                   'primPath', 'assetPaths']:
             self.assertEqual(expectedValues[k], actualValues[k])
-        
+
+    def test_StitchClipsWithSplines(self):
+        """Test that the expectation of the spline format makes it to the 
+           manifest, and spline definitions are included in the stitched
+           topology"""
+
+        def _MakeSplineClip(fileName, primPath, attrName, time, value):
+            stage = Usd.Stage.Open(Sdf.Layer.CreateNew(fileName))
+            prim  = stage.DefinePrim(primPath)
+            attr  = prim.CreateAttribute(attrName, Sdf.ValueTypeNames.Double)
+            spline = Ts.Spline()
+            spline.SetKnot(Ts.Knot(time=time, value=value,
+                                nextInterp=Ts.InterpCurve))
+            attr.SetSpline(spline)
+            stage.Save()
+            return fileName
+
+        primPath = Sdf.Path('/Model/Foo')
+        clips = [_MakeSplineClip('splineClip%d.usda' % i, primPath,
+                                 'splineAttr', 100 + i, float(i))
+                 for i in range(1, 4)]
+
+        result = Sdf.Layer.CreateNew('splineResult.usd')
+        UsdUtils.StitchClips(result, clips, primPath, 101, 103)
+
+        attrPath = primPath.AppendProperty('splineAttr')
+
+        # Manifest marks the attribute with "spline"
+        manifest = Sdf.Layer.FindOrOpen('splineResult.manifest.usd')
+        self.assertTrue(manifest)
+        manifestAttr = manifest.GetAttributeAtPath(attrPath)
+        self.assertTrue(manifestAttr)
+        self.assertTrue(manifestAttr.HasInfo('spline'))
+
+        # Topology keeps the attribute but not the spline data
+        topology = Sdf.Layer.FindOrOpen('splineResult.topology.usd')
+        self.assertTrue(topology)
+        topologyAttr = topology.GetAttributeAtPath(attrPath)
+        self.assertTrue(topologyAttr)
+        self.assertFalse(topologyAttr.HasInfo('spline'))
+
 if __name__ == '__main__':
     unittest.main()

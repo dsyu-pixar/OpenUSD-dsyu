@@ -5,6 +5,8 @@
 // https://openusd.org/license.
 //
 #include "pxr/usdImaging/usdImaging/materialAdapter.h"
+#include "pxr/base/tf/denseHashSet.h"
+#include "pxr/base/tf/stringUtils.h"
 #include "pxr/usdImaging/usdImaging/dataSourceMaterial.h"
 #include "pxr/usdImaging/usdImaging/delegate.h"
 #include "pxr/usdImaging/usdImaging/indexProxy.h"
@@ -86,6 +88,170 @@ UsdImagingMaterialAdapter::GetImagingSubprimData(
     return nullptr;
 }
 
+// Generate a terminal data source locator using the terminal
+// attribute name.
+HdDataSourceLocator
+_CreateTerminalLocator(const TfToken& output)
+{
+    const std::vector<std::string> baseNameComponents
+        = SdfPath::TokenizeIdentifier(output);
+
+    // If it's not namespaced use the universal token.
+    if (baseNameComponents.size() == 1u) {
+        return HdDataSourceLocator(
+            HdMaterialSchema::GetSchemaToken(),
+            HdMaterialSchemaTokens->universalRenderContext,
+            HdMaterialSchemaTokens->terminals, TfToken(baseNameComponents[0])
+        );
+    }
+    // If it's namespaced (eg. mtlx) include that.
+    else if (baseNameComponents.size() > 1u) {
+        return HdDataSourceLocator(
+            HdMaterialSchema::GetSchemaToken(), TfToken(baseNameComponents[0]),
+            HdMaterialSchemaTokens->terminals,
+            TfToken(SdfPath::StripPrefixNamespace(output, baseNameComponents[0]).first)
+        );
+    }
+
+    // Just point to the whole data source.
+    return HdMaterialSchema::GetDefaultLocator();
+}
+
+// Given a Material \p materialPrim which contains a NodeGraph \p nodeGraphPrim,
+// look through \p properties for inputs on the NodeGraph.
+// Return a set of locator names for Shader prims which are connected to 
+// affected input properties of nodeGraphPrim
+TfDenseHashSet<TfToken, TfToken::HashFunctor>
+_CreateNodeGraphLocators(
+    const UsdPrim& materialPrim, 
+    const UsdPrim& nodeGraphPrim,
+    const TfTokenVector& properties)
+{
+    TRACE_FUNCTION();
+    
+    TfDenseHashSet<TfToken, TfToken::HashFunctor> shaderNames;
+    const UsdShadeNodeGraph nodeGraph(nodeGraphPrim);
+    if (!nodeGraph) {
+        return shaderNames;
+    }
+
+    // A NodeGraph can contain several other NodeGraphs
+    // Compute transitive consumers to get to the end of the chain
+    const UsdShadeNodeGraph::InterfaceInputConsumersMap interfaceMap = 
+        nodeGraph.ComputeInterfaceInputConsumersMap(
+            /*computeTransitiveConsumers=*/true);
+    if (interfaceMap.empty()) {
+        return shaderNames;
+    }
+
+    const SdfPath& primPath = materialPrim.GetPath();
+    for (const TfToken& propName : properties) {
+        if (!TfStringStartsWith(propName, UsdShadeTokens->inputs)) {
+            continue;
+        }
+
+        const TfToken inputName(propName.GetString().substr(
+            UsdShadeTokens->inputs.size()));
+        const UsdShadeInput nodeGraphInput = nodeGraph.GetInput(inputName);
+        if (!nodeGraphInput) {
+            continue;
+        }
+
+        auto interfaceIt = interfaceMap.find(nodeGraphInput);
+        if (interfaceIt == interfaceMap.end()) {
+            continue;
+        }
+
+        for (const UsdShadeInput& shaderInput : interfaceIt->second) {
+            const SdfPath shaderPath = shaderInput.GetPrim().GetPath();
+            const SdfPath relativePath = shaderPath.MakeRelativePath(primPath);
+            shaderNames.insert(relativePath.GetAsToken());
+        }
+    }
+
+    return shaderNames;
+}
+
+// Hash map used to track seen connections during notification processing.
+using _ConnectionSet = TfHashSet<UsdShadeConnectionSourceInfo, TfHash>;
+
+// Recusively check nodes starting at the terminal to find the dirty prim.
+// If the dirty prim is the source material also check the specific dirty
+// property.
+bool
+_IsConnectionDirty(
+    const UsdPrim& dirtyPrim,
+    const TfTokenVector& dirtyProperties,
+    const UsdShadeMaterial& material,
+    const UsdShadeConnectionSourceInfo& connection,
+    _ConnectionSet& seenConnections)
+{
+    if (seenConnections.find(connection) != seenConnections.end()) {
+        // Already visited this connection and determined it is not dirty.
+        return false;
+    }
+    if (!connection.IsValid()) {
+        seenConnections.insert(connection);
+        return false;
+    }
+
+    // If we reach the root material only dirty if we are connected to the
+    // specific property which is dirty and don't recurse further.
+    if (connection.source.GetPrim() == material.GetPrim()) {
+        if (connection.source.GetPrim() == dirtyPrim) {
+            for (const TfToken& dirtyProperty : dirtyProperties) {
+                if ((connection.sourceType == UsdShadeAttributeType::Output
+                     && dirtyProperty
+                         == connection.source.GetOutput(connection.sourceName)
+                                .GetFullName())
+                    || (connection.sourceType == UsdShadeAttributeType::Input
+                        && dirtyProperty
+                            == connection.source.GetInput(connection.sourceName)
+                                   .GetFullName())) {
+                    return true;
+                }
+            }
+        }
+        seenConnections.insert(connection);
+        return false;
+    }
+
+    // We are connected to the dirty prim
+    if (connection.source.GetPrim() == dirtyPrim) {
+        return true;
+    }
+
+    // If the output we connected to had a direct connection check this.
+    if (connection.sourceType == UsdShadeAttributeType::Output) {
+        const UsdShadeOutput& output
+            = connection.source.GetOutput(connection.sourceName);
+        if (output) {
+            for (UsdShadeConnectionSourceInfo& outputConnection :
+                 output.GetConnectedSources()) {
+                if (_IsConnectionDirty(
+                        dirtyPrim, dirtyProperties, material,
+                        outputConnection, seenConnections)) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    // Check the input connections on the node.
+    for (UsdShadeInput& input : connection.source.GetInputs()) {
+        for (UsdShadeConnectionSourceInfo& inputConnection :
+             input.GetConnectedSources()) {
+            if (_IsConnectionDirty(dirtyPrim, dirtyProperties, material,
+                                   inputConnection, seenConnections)) {
+                return true;
+            }
+        }
+    }
+
+    seenConnections.insert(connection);
+    return false;
+}
+
 HdDataSourceLocatorSet
 UsdImagingMaterialAdapter::InvalidateImagingSubprim(
         UsdPrim const& prim,
@@ -93,12 +259,70 @@ UsdImagingMaterialAdapter::InvalidateImagingSubprim(
         TfTokenVector const& properties,
         const UsdImagingPropertyInvalidationType invalidationType)
 {
-    if (subprim.IsEmpty()) {
-        return UsdImagingDataSourceMaterialPrim::Invalidate(
-            prim, subprim, properties, invalidationType);
+    HdDataSourceLocatorSet result;
+
+    UsdShadeMaterial material(prim);
+    if (!material) {
+        return result;
     }
 
-    return HdDataSourceLocatorSet();
+    // If we dirtied an interface input dirty that terminal
+    for (UsdShadeOutput& output : material.GetOutputs()) {
+        bool terminalDirty = false;
+        for (const TfToken& property : properties) {
+            if (output.GetFullName() == property) {
+                // Invalidate the affected terminal.
+                result.insert(_CreateTerminalLocator(output.GetBaseName()));
+                // Due to the way UsdImagingDataSourceMaterial::Get() returns
+                // a retained nodegraph, and only includes nodes that were
+                // reachable at the time, we must also invalidate the nodes
+                // locator here as well.
+                result.insert(HdMaterialSchema::GetDefaultLocator());
+                terminalDirty = true;
+                break;
+            }
+        }
+        if (terminalDirty) {
+            continue;
+        }
+        for (UsdShadeConnectionSourceInfo& connection :
+             output.GetConnectedSources()) {
+            _ConnectionSet seenConnections;
+            if (_IsConnectionDirty(prim, properties, material, connection,
+                                   seenConnections)) {
+                result.insert(_CreateTerminalLocator(output.GetBaseName()));
+                // An upstream node or material interface input changed.
+                // Invalidate the nodes locator so node parameter values
+                // (including those resolved via material interface connections)
+                // are re-read.  The same logic applies as for the output-dirty
+                // case above.  Fixes FLOW-7634.
+                result.insert(HdMaterialSchema::GetDefaultLocator());
+            }
+        }
+    }
+
+    // Otherwise dirty our whole material
+    if (result.IsEmpty() && subprim.IsEmpty()) {
+        result.insert(UsdImagingDataSourceMaterialPrim::Invalidate(
+            prim, subprim, properties, invalidationType));
+    }
+
+    return result;
+}
+
+// XXX From dataSourceMaterial.cpp; can we share this somewhere?
+// Extract the renderContext from an output name, ex:
+// "outputs:surface" -> ""
+// "outputs:ri:surface" -> "ri"
+static TfToken
+_GetRenderContextForShaderOutput(UsdShadeOutput const& output)
+{
+    TfToken ns = output.GetAttr().GetNamespace();
+    if (TfStringStartsWith(ns, UsdShadeTokens->outputs)) {
+        return TfToken(ns.GetString().substr(UsdShadeTokens->outputs.size()));
+    }
+    // Empty namespace, e.g. "outputs:foo" -> ""
+    return TfToken();
 }
 
 HdDataSourceLocatorSet
@@ -111,9 +335,84 @@ UsdImagingMaterialAdapter::InvalidateImagingSubprimFromDescendent(
 {
     HdDataSourceLocatorSet result;
 
-    //TODO, Invalidating whole material until we figure out an efficient
-    //      way to determine which render context this node is in (if any)
-    result.insert(HdMaterialSchema::GetDefaultLocator());
+    UsdShadeMaterial material(prim);
+    if (!TF_VERIFY(material)) {
+        return result;
+    }
+
+    // Check whether the only changes made were UI related.
+    // If so do not invalidate the material, since UI changes are not propagated
+    // to Hydra
+    bool onlyUIChanges = true;
+    static const std::string uiNodegraph("ui:nodegraph:");
+    for (const TfToken& property : properties) {
+        if (!TfStringStartsWith(property.GetString(), uiNodegraph)) {
+            onlyUIChanges = false;
+            break;
+        }
+    }
+
+    if (onlyUIChanges) {
+        return result;
+    }
+
+    // Find which terminal (if any) we should dirty
+    for (UsdShadeOutput& output : material.GetOutputs()) {
+        bool outputIsDirty = false;
+        for (UsdShadeConnectionSourceInfo& connection :
+             output.GetConnectedSources()) {
+            _ConnectionSet seenConnections;
+            if (_IsConnectionDirty(descendentPrim, properties, material,
+                                   connection, seenConnections)) {
+                result.insert(_CreateTerminalLocator(output.GetBaseName()));
+                outputIsDirty = true;
+                break;
+            }
+        }
+        if (outputIsDirty) {
+            // Dirty the associated shader nodes used by this output in both 
+            // the current and "all" context.
+            TfDenseHashSet<TfToken, TfToken::HashFunctor> nodeNames;
+
+            // Specifically only match prims defined as NodeGraph, and not
+            // all prims that pass an IsA test, since Material prims would
+            // otherwise pass this test
+            if (descendentPrim.GetTypeName() == UsdShadeTokens->NodeGraph) {
+                nodeNames = _CreateNodeGraphLocators(
+                    prim, descendentPrim, properties);
+            } else {
+                // descendentPrim could be nested within NodeGraph prims.
+                // In that case the name of the locator should include 
+                // the NodeGraph names.
+                // Example: 
+                // a Shader prim located at 
+                // /Asset/Scope/Material/OuterGroup/InnerGroup/Shader
+                // will have a locator of 'OuterGroup/InnerGroup/Shader'
+                const SdfPath relativePath = 
+                    descendentPrim.GetPath().MakeRelativePath(
+                        prim.GetPath());
+                nodeNames.insert(relativePath.GetAsToken());
+            }
+
+            for (TfToken const& renderContext:
+                 { _GetRenderContextForShaderOutput(output),
+                   HdMaterialSchemaTokens->all })
+            {
+                const HdDataSourceLocator nodesLocator = 
+                    HdMaterialSchema::GetDefaultLocator()
+                        .Append(renderContext)
+                        .Append(HdMaterialNetworkSchemaTokens->nodes);
+                for (const TfToken& nodeName : nodeNames) {
+                    result.insert(nodesLocator.Append(nodeName));
+                }
+            }
+        }
+    }
+
+    // Otherwise dirty our whole material
+    if (result.IsEmpty()) {
+        result.insert(HdMaterialSchema::GetDefaultLocator());
+    }
 
     return result;
 }
@@ -243,8 +542,9 @@ UsdImagingMaterialAdapter::ProcessPropertyChange(
     SdfPath const& cachePath,
     TfToken const& propertyName)
 {
-    if (propertyName == UsdGeomTokens->visibility) {
-        // Materials aren't affected by visibility
+    if (propertyName == UsdGeomTokens->visibility ||
+        UsdGeomXformable::IsTransformationAffectedByAttrNamed(propertyName)) {
+        // Materials aren't affected by visibility or transforms
         return HdChangeTracker::Clean;
     }
 
@@ -396,7 +696,7 @@ UsdImagingMaterialAdapter::GetMaterialResource(UsdPrim const &prim,
         VtValue value;
         attr.Get(&value);
 
-        configDict.SetValueAtPath(name, value);
+        configDict.insert({name, value});
     }
     networkMap.config = configDict;
 

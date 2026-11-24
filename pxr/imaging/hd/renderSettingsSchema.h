@@ -40,11 +40,15 @@ PXR_NAMESPACE_OPEN_SCOPE
     (renderSettings) \
     (namespacedSettings) \
     (active) \
+    (camera) \
+    (disableMotionBlur) \
+    (disableDepthOfField) \
     (renderProducts) \
     (includedPurposes) \
     (materialBindingPurposes) \
     (renderingColorSpace) \
-    (shutterInterval) \
+    (unionedSamplingInterval) \
+    (useForLegacyRenderDelegateSettings) \
 
 TF_DECLARE_PUBLIC_TOKENS(HdRenderSettingsSchemaTokens, HD_API,
     HD_RENDER_SETTINGS_SCHEMA_TOKENS);
@@ -52,6 +56,8 @@ TF_DECLARE_PUBLIC_TOKENS(HdRenderSettingsSchemaTokens, HD_API,
 //-----------------------------------------------------------------------------
 
 
+/// \class HdRenderSettingsSchema
+///
 class HdRenderSettingsSchema : public HdSchema
 {
 public:
@@ -85,10 +91,19 @@ public:
     /// @{
 
     HD_API
-    HdContainerDataSourceHandle GetNamespacedSettings() const;
+    HdSampledDataSourceContainerSchema GetNamespacedSettings() const;
 
     HD_API
     HdBoolDataSourceHandle GetActive() const;
+
+    HD_API
+    HdPathDataSourceHandle GetCamera() const;
+
+    HD_API
+    HdBoolDataSourceHandle GetDisableMotionBlur() const;
+
+    HD_API
+    HdBoolDataSourceHandle GetDisableDepthOfField() const;
 
     HD_API
     HdRenderProductVectorSchema GetRenderProducts() const;
@@ -110,7 +125,23 @@ public:
     /// close times and is expected to span the union of the shutter intervals
     /// of cameras used in generating the render artifacts.
     HD_API
-    HdVec2dDataSourceHandle GetShutterInterval() const; 
+    HdVec2dDataSourceHandle GetUnionedSamplingInterval() const;
+
+    /// A temporary field to transition to in-band render settings. This field
+    /// will not exist in a pure Hydra 2.0 world since render settings are
+    /// always communicated in-band through the scene index. It mitigates the
+    /// risk for HdRenderDelegate's implementing both in-band render settings
+    /// and the legacy HdRenderDelegate::SetRenderSettings and those
+    /// implementations interact in complicated ways. That is, applications
+    /// can use, for example, an env var to switch between the new mechanism
+    /// and direct calls to HdRenderDelegate::SetRenderSettings to revert to
+    /// the old behavior while we address fall-out. This field changes the
+    /// emulation layer HdRenderDelegateAdapterRenderer, to set the legacy
+    /// render settings on the legacy render delegate using
+    /// HdRenderDelegate::SetRenderSetting with the values provided by this
+    /// schema.
+    HD_API
+    HdBoolDataSourceHandle GetUseForLegacyRenderDelegateSettings() const; 
 
     /// @}
 
@@ -146,6 +177,18 @@ public:
     HD_API
     static const HdDataSourceLocator &GetActiveLocator();
 
+    /// Prim-level relative data source locator to locate camera.
+    HD_API
+    static const HdDataSourceLocator &GetCameraLocator();
+
+    /// Prim-level relative data source locator to locate disableMotionBlur.
+    HD_API
+    static const HdDataSourceLocator &GetDisableMotionBlurLocator();
+
+    /// Prim-level relative data source locator to locate disableDepthOfField.
+    HD_API
+    static const HdDataSourceLocator &GetDisableDepthOfFieldLocator();
+
     /// Prim-level relative data source locator to locate renderProducts.
     HD_API
     static const HdDataSourceLocator &GetRenderProductsLocator();
@@ -162,9 +205,13 @@ public:
     HD_API
     static const HdDataSourceLocator &GetRenderingColorSpaceLocator();
 
-    /// Prim-level relative data source locator to locate shutterInterval.
+    /// Prim-level relative data source locator to locate unionedSamplingInterval.
     HD_API
-    static const HdDataSourceLocator &GetShutterIntervalLocator();
+    static const HdDataSourceLocator &GetUnionedSamplingIntervalLocator();
+
+    /// Prim-level relative data source locator to locate useForLegacyRenderDelegateSettings.
+    HD_API
+    static const HdDataSourceLocator &GetUseForLegacyRenderDelegateSettingsLocator();
     /// @} 
 
     /// \name Schema construction
@@ -182,11 +229,15 @@ public:
     BuildRetained(
         const HdContainerDataSourceHandle &namespacedSettings,
         const HdBoolDataSourceHandle &active,
+        const HdPathDataSourceHandle &camera,
+        const HdBoolDataSourceHandle &disableMotionBlur,
+        const HdBoolDataSourceHandle &disableDepthOfField,
         const HdVectorDataSourceHandle &renderProducts,
         const HdTokenArrayDataSourceHandle &includedPurposes,
         const HdTokenArrayDataSourceHandle &materialBindingPurposes,
         const HdTokenDataSourceHandle &renderingColorSpace,
-        const HdVec2dDataSourceHandle &shutterInterval
+        const HdVec2dDataSourceHandle &unionedSamplingInterval,
+        const HdBoolDataSourceHandle &useForLegacyRenderDelegateSettings
     );
 
     /// \class HdRenderSettingsSchema::Builder
@@ -205,6 +256,15 @@ public:
         Builder &SetActive(
             const HdBoolDataSourceHandle &active);
         HD_API
+        Builder &SetCamera(
+            const HdPathDataSourceHandle &camera);
+        HD_API
+        Builder &SetDisableMotionBlur(
+            const HdBoolDataSourceHandle &disableMotionBlur);
+        HD_API
+        Builder &SetDisableDepthOfField(
+            const HdBoolDataSourceHandle &disableDepthOfField);
+        HD_API
         Builder &SetRenderProducts(
             const HdVectorDataSourceHandle &renderProducts);
         HD_API
@@ -217,8 +277,11 @@ public:
         Builder &SetRenderingColorSpace(
             const HdTokenDataSourceHandle &renderingColorSpace);
         HD_API
-        Builder &SetShutterInterval(
-            const HdVec2dDataSourceHandle &shutterInterval);
+        Builder &SetUnionedSamplingInterval(
+            const HdVec2dDataSourceHandle &unionedSamplingInterval);
+        HD_API
+        Builder &SetUseForLegacyRenderDelegateSettings(
+            const HdBoolDataSourceHandle &useForLegacyRenderDelegateSettings);
 
         /// Returns a container data source containing the members set thus far.
         HD_API
@@ -227,11 +290,15 @@ public:
     private:
         HdContainerDataSourceHandle _namespacedSettings;
         HdBoolDataSourceHandle _active;
+        HdPathDataSourceHandle _camera;
+        HdBoolDataSourceHandle _disableMotionBlur;
+        HdBoolDataSourceHandle _disableDepthOfField;
         HdVectorDataSourceHandle _renderProducts;
         HdTokenArrayDataSourceHandle _includedPurposes;
         HdTokenArrayDataSourceHandle _materialBindingPurposes;
         HdTokenDataSourceHandle _renderingColorSpace;
-        HdVec2dDataSourceHandle _shutterInterval;
+        HdVec2dDataSourceHandle _unionedSamplingInterval;
+        HdBoolDataSourceHandle _useForLegacyRenderDelegateSettings;
 
     };
 

@@ -14,10 +14,6 @@
 #include "pxr/pxr.h"
 #include "pxr/external/boost/python/common.hpp"
 
-#ifndef PXR_USE_INTERNAL_BOOST_PYTHON
-#include <boost/python/suite/indexing/detail/indexing_suite_detail.hpp>
-#else
-
 # include "pxr/external/boost/python/extract.hpp"
 # include "pxr/external/boost/python/detail/integer_cast.hpp"
 # include "pxr/external/boost/python/detail/type_traits.hpp"
@@ -227,7 +223,13 @@ namespace PXR_BOOST_NAMESPACE { namespace python { namespace detail {
         {
             for (const_iterator i = proxies.begin(); i != proxies.end(); ++i)
             {
-                if ((*i)->ob_refcnt <= 0)
+                if (
+#if PY_VERSION_HEX < 0x03090000
+                (*i)->ob_refcnt
+#else
+                Py_REFCNT(*i)
+#endif
+                <= 0)
                 {
                     PyErr_SetString(PyExc_RuntimeError, 
                         "Invariant: Proxy vector in an inconsistent state");
@@ -760,5 +762,4 @@ namespace PXR_BOOST_NAMESPACE { namespace python { namespace detail {
 
 } // namespace PXR_BOOST_NAMESPACE
 
-#endif // PXR_USE_INTERNAL_BOOST_PYTHON
 #endif // PXR_EXTERNAL_BOOST_PYTHON_SUITE_INDEXING_DETAIL_INDEXING_SUITE_DETAIL_HPP

@@ -7,8 +7,11 @@
 
 #include "pxr/imaging/hgiVulkan/shaderGenerator.h"
 #include "pxr/imaging/hgiVulkan/conversions.h"
+#include "pxr/imaging/hgiVulkan/descriptorSetLayouts.h"
 #include "pxr/imaging/hgiVulkan/hgi.h"
 #include "pxr/imaging/hgi/tokens.h"
+
+#include "pxr/base/trace/trace.h"
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -47,6 +50,7 @@ HgiVulkanShaderGenerator::HgiVulkanShaderGenerator(
   , _textureBindIndexStart(0)
   , _inLocationIndex(0)
   , _outLocationIndex(0)
+  , _descriptorSetLayoutsAdded(false)
 {
     // Write out all GL shaders and add to shader sections
 
@@ -186,6 +190,20 @@ HgiVulkanShaderGenerator::_WriteExtensions(std::ostream &ss)
     const bool builtinBarycentricsEnabled = _hgi->GetCapabilities()->
         IsSet(HgiDeviceCapabilitiesBitsBuiltinBarycentrics);
 
+    // Control flow attributes
+    ss <<   "#if defined(GL_EXT_control_flow_attributes)\n"
+                "\t#extension GL_EXT_control_flow_attributes: require\n"
+                "\t#define HGI_COMPILER_ATTR_UNROLL [[unroll]]\n"
+                "\t#define HGI_COMPILER_ATTR_DONT_UNROLL [[dont_unroll]]\n"
+                "\t#define HGI_COMPILER_ATTR_FLATTEN [[flatten]]\n"
+                "\t#define HGI_COMPILER_ATTR_DONT_FLATTEN [[dont_flatten]]\n"
+            "#else\n"
+                "\t#define HGI_COMPILER_ATTR_UNROLL\n"
+                "\t#define HGI_COMPILER_ATTR_DONT_UNROLL\n"
+                "\t#define HGI_COMPILER_ATTR_FLATTEN\n"
+                "\t#define HGI_COMPILER_ATTR_DONT_FLATTEN\n"
+            "#endif\n";
+
     if (_GetShaderStage() & HgiShaderStageVertex) {
         if (glslVersion < 460 && shaderDrawParametersEnabled) {
             ss << "#extension GL_ARB_shader_draw_parameters : require\n";
@@ -228,7 +246,8 @@ HgiVulkanShaderGenerator::_WriteMacros(std::ostream &ss)
           "#define ATOMIC_COMP_SWAP(a, expected, desired) atomicCompSwap(a, "
           "expected, desired)\n"
           "#define atomic_int int\n"
-          "#define atomic_uint uint\n";
+          "#define atomic_uint uint\n"
+          "#define hd_SampleMask gl_SampleMask[0]\n";
 
     // Advertise to shader code that we support double precision math
     ss << "\n"
@@ -265,15 +284,30 @@ HgiVulkanShaderGenerator::_WriteTextures(
                 ""});
         }
 
+        const uint32_t textureBindIndex =
+            _textureBindIndexStart + desc.bindIndex;
+
         CreateShaderSection<HgiVulkanTextureShaderSection>(
             desc.nameInShader,
-            _textureBindIndexStart + desc.bindIndex,
+            textureBindIndex,
             desc.dimensions,
             desc.format,
             desc.textureType,
             desc.arraySize,
             desc.writable,
             attrs);
+
+        const VkDescriptorType descriptorType =
+            desc.writable
+                ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
+                : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        const uint32_t descriptorCount =
+            desc.arraySize > 0
+                ? desc.arraySize
+                : 1;
+
+        _AddDescriptorSetLayoutBinding(
+            textureBindIndex, descriptorType, descriptorCount);
     }
 }
 
@@ -325,12 +359,21 @@ HgiVulkanShaderGenerator::_WriteBuffers(
                 bufferDescription.writable,
                 attrs);
         }
-				
+
         // In Vulkan, buffers and textures cannot have the same binding index.
         // Start textures right after the last buffer. 
         // See HgiVulkanResourceBindings for details.
         _textureBindIndexStart =
             std::max(_textureBindIndexStart, bindIndex + 1);
+
+        const VkDescriptorType descriptorType =
+            isUniformBufferBinding
+                ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
+                : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        const uint32_t descriptorCount = 1;
+
+        _AddDescriptorSetLayoutBinding(
+            bindIndex, descriptorType, descriptorCount);
     }
 }
 
@@ -344,15 +387,16 @@ HgiVulkanShaderGenerator::_WriteInOuts(
     const static std::set<std::string> takenOutParams {
         "gl_Position",
         "gl_FragColor",
-        "gl_FragDepth",
         "gl_PointSize",
         "gl_CullDistance",
+        "hd_SampleMask",
     };
 
     // Some params are built-in, but we may want to declare them in the shader 
     // anyway, such as to declare their array size.
     const static std::set<std::string> takenOutParamsToDeclare {
-        "gl_ClipDistance"
+        "gl_ClipDistance",
+        "gl_FragDepth"
     };
 
     const static std::unordered_map<std::string, std::string> takenInParams {
@@ -372,7 +416,14 @@ HgiVulkanShaderGenerator::_WriteInOuts(
         { HgiShaderKeywordTokens->hdLayer, "gl_Layer"},
         { HgiShaderKeywordTokens->hdViewportIndex, "gl_ViewportIndex"},
         { HgiShaderKeywordTokens->hdGlobalInvocationID, "gl_GlobalInvocationID"},
-        { HgiShaderKeywordTokens->hdBaryCoordNoPersp, "gl_BaryCoordNoPerspEXT"}
+        { HgiShaderKeywordTokens->hdBaryCoordNoPersp, "gl_BaryCoordNoPerspEXT"},
+        { HgiShaderKeywordTokens->hdSampleMaskIn, "gl_SampleMaskIn[0]"}
+    };
+
+    const static std::unordered_map<std::string, std::string> attrIndexM {
+        { HgiShaderKeywordTokens->hdDepthAny, "depth_any"},
+        { HgiShaderKeywordTokens->hdDepthGreater, "depth_greater"},
+        { HgiShaderKeywordTokens->hdDepthLess, "depth_less"}
     };
 
     const bool in_qualifier = qualifier == "in";
@@ -386,13 +437,23 @@ HgiVulkanShaderGenerator::_WriteInOuts(
         }
         if (out_qualifier && takenOutParamsToDeclare.find(paramName) !=
                              takenOutParamsToDeclare.end()) {
+            HgiShaderSectionAttributeVector attrs{};
+
+            const std::string &role = param.role;
+            auto const& attr = attrIndexM.find(role);
+            if (attr != attrIndexM.end()) {
+                if (paramName != attr->second) {
+                    attrs.push_back({attr->second, ""});
+                }
+            }
+
             CreateShaderSection<HgiVulkanMemberShaderSection>(
                 paramName,
                 param.type,
                 param.interpolation,
                 param.sampling,
                 param.storage,
-                HgiShaderSectionAttributeVector(),
+                attrs,
                 qualifier,
                 std::string(),
                 param.arraySize);
@@ -402,11 +463,7 @@ HgiVulkanShaderGenerator::_WriteInOuts(
             const std::string &role = param.role;
             auto const& keyword = takenInParams.find(role);
             if (keyword != takenInParams.end()) {
-                if (role == HgiShaderKeywordTokens->hdGlobalInvocationID ||
-                    role == HgiShaderKeywordTokens->hdVertexID ||
-                    role == HgiShaderKeywordTokens->hdInstanceID ||
-                    role == HgiShaderKeywordTokens->hdBaseInstance ||
-                    role == HgiShaderKeywordTokens->hdBaryCoordNoPersp) {
+                if (paramName != keyword->second) {
                     CreateShaderSection<HgiVulkanKeywordShaderSection>(
                         paramName,
                         param.type,
@@ -566,5 +623,54 @@ HgiVulkanShaderGenerator::GetShaderSections()
 {
     return &_shaderSections;
 }
+
+HGIVULKAN_API
+HgiVulkanDescriptorSetInfoVector const &
+HgiVulkanShaderGenerator::GetDescriptorSetInfo()
+{
+    TRACE_FUNCTION();
+
+    if (_descriptorSetLayoutsAdded && !_descriptorSetInfo.empty()) {
+        _descriptorSetLayoutsAdded = false;
+
+        // This sorting isn't strictly necessary, but it can improve
+        // consistency of downstream code which creates descriptor tables.
+        using Binding = VkDescriptorSetLayoutBinding;
+        std::sort(_descriptorSetInfo[0].bindings.begin(),
+                  _descriptorSetInfo[0].bindings.end(),
+                  [](Binding const &a, Binding const &b){
+                      return a.binding < b.binding;
+                  });
+    }
+
+    return _descriptorSetInfo;
+}
+
+void
+HgiVulkanShaderGenerator::_AddDescriptorSetLayoutBinding(
+    uint32_t bindingIndex,
+    VkDescriptorType descriptorType,
+    uint32_t descriptorCount)
+{
+    if (_descriptorSetInfo.empty()) {
+        // For now, all bindings are part of a single descriptor set.
+        _descriptorSetInfo.resize(1);
+        _descriptorSetInfo.back().setNumber = 0;
+    }
+
+    const VkShaderStageFlags stageFlags =
+        HgiVulkanConversions::GetShaderStages(_GetShaderStage());
+
+    HgiVulkanDescriptorSetInfo &setInfo = _descriptorSetInfo.back();
+
+    VkDescriptorSetLayoutBinding &bindInfo = setInfo.bindings.emplace_back();
+    bindInfo.binding = bindingIndex;
+    bindInfo.descriptorType = descriptorType;
+    bindInfo.descriptorCount = descriptorCount;
+    bindInfo.stageFlags = stageFlags;
+    bindInfo.pImmutableSamplers = nullptr;
+
+    _descriptorSetLayoutsAdded = true;
+};
 
 PXR_NAMESPACE_CLOSE_SCOPE

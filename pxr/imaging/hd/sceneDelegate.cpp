@@ -415,6 +415,14 @@ HdSceneDelegate::GetCameraParamValue(SdfPath const &cameraId,
 // -----------------------------------------------------------------------//
 
 /*virtual*/
+VtValue 
+HdSceneDelegate::GetVolumeParamValue(SdfPath const &id, 
+                                     TfToken const &paramName) 
+{
+    return VtValue();
+}
+
+/*virtual*/
 HdVolumeFieldDescriptorVector
 HdSceneDelegate::GetVolumeFieldDescriptors(SdfPath const &volumeId)
 {
@@ -538,6 +546,13 @@ TfTokenVector HdSceneDelegate::GetTaskRenderTags(SdfPath const& taskId)
     return TfTokenVector();
 }
 
+// -----------------------------------------------------------------------//
+/// \name Prim Id - for plumbing prim id from HdsiPrimIdSceneIndex to rprim.
+// -----------------------------------------------------------------------//
+int32_t HdSceneDelegate::GetPrimId(SdfPath const &id)
+{
+    return -1;
+}
 
 PXR_NAMESPACE_CLOSE_SCOPE
 

@@ -11,16 +11,21 @@
 #include "pxr/pxr.h"
 #include "pxr/base/ts/api.h"
 #include "pxr/base/ts/knotData.h"
+#include "pxr/base/ts/types.h"
 #include "pxr/base/ts/typeHelpers.h"
 #include "pxr/base/vt/dictionary.h"
 #include "pxr/base/vt/value.h"
+#include "pxr/base/gf/duration.h"
 #include "pxr/base/gf/half.h"
-#include "pxr/base/tf/type.h"
+#include "pxr/base/gf/timeCode.h"
 #include "pxr/base/tf/diagnostic.h"
+#include "pxr/base/tf/preprocessorUtilsLite.h"
+#include "pxr/base/tf/type.h"
 
-#include <string>
-#include <memory>
 #include <iosfwd>
+#include <memory>
+#include <optional>
+#include <string>
 #include <type_traits>
 
 PXR_NAMESPACE_OPEN_SCOPE
@@ -55,8 +60,17 @@ public:
     /// Creates a knot with a specified value type.
     TS_API
     TsKnot(
+        TfType valueType);
+
+    /// Creates a knot with a specified value type and curve type.
+    ///
+    /// \deprecated The use of curveType for knots is deprecated, knots
+    /// now work in splines of any curve type. This constructor will be
+    /// removed in a future release.
+    TS_API
+    TsKnot(
         TfType valueType,
-        TsCurveType curveType = TsCurveTypeBezier);
+        TsCurveType curveType);
 
     TS_API
     TsKnot(const TsKnot &other);
@@ -156,11 +170,10 @@ public:
     /// @}
     /// \name Curve type
     ///
-    /// Each knot's curve type must match the curve type of the spline to which
-    /// it belongs.  Knot objects are Bezier by default.
-    ///
-    /// In a Hermite spline, tangent widths are determined automatically.  They
-    /// are always one-third of the width of the segment to which they belong.
+    /// \deprecated Knots no longer need to have a curve type that matches
+    /// the curve type of the spline. \c SetCurveType and \c GetCurveType
+    /// no longer do anything useful and will be removed in a future
+    /// release.
     ///
     /// @{
 
@@ -201,6 +214,21 @@ public:
     template <typename T>
     bool GetPreTanSlope(T *slopeOut) const;
 
+    /// Set the pre-tangent algorithm.
+    ///
+    /// When this knot is part of a spline, the tangent algorithm will
+    /// be used to compute updated tangent values, potentially
+    /// overriding explicit values set by SetPreTanWidth and
+    /// SetPreTanSlope. The algorithm TsTangentAlgorithmNone is used
+    /// by default meaning the explicitly set values will be used unless
+    /// a different algorithm is set.
+    TS_API
+    bool SetPreTanAlgorithm(TsTangentAlgorithm algorithm);
+
+    /// Get the pre-tangent algorithm
+    TS_API
+    TsTangentAlgorithm GetPreTanAlgorithm() const;
+
     /// @}
     /// \name Post-tangent
     /// @{
@@ -222,6 +250,52 @@ public:
 
     template <typename T>
     bool GetPostTanSlope(T *slopeOut) const;
+
+    /// Set the post-tangent algorithm.
+    ///
+    /// When this knot is part of a spline, the tangent algorithm will
+    /// be used to compute updated tangent values, potentially
+    /// overriding explicit values set by SetPostTanWidth and
+    /// SetPostTanSlope. The algorithm TsTangentAlgorithmNone is used
+    /// by default meaning the explicitly set values will be used unless
+    /// a different algorithm is set.
+    TS_API
+    bool SetPostTanAlgorithm(TsTangentAlgorithm algorithm);
+
+    /// Get the post-tangent algorithm
+    TS_API
+    TsTangentAlgorithm GetPostTanAlgorithm() const;
+
+    /// @}
+    /// \name Computed Tangents
+    /// @{
+
+    /// \brief Update tangent values algorithmically.
+    ///
+    /// Update the pre- and post-tangent values exactly the way a TsSpline
+    /// would update them if this knot were added to the spline between
+    /// prevKnot and nextKnot. If there is no previous and/or next knot,
+    /// you can pass \c std::nullopt to indicate that the optional value
+    /// is empty.
+    ///
+    /// If prevKnot is not empty, its time must be before this knot. Similarly
+    /// if nextKnot is not empty, its time must be after this knot. If either
+    /// condition is not met, a coding error will be emitted and no changes to
+    /// the tangent values will be made.
+    ///
+    /// The curveType argument should be TsCurveTypeHermite if the knot is
+    /// intended to be added to a Hermite spline. The curve type may affect the
+    /// tangent calculations. Specifically, tangent widths in Hermite splines
+    /// are always 1/3 of the width of the segment they are in, even if the
+    /// tangent algorithm is \c TsTangentAlgorithmNone.
+    ///
+    /// True will be returned if either of the algorithms in this knot run
+    /// successfully, even if no values change. False will be returned
+    /// otherwise.
+    TS_API
+    bool UpdateTangents(const std::optional<TsKnot> prevKnot,
+                        const std::optional<TsKnot> nextKnot,
+                        TsCurveType curveType = TsCurveTypeBezier);
 
     /// @}
     /// \name Custom data
@@ -295,16 +369,21 @@ private:
     template <typename T>
     bool _CheckOutParam(T *valueOut) const;
 
-    bool _CheckGetWidth() const;
     bool _CheckSetWidth(TsTime width) const;
     bool _CheckInParamVt(VtValue value) const;
     bool _CheckOutParamVt(VtValue* value) const;
 
-    template <typename T>
-    Ts_TypedKnotData<T>* _TypedData() const;
+    // Helpers to transform external VtValues holding time codes to and from
+    // internally stored VtValues holding doubles. If TsKnot::GetValueType
+    // isn't a time code, these functions return the stored value as-is.
+    VtValue _ToStorage(const VtValue& value) const;
+    VtValue _FromStorage(const VtValue& value) const;
 
     template <typename T>
-    const Ts_TypedKnotData<T>* _ConstTypedData() const;
+    Ts_TypedKnotData<Ts_StorageType<T>>* _TypedData() const;
+
+    template <typename T>
+    const Ts_TypedKnotData<Ts_StorageType<T>>* _ConstTypedData() const;
 
 private:
     // Main knot fields.  Never null.  The data is on the heap, and we own it
@@ -338,14 +417,18 @@ std::ostream& operator<<(std::ostream& out, const TsKnot &knot);
 /// TsKnot knot1(TfType::Find<double>());
 /// TsKnot knot2(TfType::Find<float>());
 /// TsKnot knot3(TfType::Find<GfHalf>());
+/// TsKnot knot4(TfType::Find<GfTimeCode>());
+/// TsKnot knot5(TfType::Find<GfDuration>());
 /// </pre>
 ///
 /// One may write:
 ///
 /// <pre>
-/// TsDoubleKnot knot1;
-/// TsFloatKnot knot2;
-/// TsHalfKnot knot3;
+/// TsDoubleKnot   knot1;
+/// TsFloatKnot    knot2;
+/// TsHalfKnot     knot3;
+/// TsTimeCodeKnot knot4;
+/// TsDurationKnot knot5;
 /// </pre>
 ///
 template <typename T,
@@ -368,6 +451,24 @@ using TsFloatKnot = TsTypedKnot<float>;
 /// A knot-construction convenience.  See TsTypedKnot.
 using TsHalfKnot = TsTypedKnot<GfHalf>;
 
+/// \class TsTimeCodeKnot
+/// A knot-construction convenience.  See TsTypedKnot.
+using TsTimeCodeKnot = TsTypedKnot<GfTimeCode>;
+
+/// \class TsDurationKnot
+/// A knot-construction convenience.  See TsTypedKnot.
+using TsDurationKnot = TsTypedKnot<GfDuration>;
+
+// Make sure we have coverage for all allowed types.
+#define _MAKE_CLAUSE(unused, tuple)                                          \
+    static_assert(std::is_same_v<TF_PP_CAT(TF_PP_CAT(Ts,                     \
+                    TS_SPLINE_VALUE_TYPE_NAME(tuple)), Knot),                \
+                  TsTypedKnot<TS_SPLINE_VALUE_CPP_TYPE(tuple)>>,             \
+                  "Incorrect type alias for TsKnot type: " #tuple);
+TF_PP_SEQ_FOR_EACH(_MAKE_CLAUSE, ~, TS_SPLINE_SUPPORTED_VALUE_TYPES)
+#undef _MAKE_CLAUSE
+
+
 
 ////////////////////////////////////////////////////////////////////////////////
 // TEMPLATE HELPERS
@@ -378,7 +479,7 @@ bool TsKnot::_CheckInParam(const T value) const
     if constexpr (!Ts_IsSupportedValueType<T>::value)
     {
         static_assert(Ts_IsSupportedValueType<T>::value,
-            "Cannot pass non-floating-point type as T-typed knot parameter");
+            "Cannot pass unsupported type as T-typed knot parameter");
         return false;
     }
     else
@@ -433,17 +534,17 @@ bool TsKnot::_CheckOutParam(T *valueOut) const
 }
 
 template <typename T>
-Ts_TypedKnotData<T>*
+Ts_TypedKnotData<Ts_StorageType<T>>*
 TsKnot::_TypedData() const
 {
-    return static_cast<Ts_TypedKnotData<T>*>(_data);
+    return static_cast<Ts_TypedKnotData<Ts_StorageType<T>>*>(_data);
 }
 
 template <typename T>
-const Ts_TypedKnotData<T>*
+const Ts_TypedKnotData<Ts_StorageType<T>>*
 TsKnot::_ConstTypedData() const
 {
-    return static_cast<const Ts_TypedKnotData<T>*>(_data);
+    return static_cast<const Ts_TypedKnotData<Ts_StorageType<T>>*>(_data);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -463,7 +564,7 @@ bool TsKnot::SetValue(const T value)
         return false;
     }
 
-    _TypedData<T>()->value = value;
+    _TypedData<T>()->value = Ts_StorageType<T>(value);
     return true;
 }
 
@@ -488,7 +589,7 @@ bool TsKnot::SetPreValue(const T value)
     }
 
     _data->dualValued = true;
-    _TypedData<T>()->preValue = value;
+    _TypedData<T>()->preValue = Ts_StorageType<T>(value);
     return true;
 }
 
@@ -523,7 +624,7 @@ bool TsKnot::SetPreTanSlope(const T slope)
         return false;
     }
 
-    _TypedData<T>()->preTanSlope = slope;
+    _TypedData<T>()->preTanSlope = Ts_StorageType<T>(slope);
     return true;
 }
 
@@ -550,7 +651,7 @@ bool TsKnot::SetPostTanSlope(const T slope)
         return false;
     }
 
-    _TypedData<T>()->postTanSlope = slope;
+    _TypedData<T>()->postTanSlope = Ts_StorageType<T>(slope);
     return true;
 }
 

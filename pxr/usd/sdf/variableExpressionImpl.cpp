@@ -14,6 +14,7 @@
 #include "pxr/base/vt/typeHeaders.h"
 #include "pxr/base/vt/visitValue.h"
 
+#include "pxr/base/tf/patternMatcher.h"
 #include "pxr/base/tf/scoped.h"
 #include "pxr/base/tf/stl.h"
 #include "pxr/base/tf/stringUtils.h"
@@ -292,11 +293,15 @@ StringNode::Evaluate(EvalContext* ctx) const
             bool varHasValue = false;
             std::tie(varResult, varHasValue) = ctx->GetVariable(variable);
 
-            if (!varHasValue) {
+            if (!varHasValue && part.fallback) {
+                varResult = part.fallback->Evaluate(ctx);
+            }
+
+            if (!varHasValue && !part.fallback) {
                 // No value for variable. Leave the substitution
                 // string in place in case downstream clients want to
                 // handle it.
-                result += part.content;
+                result += "${" + part.content + "}";
             }
             else if (!varResult.value.IsEmpty()) {
                 if (varResult.value.IsHolding<std::string>()) {
@@ -341,8 +346,9 @@ StringNode::Evaluate(EvalContext* ctx) const
 
 // ------------------------------------------------------------
 
-VariableNode::VariableNode(std::string&& var)
-    : _var(std::move(var))
+VariableNode::VariableNode(std::string&& var, std::unique_ptr<Node>&& fallback)
+    : _var(std::move(var)),
+      _fallback(std::move(fallback))
 {
 }
 
@@ -352,6 +358,10 @@ VariableNode::Evaluate(EvalContext* ctx) const
     std::pair<EvalResult, bool> varResult = ctx->GetVariable(_var);
 
     if (!varResult.second) {
+        if (_fallback) {
+            return _fallback->Evaluate(ctx);
+        }
+
         return EvalResult::Error({
             TfStringPrintf("No value for variable '%s'", _var.c_str())
         });
@@ -673,6 +683,21 @@ LogicalNode<Operator>::LogicalNode(
 {
 }
 
+namespace
+{
+
+bool _ShortCircuit(std::logical_and<bool>, bool value)
+{
+    return !value;
+}
+
+bool _ShortCircuit(std::logical_or<bool>, bool value)
+{
+    return value;
+}
+
+} // end anonymous namespace
+
 template <template <typename> class Operator>
 EvalResult
 LogicalNode<Operator>::Evaluate(EvalContext* ctx) const
@@ -693,16 +718,17 @@ LogicalNode<Operator>::Evaluate(EvalContext* ctx) const
                         GetValueTypeName(condition.value).c_str(), i)));
         }
         else {
-            if (result.IsEmpty()) {
-                result = condition.value.UncheckedGet<bool>();
+            const Operator<bool> op;
+            const bool value = condition.value.UncheckedGet<bool>();
+            if (_ShortCircuit(op, value)) {
+                result = value;
+                break;
             }
-            else {
-                result = Operator<bool>()(
-                    result.UncheckedGet<bool>(),
-                    condition.value.UncheckedGet<bool>());
-            }
+
+            result = result.IsEmpty() ?
+                value : op(result.UncheckedGet<bool>(), value);
         }
-    };
+    }
 
     return errors.empty() ?
         EvalResult::Value(std::move(result)) : 
@@ -829,6 +855,109 @@ ContainsNode::Evaluate(EvalContext* ctx) const
     }
 
     return VtVisitValue(searchIn.value, _ContainsVisitor(searchFor.value));
+}
+
+// ------------------------------------------------------------
+
+const char* 
+MatchesRegexNode::GetFunctionName()
+{
+    return "matches_regex";
+}
+
+MatchesRegexNode::MatchesRegexNode(
+    std::unique_ptr<Node>&& searchIn,
+    std::unique_ptr<Node>&& pattern)
+    : _searchIn(std::move(searchIn))
+    , _pattern(std::move(pattern))
+{
+}
+
+class _MatchesRegexVisitor
+{
+public:
+    _MatchesRegexVisitor(const VtValue& pattern)
+        : _pattern(pattern)
+    { }
+
+    EvalResult
+    operator()(const std::string& searchIn) const
+    {
+        if (!_pattern.IsHolding<std::string>()) {
+            return Error("Pattern to match must be a string");
+        }
+
+        TfPatternMatcher patternMatcher(_pattern.UncheckedGet<std::string>(),
+                                        /* caseSensitive*/ true);
+
+        if (!patternMatcher.IsValid()) {
+            return Error(
+                "Invalid match pattern: " + patternMatcher.GetInvalidReason());
+        }
+
+        return EvalResult::Value(patternMatcher.Match(searchIn));
+    }
+
+    template <class ListType>
+    std::enable_if_t<
+        std::is_same<ListType, VtArray<std::string>>::value, EvalResult>
+    operator()(const ListType& searchIn) const
+    {
+        using ElemType = typename ListType::value_type;
+        if (!_pattern.IsHolding<ElemType>()) {
+            return Error("Pattern to match must be a string");
+        }
+
+        TfPatternMatcher patternMatcher(_pattern.UncheckedGet<std::string>(),
+                                        /* caseSensitive*/ true);
+
+        if (!patternMatcher.IsValid()) {
+            return Error(
+                "Invalid match pattern: " + patternMatcher.GetInvalidReason());
+        }
+
+        for (const auto& str : searchIn) {
+            if (patternMatcher.Match(str)) {
+                return EvalResult::Value(true);
+            }
+        }
+
+        return EvalResult::Value(false);
+    }
+
+    template <class T>
+    std::enable_if_t<!std::is_same<T, VtArray<std::string>>::value, EvalResult>
+    operator()(const T& searchIn) const
+    {
+        return Error("Value to search must be string[] or string");
+    }
+
+private:
+    static EvalResult
+    Error(const std::string& err)
+    {
+        return EvalResult::Error({_FormatFunctionError<MatchesRegexNode>(err)});
+    }
+
+    const VtValue& _pattern;
+};
+
+EvalResult
+MatchesRegexNode::Evaluate(EvalContext* ctx) const
+{
+    EvalResult searchIn = _searchIn->Evaluate(ctx);
+    EvalResult pattern = _pattern->Evaluate(ctx);
+
+    std::vector<std::string> errors = _CombineErrors(&searchIn, &pattern);
+    if (!errors.empty()) {
+        return EvalResult::Error(std::move(errors));
+    }
+
+    if (searchIn.value.IsHolding<SdfVariableExpression::EmptyList>()) {
+        return EvalResult::Value(false);
+    }
+
+    return VtVisitValue(searchIn.value, _MatchesRegexVisitor(pattern.value));
 }
 
 // ------------------------------------------------------------

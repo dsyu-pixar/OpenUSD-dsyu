@@ -13,20 +13,12 @@
 #include "pxr/pxr.h"
 #include "pxr/external/boost/python/common.hpp"
 
-#ifndef PXR_USE_INTERNAL_BOOST_PYTHON
-#include <boost/python/slice_nil.hpp>
-#else
-
 # include "pxr/external/boost/python/detail/prefix.hpp"
 # include "pxr/external/boost/python/object_core.hpp"
 
 namespace PXR_BOOST_NAMESPACE { namespace python { namespace api {
 
-class slice_nil : public object
-{
- public:
-    slice_nil() : object() {}
-};
+class slice_nil {};
 
 # ifndef _ // Watch out for GNU gettext users, who #define _(x)
 static const slice_nil _ = slice_nil();
@@ -51,7 +43,21 @@ using api::slice_nil;
 using api::_;
 # endif 
 
+// Implement just enough of the Object Manager concept to allow slice_nil to
+// be converted to None.
+namespace converter
+{
+  template <>
+  struct object_manager_traits<api::slice_nil>
+  {
+      static constexpr bool is_specialized = true;
+  };
+}
+
+inline PyObject* get_managed_object(api::slice_nil const&, tag_t) {
+    return Py_None;
+}
+
 }} // namespace PXR_BOOST_NAMESPACE::python
 
-#endif // PXR_USE_INTERNAL_BOOST_PYTHON
 #endif // PXR_EXTERNAL_BOOST_PYTHON_SLICE_NIL_HPP

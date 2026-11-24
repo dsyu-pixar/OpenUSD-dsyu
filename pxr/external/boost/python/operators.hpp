@@ -13,10 +13,6 @@
 #include "pxr/pxr.h"
 #include "pxr/external/boost/python/common.hpp"
 
-#ifndef PXR_USE_INTERNAL_BOOST_PYTHON
-#include <boost/python/operators.hpp>
-#else
-
 # include "pxr/external/boost/python/detail/prefix.hpp"
 
 # include "pxr/external/boost/python/def_visitor.hpp"
@@ -300,7 +296,11 @@ namespace self_ns                                               \
 PXR_BOOST_PYTHON_INPLACE_OPERATOR(iadd,+=)
 PXR_BOOST_PYTHON_INPLACE_OPERATOR(isub,-=)
 PXR_BOOST_PYTHON_INPLACE_OPERATOR(imul,*=)
+#if PY_VERSION_HEX >= 0x03000000
+PXR_BOOST_PYTHON_INPLACE_OPERATOR(itruediv,/=)
+#else
 PXR_BOOST_PYTHON_INPLACE_OPERATOR(idiv,/=)
+#endif
 PXR_BOOST_PYTHON_INPLACE_OPERATOR(imod,%=)
 PXR_BOOST_PYTHON_INPLACE_OPERATOR(ilshift,<<=)
 PXR_BOOST_PYTHON_INPLACE_OPERATOR(irshift,>>=)
@@ -355,5 +355,4 @@ PXR_BOOST_PYTHON_UNARY_OPERATOR(repr, convert_to_string, repr)
 
 }} // namespace PXR_BOOST_NAMESPACE::python
 
-#endif // PXR_USE_INTERNAL_BOOST_PYTHON
 #endif // PXR_EXTERNAL_BOOST_PYTHON_OPERATORS_HPP

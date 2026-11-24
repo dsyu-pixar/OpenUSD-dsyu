@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cctype>
 #include <errno.h>
+#include <filesystem>
 #include <limits.h>
 #include <string>
 #include <sys/stat.h>
@@ -58,12 +59,8 @@ _ExpandSymlinks(const std::string& path)
             prefix.push_back('\\');
         }
         if (TfIsLink(prefix)) {
-            // Expand the link and repeat with the new path if the path changed.
-            // The path may remain unchanged or be empty if the link type is
-            // unsupported or the mount destination is not available.
-            auto newPrefix = TfReadLink(prefix);
-            if (!newPrefix.empty() && newPrefix != prefix)
-                return _ExpandSymlinks(newPrefix + path.substr(i));
+            // Expand the link and repeat with the new path.
+            return _ExpandSymlinks(TfReadLink(prefix) + path.substr(i));
         }
         i = path.find_first_of("/\\", i + 1);
     }
@@ -106,46 +103,36 @@ string
 TfRealPath(string const& path, bool allowInaccessibleSuffix, string* error)
 {
     string localError;
-    if (!error)
+    if (!error) {
         error = &localError;
-    else
+    }
+    else {
         error->clear();
+    }
 
-    if (path.empty())
+    if (path.empty()) {
         return string();
+    }
 
-    string suffix, prefix = path;
-
+    std::error_code errorCode;
     if (allowInaccessibleSuffix) {
-        string::size_type split = TfFindLongestAccessiblePrefix(path, error);
-        if (!error->empty())
-            return string();
-
-        prefix = string(path, 0, split);
-        suffix = string(path, split);
+        const std::filesystem::path realPath =
+            std::filesystem::weakly_canonical(path, errorCode);
+        if (!errorCode) {
+            // weakly_canonical is not guaranteed to return an absolute path
+            return TfAbsPath(realPath.string());
+        }
+    }
+    else {
+        const std::filesystem::path realPath =
+            std::filesystem::canonical(path, errorCode);
+        if (!errorCode) {
+            return realPath.string();
+        }
     }
 
-    if (prefix.empty()) {
-        return TfAbsPath(suffix);
-    }
-
-#if defined(ARCH_OS_WINDOWS)
-    // Expand all symbolic links.
-    if (!TfPathExists(prefix)) {
-        *error = "the named file does not exist";
-        return string();
-    }
-    std::string resolved = _ExpandSymlinks(prefix);
-
-    return TfAbsPath(resolved + suffix);
-#else
-    char resolved[ARCH_PATH_MAX];
-    if (!realpath(prefix.c_str(), resolved)) {
-        *error = ArchStrerror(errno);
-        return string();
-    }
-    return TfAbsPath(resolved + suffix);
-#endif
+    *error = errorCode.message();
+    return string{};
 }
 
 string::size_type

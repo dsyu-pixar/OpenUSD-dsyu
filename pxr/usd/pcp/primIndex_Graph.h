@@ -19,6 +19,7 @@
 #include "pxr/base/arch/attributes.h"
 #include "pxr/base/tf/declarePtrs.h"
 #include "pxr/base/tf/refBase.h"
+#include "pxr/base/tf/span.h"
 
 #include <memory>
 #include <utility>
@@ -56,6 +57,10 @@ public:
     /// loaded if this is set to true.
     void SetHasPayloads(bool hasPayloads);
     bool HasPayloads() const;
+
+    /// Get/set whether new nodes were introduced in the prim index.
+    void SetHasNewNodes(bool hasNewNodes);
+    bool HasNewNodes() const;
 
     /// Get/set whether this prim index is instanceable.
     void SetIsInstanceable(bool isInstanceable);
@@ -156,6 +161,18 @@ private:
     struct _ArcStrengthOrder;
     struct _Node;
 
+    // Type used to store a node index.  Node indexes are stored in the
+    // narrowest type that can hold them so that _Node packs tightly; the
+    // maximum node count is bounded by _Node::_invalidNodeIndex.  Declared here
+    // rather than in _Node so the private helpers below can name it.
+    using _NodeIndexType = uint16_t;
+
+    // Sentinel used in the node index mapping built during Finalize to mark a
+    // node that is being erased.  This is the same value as
+    // _Node::_invalidNodeIndex; node capacity is limited so that this is never
+    // a valid node index.
+    static constexpr _NodeIndexType _erasedIndex = _NodeIndexType(~0);
+
     // Private constructors -- use New instead.
     PcpPrimIndex_Graph(const PcpLayerStackSite& rootSite, bool usd);
     PcpPrimIndex_Graph(const PcpPrimIndex_Graph& rhs) = default;
@@ -178,36 +195,37 @@ private:
     template <class Predicate>
     std::pair<size_t, size_t> _FindRootChildRange(const Predicate& p) const;
 
-    // Helper functions to compute a mapping between node indexes and 
-    // the strength order of the corresponding node. 
-    //
-    // Returns: 
-    // True if the order of nodes in the node pool is the same as strength
-    // ordering, false otherwise.
-    // 
-    // nodeIndexToStrengthOrder[i] => strength order of node at index i.
-    bool _ComputeStrengthOrderIndexMapping(
-        std::vector<size_t>* nodeIndexToStrengthOrder) const;
-    bool _ComputeStrengthOrderIndexMappingRecursively(
-        size_t nodeIdx, size_t* strengthIdx,
-        std::vector<size_t>* nodeIndexToStrengthOrder) const;
+    // Helper function to mark which culled nodes can be erased from the graph.
+    // Writes every element of \p nodeIndexMap before reading any (callers may
+    // pass uninitialized memory).  On return, nodeIndexMap[i] == _erasedIndex
+    // marks node i as erasable; any other value means it must be kept.
+    void _ComputeErasableNodeMarks(TfSpan<_NodeIndexType> nodeIndexMap) const;
 
-    // Helper function to compute a node index mapping that erases nodes
-    // that have been marked for culling.
+    // Assigns each surviving node its new index, in strength order.  Walks the
+    // graph in strength order (a preorder traversal of the child lists) and
+    // hands out dense, ascending indexes to the nodes not marked erased by
+    // _ComputeErasableNodeMarks, rewriting \p nodeIndexMap in place:
+    // on input nodeIndexMap[i] is the erasure mark for node i, on output it is
+    // that node's new index, or _erasedIndex if it is being erased.
+    //
+    // \p numSurvivors is set to the number of nodes that survive.
     //
     // Returns:
-    // True if any nodes marked for culling can be erased, false otherwise.
-    // culledNodeMapping[i] => index of node i after culled nodes are erased.
-    bool _ComputeEraseCulledNodeIndexMapping(
-        std::vector<size_t>* culledNodeMapping) const;
+    // True if the mapping is the identity -- the pool is already in strength
+    // order and nothing is erased -- false otherwise.
+    bool _ComputeNewNodeIndexes(
+        TfSpan<_NodeIndexType> nodeIndexMap, size_t *numSurvivors) const;
 
-    // Transforms the node pool by applying the given node index mapping.
-    // References to to other nodes in the pool are fixed up appropriately.
+    // Transforms the node pool by applying the given node index mapping,
+    // producing a pool ordered strong-to-weak containing only the surviving
+    // nodes.  References to other nodes in the pool are fixed up appropriately.
     //
-    // \p nodeIndexMap is a vector of the same size as the node pool, where
-    // \p nodeIndexMap[i] => new position of node i. 
-    // If \p nodeIndexMap[i] == _invalidNodeIndex, that node will be erased.
-    void _ApplyNodeIndexMapping(const std::vector<size_t>& nodeIndexMap);
+    // \p nodeIndexMap has the same size as the node pool, where
+    // \p nodeIndexMap[i] => new position of node i.
+    // If \p nodeIndexMap[i] == _erasedIndex, that node will be erased.
+    // \p newNumNodes is the number of surviving nodes.
+    void _ApplyNodeIndexMapping(
+        TfSpan<const _NodeIndexType> nodeIndexMap, size_t newNumNodes);
 
 private:
     // PcpNodeRef is allowed to reach directly into the node pool to get/set
@@ -219,6 +237,13 @@ private:
     friend class PcpNodeRef_PrivateChildrenConstReverseIterator;
     friend class PcpNodeRef_PrivateSubtreeConstIterator;
     template <class T> friend class Pcp_TraversalCache;
+    friend bool Pcp_IsPropagatedSpecializesNode(const PcpNodeRef& node);
+    friend bool Pcp_IsElided(const PcpNodeRef& node);
+    friend void Pcp_SetElided(const PcpNodeRef& node);
+    friend size_t Pcp_GetSealedDepth(const PcpNodeRef& node);
+    friend void Pcp_SetSealed(const PcpNodeRef& node, uint16_t depth);
+    friend bool Pcp_IsDirectDuplicate(const PcpNodeRef& node);
+    friend void Pcp_SetDirectDuplicate(const PcpNodeRef& node, bool value);
 
     // NOTE: These accessors assume the consumer will be changing the node
     //       and may cause shared node data to be copied locally.
@@ -240,6 +265,10 @@ private:
         return _GetNode(node._GetNodeIndex());
     }
 
+    inline PcpArcType GetArcType(size_t nodeIdx) const {
+        return _GetNode(nodeIdx).smallInts.arcType;
+    }
+
 private:
     // Allow Pcp_Statistics access to internal data for diagnostics.
     friend class Pcp_Statistics;
@@ -249,7 +278,7 @@ private:
         static const size_t _depthSize     = 16;
         // These types should be just large enough to hold the above sizes.
         // This allows this structure to be packed into less space.
-        using _NodeIndexType = uint16_t;
+        using _NodeIndexType = PcpPrimIndex_Graph::_NodeIndexType;
         using _DepthSizeType = uint16_t;
 
         // Index used to represent an invalid node.
@@ -270,8 +299,10 @@ private:
             , arcType(PcpArcTypeRoot)
             , permission(SdfPermissionPublic)
             , hasSymmetry(false)
+            , hasValueClips(false)
             , inert(false)
             , permissionDenied(false)
+            , sealedDepth(0)
         */
         {
             memset(&smallInts, 0, sizeof(smallInts));
@@ -347,6 +378,11 @@ private:
             // or at any of its namespace ancestors contain symmetry 
             // information.
             bool hasSymmetry:1;
+            // Whether this node may contribute value clips information
+            // during composition. This implies that prims at this node's
+            // site or at any of its namespace ancestors contain value clips
+            // information.
+            bool hasValueClips:1;
             // Whether this node is inert. This is set to true in cases
             // where a node is needed to represent a structural dependency
             // but no opinions are allowed to be added.
@@ -356,6 +392,11 @@ private:
             // node that was marked \c SdfPermissionPrivate, or we arrive
             // at this node from  another node that was denied permission.
             bool permissionDenied:1;
+            // Path element count of the namespace of the instance that
+            // sealed this node, or 0 if it is not sealed.  See
+            // Pcp_GetSealedDepth.  This occupies what would otherwise be
+            // tail padding.
+            _DepthSizeType sealedDepth;
         };
         _SmallInts smallInts;
     };
@@ -374,7 +415,11 @@ private:
     // graph instances to be created.
     struct _UnsharedData {
         _UnsharedData()
-            : hasSpecs(false), culled(false), isDueToAncestor(false) {}
+            : hasSpecs(false)
+            , culled(false)
+            , isDueToAncestor(false)
+            , elided(false)
+            , directDuplicate(false) {}
         explicit _UnsharedData(SdfPath const &p)
             : _UnsharedData(SdfPath(p)) {}
         explicit _UnsharedData(SdfPath &&p)
@@ -382,7 +427,12 @@ private:
             , restrictionDepth(0)
             , hasSpecs(false)
             , culled(false)
-            , isDueToAncestor(false) {}
+            , isDueToAncestor(false)
+            , hasTransitiveDirectArc(false)
+            , hasTransitiveAncestralArc(false)
+            , elided(false)
+            , directDuplicate(false)
+            {}
 
         // The site path for a particular node.
         SdfPath sitePath;
@@ -404,6 +454,21 @@ private:
         // Whether this node is copied from the namespace ancestor prim
         // index (true) or introduced here due to a direct arc (false)
         bool isDueToAncestor:1;
+
+        // Whether this node was transitively introduced by a direct arc.
+        bool hasTransitiveDirectArc:1;
+
+        // Whether this node was transitively introduced by an ancestral
+        // arc.
+        bool hasTransitiveAncestralArc:1;
+
+        // Whether this node was elided during prim indexing, for example
+        // because a relocation supersedes its opinions.  See Pcp_IsElided.
+        bool elided:1;
+
+        // Whether a direct arc to this node's site was skipped as a
+        // duplicate of this node.  See Pcp_IsDirectDuplicate.
+        bool directDuplicate:1;
     };
     
     // Elements in this vector correspond to nodes in the shared node
@@ -413,6 +478,10 @@ private:
 
     // Whether or not this graph reached any specs with authored payloads.
     bool _hasPayloads:1;
+
+    // Whether or not this graph had new nodes added at its current level
+    // of namespace.
+    bool _hasNewNodes:1;
 
     // Whether or not this graph is considered 'instanceable'.
     bool _instanceable:1;

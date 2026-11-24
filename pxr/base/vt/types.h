@@ -16,6 +16,8 @@
 #include "pxr/base/arch/inttypes.h"
 #include "pxr/base/gf/declare.h"
 #include "pxr/base/gf/half.h"
+#include "pxr/base/gf/duration.h"
+#include "pxr/base/gf/timeCode.h"
 #include "pxr/base/tf/meta.h"
 #include "pxr/base/tf/preprocessorUtilsLite.h"
 #include "pxr/base/tf/token.h"
@@ -30,12 +32,20 @@ PXR_NAMESPACE_OPEN_SCOPE
 // cheap to copy (just refcount operations).
 VT_TYPE_IS_CHEAP_TO_COPY(TfToken);
 
+// GfTimeCode and GfDuration support value transformations.
+VT_VALUE_TYPE_CAN_TRANSFORM(GfTimeCode);
+VT_VALUE_TYPE_CAN_TRANSFORM(GfDuration);
+
 // Value types.
 
 #define VT_FLOATING_POINT_BUILTIN_VALUE_TYPES \
 ((      double,                Double )) \
 ((      float,                 Float  )) \
 ((      GfHalf,                Half   ))
+
+#define VT_TIMECODE_VALUE_TYPES \
+((      GfTimeCode,            TimeCode )) \
+((      GfDuration,            Duration ))
 
 #define VT_INTEGRAL_BUILTIN_VALUE_TYPES     \
 ((      bool,                  Bool   ))    \
@@ -129,7 +139,8 @@ TF_PP_TUPLE_ELEM(1, elem)
 
 // Composite groups of types.
 #define VT_BUILTIN_NUMERIC_VALUE_TYPES \
-VT_INTEGRAL_BUILTIN_VALUE_TYPES VT_FLOATING_POINT_BUILTIN_VALUE_TYPES 
+VT_INTEGRAL_BUILTIN_VALUE_TYPES VT_FLOATING_POINT_BUILTIN_VALUE_TYPES \
+VT_TIMECODE_VALUE_TYPES
 
 #define VT_BUILTIN_VALUE_TYPES \
 VT_BUILTIN_NUMERIC_VALUE_TYPES VT_STRING_VALUE_TYPES
@@ -142,19 +153,40 @@ VT_QUATERNION_VALUE_TYPES \
 VT_DUALQUATERNION_VALUE_TYPES
 
 #define VT_SCALAR_VALUE_TYPES \
-VT_SCALAR_CLASS_VALUE_TYPES VT_BUILTIN_VALUE_TYPES 
+VT_BUILTIN_VALUE_TYPES VT_SCALAR_CLASS_VALUE_TYPES
 
-
-// The following preprocessor code produces typedefs for VtArray holding
-// various scalar value types.  The produced typedefs are of the form:
+// The following preprocessor code produces type aliases for VtArray holding
+// various scalar value types.  The produced aliases are of the form:
 //
-// typedef VtArray<int> VtIntArray;
-// typedef VtArray<double> VtDoubleArray;
+// using VtIntArray = VtArray<int>;
+// using VtDoubleArray = VtArray<double>;
 template<typename T> class VtArray;
-#define VT_ARRAY_TYPEDEF(unused, elem) \
-typedef VtArray< VT_TYPE(elem) > \
-TF_PP_CAT(Vt, TF_PP_CAT(VT_TYPE_NAME(elem), Array)) ;
-TF_PP_SEQ_FOR_EACH(VT_ARRAY_TYPEDEF, ~, VT_SCALAR_VALUE_TYPES)
+#define VT_ARRAY_ALIAS(unused, elem) \
+using TF_PP_CAT( \
+   Vt, TF_PP_CAT(VT_TYPE_NAME(elem), Array)) = VtArray< VT_TYPE(elem) >;
+TF_PP_SEQ_FOR_EACH(VT_ARRAY_ALIAS, ~, VT_SCALAR_VALUE_TYPES)
+
+// The following preprocessor code produces type aliases for VtArrayEdit holding
+// various scalar value types.  The produced aliases are of the form:
+//
+// using VtIntArrayEdit = VtArrayEdit<int>;
+// using VtDoubleArrayEdit = VtArrayEdit<double>;
+template<typename T> class VtArrayEdit;
+#define VT_ARRAY_EDIT_ALIAS(unused, elem) \
+using TF_PP_CAT(Vt, TF_PP_CAT(VT_TYPE_NAME(elem), ArrayEdit)) \
+    = VtArrayEdit< VT_TYPE(elem) >;
+TF_PP_SEQ_FOR_EACH(VT_ARRAY_EDIT_ALIAS, ~, VT_SCALAR_VALUE_TYPES)
+
+// The following preprocessor code produces type aliases for VtArrayEditBuilder
+// holding various scalar value types.  The produced aliases are of the form:
+//
+// using VtIntArrayEditBuilder = VtArrayEditBuilder<int>;
+// using VtDoubleArrayEditBuilder = VtArrayEditBuilder<double>;
+template<typename T> class VtArrayEditBuilder;
+#define VT_ARRAY_EDIT_BUILDER_ALIAS(unused, elem) \
+using TF_PP_CAT(Vt, TF_PP_CAT(VT_TYPE_NAME(elem), ArrayEditBuilder)) \
+    = VtArrayEditBuilder< VT_TYPE(elem) >;
+TF_PP_SEQ_FOR_EACH(VT_ARRAY_EDIT_BUILDER_ALIAS, ~, VT_SCALAR_VALUE_TYPES)
 
 // The following preprocessor code generates the boost pp sequence for
 // all array value types (VT_ARRAY_VALUE_TYPES)
@@ -164,52 +196,60 @@ TF_PP_SEQ_FOR_EACH(VT_ARRAY_TYPEDEF, ~, VT_SCALAR_VALUE_TYPES)
 #define VT_ARRAY_VALUE_TYPES \
 TF_PP_SEQ_FOR_EACH(VT_ARRAY_TYPE_TUPLE, ~, VT_SCALAR_VALUE_TYPES)
 
-#define VT_CLASS_VALUE_TYPES \
-VT_ARRAY_VALUE_TYPES VT_SCALAR_CLASS_VALUE_TYPES VT_NONARRAY_VALUE_TYPES
+// The following preprocessor code generates the boost pp sequence for
+// all array edit value types (VT_ARRAY_EDIT_VALUE_TYPES)
+#define VT_ARRAY_EDIT_TYPE_TUPLE(unused, elem) \
+(( TF_PP_CAT(Vt, TF_PP_CAT(VT_TYPE_NAME(elem), ArrayEdit)) , \
+   TF_PP_CAT(VT_TYPE_NAME(elem), ArrayEdit) ))
+#define VT_ARRAY_EDIT_VALUE_TYPES \
+TF_PP_SEQ_FOR_EACH(VT_ARRAY_EDIT_TYPE_TUPLE, ~, VT_SCALAR_VALUE_TYPES)
 
-#define VT_VALUE_TYPES \
-    VT_BUILTIN_VALUE_TYPES VT_CLASS_VALUE_TYPES
+// This unfortunately must be two separate PP lists, otherwise we exceed the
+// MSVC macro nesting depth.
+#define VT_VALUE_TYPES_1                                \
+    VT_BUILTIN_VALUE_TYPES VT_SCALAR_CLASS_VALUE_TYPES
+#define VT_VALUE_TYPES_2                                \
+    VT_ARRAY_VALUE_TYPES VT_ARRAY_EDIT_VALUE_TYPES VT_NONARRAY_VALUE_TYPES
 
-#define _VT_MAP_TYPE_LIST(unused, elem) , VT_TYPE(elem)
+// Expand _macro for each value type tuple in VT_VALUE_TYPES_{1,2}.  The _macro
+// must have the same form as for TF_PP_SEQ_FOR_EACH, namely MACRO(unused,
+// elem), where `unused` should be ignored and `elem` is the VT_VALUE_TYPES
+// tuple element.
+#define VT_FOR_EACH_VALUE_TYPE(_macro)              \
+    TF_PP_SEQ_FOR_EACH(_macro, ~, VT_VALUE_TYPES_1) \
+    TF_PP_SEQ_FOR_EACH(_macro, ~, VT_VALUE_TYPES_2)
 
-// Populate a type list from the preprocessor sequence.
-// void is prepended to match the comma for the first type
-// and then dropped by TfMetaTail.
+// Populate a type list from the preprocessor sequence.  The type `void` is
+// prepended to accommodate the comma-type expansion for the rest of the type
+// list type and then dropped by TfMetaTail.
+#define VT_COMMA_TYPE(unused, elem) , VT_TYPE(elem)
 using Vt_ValueTypeList =
     TfMetaApply<TfMetaTail, TfMetaList<
-        void TF_PP_SEQ_FOR_EACH(_VT_MAP_TYPE_LIST, ~, VT_VALUE_TYPES)>>;
+        void VT_FOR_EACH_VALUE_TYPE(VT_COMMA_TYPE)>>;
+#undef VT_COMMA_TYPE
 
 namespace Vt_KnownValueTypeDetail
 {
 
 // Implement compile-time value type indexes.
-// Base case -- unknown types get index -1.
-template <typename T>
+template <typename T, typename... Ts, size_t... Is>
 constexpr int
-GetIndexImpl(TfMetaList<>) {
-    return -1;
-}
-
-template <typename T, typename Typelist>
-constexpr int
-GetIndexImpl(Typelist) {
-    if (std::is_same_v<T, TfMetaApply<TfMetaHead, Typelist>>) {
-        return 0;
-    }
-    else if (const int indexOfTail =
-             GetIndexImpl<T>(TfMetaApply<TfMetaTail, Typelist>{});
-             indexOfTail >= 0) {
-        return 1 + indexOfTail;
-    }
-    else {
-        return -1;
-    }
+GetIndexImpl(TfMetaList<Ts...>, std::index_sequence<Is...>)
+{
+    int index = -1;
+    TF_UNUSED(((std::is_same_v<T, Ts> ? (index = Is, false) : true) && ...));
+    return index;
 }
 
 template <typename T>
 constexpr int
 GetIndex() {
-    return GetIndexImpl<T>(Vt_ValueTypeList{});
+    return GetIndexImpl<T>(
+        Vt_ValueTypeList{}, 
+        std::make_index_sequence<
+            TfMetaApply<TfMetaLength, Vt_ValueTypeList>::value
+        >()
+    );
 }
 
 } // Vt_KnownValueTypeDetail
@@ -221,11 +261,12 @@ VtGetNumKnownValueTypes() {
 }
 
 /// Provide compile-time value type indexes for types that are "known" to Vt --
-/// specifically, those types that appear in VT_VALUE_TYPES.  Note that VtArray
-/// and VtValue can work with other types that are not these "known" types.
+/// specifically, those types that appear in VT_VALUE_TYPES_{1,2} and are
+/// visited by VT_FOR_EACH_VALUE_TYPE().  Note that VtArray and VtValue can work
+/// with other types that are not these "known" types.
 ///
-/// VtGetKnownValueTypeIndex can only be used with known types.  Querying a
-/// type that is not known to Vt results in a compilation error.  The set of
+/// VtGetKnownValueTypeIndex can only be used with these known types.  Querying
+/// a type that is not known to Vt results in a compilation error.  The set of
 /// known types and their indexes are not guaranteed to be stable across
 /// releases of the library.
 ///
@@ -258,6 +299,24 @@ struct VtIsKnownValueType_Workaround
     static const bool value = VtIsKnownValueType<T>();
 };
 
+// Generally, we want to allow clients to register value-type transforms for
+// their own user-defined types.  Registering transforms for built-in (float,
+// double, string) or low-level (GfVec, GfMatrix) types can lead to ODR
+// violations (due to trait differences in different TUs) and added performance
+// costs.  So we allow registering transforms for all the types not known to Vt.
+// However there are a couple of low-level types known to Vt that are explicitly
+// allowed to support registered transforms.  This private function captures
+// this set of types.
+template <class T>
+constexpr bool
+Vt_IsTypeAllowedToRegisterTransforms()
+{
+    return !VtIsKnownValueType<T>()
+        || std::is_same_v<T, GfTimeCode>
+        || std::is_same_v<T, GfDuration>
+        ;
+}
+
 // None of the VT_VALUE_TYPES are value proxies.  We want to specialize these
 // templates here, since otherwise the VtIsTypedValueProxy will require a
 // complete type to check if it derives VtTypedValueProxyBase.
@@ -268,7 +327,7 @@ struct VtIsKnownValueType_Workaround
     VtIsTypedValueProxy< VT_TYPE(elem) > : std::false_type {};                 \
     template <> struct                                                         \
     VtIsErasedValueProxy< VT_TYPE(elem) > : std::false_type {};
-TF_PP_SEQ_FOR_EACH(VT_SPECIALIZE_IS_VALUE_PROXY, ~, VT_VALUE_TYPES)
+VT_FOR_EACH_VALUE_TYPE(VT_SPECIALIZE_IS_VALUE_PROXY)
 #undef VT_SPECIALIZE_IS_VALUE_PROXY
 
 // Free functions to represent "zero" for various base types.  See

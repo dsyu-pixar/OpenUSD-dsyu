@@ -11,7 +11,11 @@
 include(Options)
 
 # Enable all warnings.
-set(_PXR_GCC_CLANG_SHARED_CXX_FLAGS "${_PXR_GCC_CLANG_SHARED_CXX_FLAGS} -Wall -Wformat-security")
+# Windows builds may encounter linker or other runtime errors with struct/class 
+# mismatches. In order for us to catch these issues on all platforms we enable 
+# the warning for mismatched-tags
+# here for all GCC/Clang builds.
+set(_PXR_GCC_CLANG_SHARED_CXX_FLAGS "${_PXR_GCC_CLANG_SHARED_CXX_FLAGS} -Wall -Wformat-security -Wmismatched-tags")
 
 # Errors are warnings in strict build mode.
 if (${PXR_STRICT_BUILD_MODE})
@@ -23,6 +27,11 @@ _disable_warning("deprecated")
 _disable_warning("deprecated-declarations")
 
 # Suppress unused typedef warnings emanating from boost.
+#
+# XXX:
+# Although we no longer have a boost dependency, we still
+# trip this warning in various places in the code and need to
+# fix those up before we can remove this.
 if (NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR
     NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS 3.6)
     if (NOT CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang" OR

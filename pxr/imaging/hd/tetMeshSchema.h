@@ -44,6 +44,8 @@ TF_DECLARE_PUBLIC_TOKENS(HdTetMeshSchemaTokens, HD_API,
 //-----------------------------------------------------------------------------
 
 
+/// \class HdTetMeshSchema
+///
 class HdTetMeshSchema : public HdSchema
 {
 public:
@@ -73,6 +75,7 @@ public:
     HD_API
     HdTetMeshTopologySchema GetTopology() const;
 
+    /// Deprecated. Use the prim-level surface schema instead.
     HD_API
     HdBoolDataSourceHandle GetDoubleSided() const; 
 

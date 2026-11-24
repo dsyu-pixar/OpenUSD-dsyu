@@ -107,13 +107,10 @@ HdxPresentTask::Execute(HdTaskContext* ctx)
             _GetHgi(),
             aovTexture, depthTexture,
             _params.dstApi,
-            _params.dstFramebuffer, _params.dstRegion);
+            _params.dstFramebuffer,
+            _params.dstRegion,
+            _params.normalizedSrcRegion);
     }
-
-    // Wrap one HdEngine::Execute frame with Hgi StartFrame and EndFrame.
-    // StartFrame is currently called in the AovInputTask.
-    // This is important for Hgi garbage collection to run.
-    _GetHgi()->EndFrame();
 }
 
 
@@ -134,6 +131,7 @@ bool operator==(const HdxPresentTaskParams& lhs,
     return lhs.dstApi == rhs.dstApi &&
            lhs.dstFramebuffer == rhs.dstFramebuffer &&
            lhs.dstRegion == rhs.dstRegion &&
+           lhs.normalizedSrcRegion == rhs.normalizedSrcRegion &&
            lhs.enabled == rhs.enabled;
 }
 

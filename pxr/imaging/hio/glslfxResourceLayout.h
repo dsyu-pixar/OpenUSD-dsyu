@@ -91,6 +91,10 @@ public:
         BUFFER_READ_WRITE,
     };
 
+    /// Describes the stage a shader function operates in.
+    /// TODO: Refactor HgiShaderStage and apply it to hio without introducing hgi dependency.
+    using ShaderStage = uint32_t;
+
     /// Specifies a member of an aggregate resource element.
     struct Member {
         Member(TfToken const & dataType,
@@ -115,7 +119,8 @@ public:
                 TfToken dataType = HioGlslfxResourceLayoutTokens->unknown,
                 TfToken name = HioGlslfxResourceLayoutTokens->unknown,
                 TfToken arraySize = TfToken(),
-                TfToken qualifiers = TfToken())
+                TfToken qualifiers = TfToken(),
+                ShaderStage stageVisibility = UINT32_MAX)
             : inOut(inOut)
             , kind(kind)
             , location(-1)
@@ -125,6 +130,7 @@ public:
             , arraySize(arraySize)
             , aggregateName()
             , members()
+            , stageVisibility(stageVisibility)
             { }
         InOut inOut;
         Kind kind;
@@ -135,6 +141,7 @@ public:
         TfToken arraySize;
         TfToken aggregateName;
         MemberVector members;
+        ShaderStage stageVisibility;
     };
     using ElementVector = std::vector<Element>;
 
@@ -143,6 +150,7 @@ public:
         TEXTURE,                // a texture
         SHADOW_TEXTURE,         // a texture used as a shadow
         ARRAY_TEXTURE,          // e.g. texture1DArray, texture2DArray, etc.
+        CUBEMAP_TEXTURE,        // a cubemap texture
     };
 
     /// Specifies a texture element.

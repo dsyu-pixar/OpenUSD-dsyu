@@ -4,15 +4,11 @@ set(PXR_PACKAGE sdrGlslfx)
 pxr_plugin(sdrGlslfx
     LIBRARIES
         ar
-        ndr
         sdr
         hio
 
     PRIVATE_CLASSES
         parserPlugin
-
-    PYMODULE_FILES
-        __init__.py
 
     RESOURCE_FILES
         plugInfo.json

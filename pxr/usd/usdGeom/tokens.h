@@ -51,7 +51,7 @@ struct UsdGeomTokensType {
     const TfToken accelerations;
     /// \brief "all"
     /// 
-    /// Possible value for UsdGeomMesh::GetFaceVaryingLinearInterpolationAttr()
+    /// Possible value for UsdGeomMesh::GetFaceVaryingLinearInterpolationAttr(), Possible value for UsdGeomBackPlateAPI::GetPlateVisibilityAttr()
     const TfToken all;
     /// \brief "angularVelocities"
     /// 
@@ -61,6 +61,62 @@ struct UsdGeomTokensType {
     /// 
     /// UsdGeomCylinder, UsdGeomCapsule, UsdGeomCone, UsdGeomCylinder_1, UsdGeomCapsule_1, UsdGeomPlane
     const TfToken axis;
+    /// \brief "backPlate"
+    /// 
+    /// Property namespace prefix for the UsdGeomBackPlateAPI schema.
+    const TfToken backPlate;
+    /// \brief "backPlate:__INSTANCE_NAME__:alpha:image"
+    /// 
+    /// UsdGeomBackPlateAPI
+    const TfToken backPlate_MultipleApplyTemplate_AlphaImage;
+    /// \brief "backPlate:__INSTANCE_NAME__:depth:cameraSpaceOffset"
+    /// 
+    /// UsdGeomBackPlateAPI
+    const TfToken backPlate_MultipleApplyTemplate_DepthCameraSpaceOffset;
+    /// \brief "backPlate:__INSTANCE_NAME__:depth:image"
+    /// 
+    /// UsdGeomBackPlateAPI
+    const TfToken backPlate_MultipleApplyTemplate_DepthImage;
+    /// \brief "backPlate:__INSTANCE_NAME__:depth:minOffset"
+    /// 
+    /// UsdGeomBackPlateAPI
+    const TfToken backPlate_MultipleApplyTemplate_DepthMinOffset;
+    /// \brief "backPlate:__INSTANCE_NAME__:depth:normalizingFactor"
+    /// 
+    /// UsdGeomBackPlateAPI
+    const TfToken backPlate_MultipleApplyTemplate_DepthNormalizingFactor;
+    /// \brief "backPlate:__INSTANCE_NAME__:image"
+    /// 
+    /// UsdGeomBackPlateAPI
+    const TfToken backPlate_MultipleApplyTemplate_Image;
+    /// \brief "backPlate:__INSTANCE_NAME__:luma:offset"
+    /// 
+    /// UsdGeomBackPlateAPI
+    const TfToken backPlate_MultipleApplyTemplate_LumaOffset;
+    /// \brief "backPlate:__INSTANCE_NAME__:luma:power"
+    /// 
+    /// UsdGeomBackPlateAPI
+    const TfToken backPlate_MultipleApplyTemplate_LumaPower;
+    /// \brief "backPlate:__INSTANCE_NAME__:luma:slope"
+    /// 
+    /// UsdGeomBackPlateAPI
+    const TfToken backPlate_MultipleApplyTemplate_LumaSlope;
+    /// \brief "backPlate:__INSTANCE_NAME__:plateVisibility"
+    /// 
+    /// UsdGeomBackPlateAPI
+    const TfToken backPlate_MultipleApplyTemplate_PlateVisibility;
+    /// \brief "backPlate:__INSTANCE_NAME__:rotateXYZ:tweak"
+    /// 
+    /// UsdGeomBackPlateAPI
+    const TfToken backPlate_MultipleApplyTemplate_RotateXYZTweak;
+    /// \brief "backPlate:__INSTANCE_NAME__:scale:tweak"
+    /// 
+    /// UsdGeomBackPlateAPI
+    const TfToken backPlate_MultipleApplyTemplate_ScaleTweak;
+    /// \brief "backPlate:__INSTANCE_NAME__:translate:tweak"
+    /// 
+    /// UsdGeomBackPlateAPI
+    const TfToken backPlate_MultipleApplyTemplate_TranslateTweak;
     /// \brief "basis"
     /// 
     /// UsdGeomBasisCurves
@@ -193,6 +249,22 @@ struct UsdGeomTokensType {
     /// 
     /// UsdGeomCamera
     const TfToken exposure;
+    /// \brief "exposure:fStop"
+    /// 
+    /// UsdGeomCamera
+    const TfToken exposureFStop;
+    /// \brief "exposure:iso"
+    /// 
+    /// UsdGeomCamera
+    const TfToken exposureIso;
+    /// \brief "exposure:responsivity"
+    /// 
+    /// UsdGeomCamera
+    const TfToken exposureResponsivity;
+    /// \brief "exposure:time"
+    /// 
+    /// UsdGeomCamera
+    const TfToken exposureTime;
     /// \brief "extent"
     /// 
     /// UsdGeomBoundable, UsdGeomCube, UsdGeomSphere, UsdGeomCylinder, UsdGeomCapsule, UsdGeomCone, UsdGeomCylinder_1, UsdGeomCapsule_1, UsdGeomPlane
@@ -241,6 +313,10 @@ struct UsdGeomTokensType {
     /// 
     /// UsdGeomCamera
     const TfToken fStop;
+    /// \brief "full"
+    /// 
+    /// Possible value for UsdGeomModelAPI::GetModelCardVisibilityAttr()
+    const TfToken full;
     /// \brief "guide"
     /// 
     /// Possible value for UsdGeomImageable::GetPurposeAttr()
@@ -283,7 +359,7 @@ struct UsdGeomTokensType {
     const TfToken indices;
     /// \brief "inherited"
     /// 
-    /// Fallback value for UsdGeomImageable::GetVisibilityAttr(), Possible value for UsdGeomVisibilityAPI::GetGuideVisibilityAttr(), Fallback value for UsdGeomVisibilityAPI::GetProxyVisibilityAttr(), Fallback value for UsdGeomVisibilityAPI::GetRenderVisibilityAttr(), Fallback value for UsdGeomModelAPI::GetModelDrawModeAttr()
+    /// Fallback value for UsdGeomImageable::GetVisibilityAttr(), Possible value for UsdGeomVisibilityAPI::GetGuideVisibilityAttr(), Fallback value for UsdGeomVisibilityAPI::GetProxyVisibilityAttr(), Fallback value for UsdGeomVisibilityAPI::GetRenderVisibilityAttr(), Fallback value for UsdGeomModelAPI::GetModelCardVisibilityAttr(), Fallback value for UsdGeomModelAPI::GetModelDrawModeAttr()
     const TfToken inherited;
     /// \brief "interpolateBoundary"
     /// 
@@ -361,6 +437,10 @@ struct UsdGeomTokensType {
     /// 
     /// UsdGeomModelAPI
     const TfToken modelCardTextureZPos;
+    /// \brief "model:cardVisibility"
+    /// 
+    /// UsdGeomModelAPI
+    const TfToken modelCardVisibility;
     /// \brief "model:drawMode"
     /// 
     /// UsdGeomModelAPI
@@ -385,6 +465,10 @@ struct UsdGeomTokensType {
     /// 
     /// UsdGeomMotionAPI
     const TfToken motionVelocityScale;
+    /// \brief "mute"
+    /// 
+    /// Possible value for UsdGeomBackPlateAPI::GetPlateVisibilityAttr()
+    const TfToken mute;
     /// \brief "none"
     /// 
     /// Possible value for UsdGeomMesh::GetFaceVaryingLinearInterpolationAttr(), Possible value for UsdGeomMesh::GetInterpolateBoundaryAttr(), Possible value for UsdGeomMesh::GetSubdivisionSchemeAttr()
@@ -553,6 +637,10 @@ struct UsdGeomTokensType {
     /// 
     /// UsdGeomCamera
     const TfToken shutterOpen;
+    /// \brief "simple"
+    /// 
+    /// Possible value for UsdGeomModelAPI::GetModelCardVisibilityAttr()
+    const TfToken simple;
     /// \brief "size"
     /// 
     /// UsdGeomCube
@@ -561,6 +649,10 @@ struct UsdGeomTokensType {
     /// 
     /// Possible value for UsdGeomMesh::GetTriangleSubdivisionRuleAttr()
     const TfToken smooth;
+    /// \brief "solo"
+    /// 
+    /// Fallback value for UsdGeomBackPlateAPI::GetPlateVisibilityAttr()
+    const TfToken solo;
     /// \brief "stereoRole"
     /// 
     /// UsdGeomCamera
@@ -729,129 +821,133 @@ struct UsdGeomTokensType {
     /// 
     /// Fallback value for UsdGeomCylinder::GetAxisAttr(), Fallback value for UsdGeomCapsule::GetAxisAttr(), Fallback value for UsdGeomCone::GetAxisAttr(), Fallback value for UsdGeomCylinder_1::GetAxisAttr(), Fallback value for UsdGeomCapsule_1::GetAxisAttr(), Fallback value for UsdGeomPlane::GetAxisAttr()
     const TfToken z;
+    /// \brief "BackPlateAPI"
+    /// 
+    /// Schema identifier and family for UsdGeomBackPlateAPI
+    const TfToken BackPlateAPI;
     /// \brief "BasisCurves"
     /// 
-    /// Schema identifer and family for UsdGeomBasisCurves
+    /// Schema identifier and family for UsdGeomBasisCurves
     const TfToken BasisCurves;
     /// \brief "Boundable"
     /// 
-    /// Schema identifer and family for UsdGeomBoundable
+    /// Schema identifier and family for UsdGeomBoundable
     const TfToken Boundable;
     /// \brief "Camera"
     /// 
-    /// Schema identifer and family for UsdGeomCamera
+    /// Schema identifier and family for UsdGeomCamera
     const TfToken Camera;
     /// \brief "Capsule"
     /// 
-    /// Schema identifer and family for UsdGeomCapsule, Schema family for UsdGeomCapsule_1
+    /// Schema identifier and family for UsdGeomCapsule, Schema family for UsdGeomCapsule_1
     const TfToken Capsule;
     /// \brief "Capsule_1"
     /// 
-    /// Schema identifer for UsdGeomCapsule_1
+    /// Schema identifier for UsdGeomCapsule_1
     const TfToken Capsule_1;
     /// \brief "Cone"
     /// 
-    /// Schema identifer and family for UsdGeomCone
+    /// Schema identifier and family for UsdGeomCone
     const TfToken Cone;
     /// \brief "Cube"
     /// 
-    /// Schema identifer and family for UsdGeomCube
+    /// Schema identifier and family for UsdGeomCube
     const TfToken Cube;
     /// \brief "Curves"
     /// 
-    /// Schema identifer and family for UsdGeomCurves
+    /// Schema identifier and family for UsdGeomCurves
     const TfToken Curves;
     /// \brief "Cylinder"
     /// 
-    /// Schema identifer and family for UsdGeomCylinder, Schema family for UsdGeomCylinder_1
+    /// Schema identifier and family for UsdGeomCylinder, Schema family for UsdGeomCylinder_1
     const TfToken Cylinder;
     /// \brief "Cylinder_1"
     /// 
-    /// Schema identifer for UsdGeomCylinder_1
+    /// Schema identifier for UsdGeomCylinder_1
     const TfToken Cylinder_1;
     /// \brief "GeomModelAPI"
     /// 
-    /// Schema identifer and family for UsdGeomModelAPI
+    /// Schema identifier and family for UsdGeomModelAPI
     const TfToken GeomModelAPI;
     /// \brief "GeomSubset"
     /// 
-    /// Schema identifer and family for UsdGeomSubset
+    /// Schema identifier and family for UsdGeomSubset
     const TfToken GeomSubset;
     /// \brief "Gprim"
     /// 
-    /// Schema identifer and family for UsdGeomGprim
+    /// Schema identifier and family for UsdGeomGprim
     const TfToken Gprim;
     /// \brief "HermiteCurves"
     /// 
-    /// Schema identifer and family for UsdGeomHermiteCurves
+    /// Schema identifier and family for UsdGeomHermiteCurves
     const TfToken HermiteCurves;
     /// \brief "Imageable"
     /// 
-    /// Schema identifer and family for UsdGeomImageable
+    /// Schema identifier and family for UsdGeomImageable
     const TfToken Imageable;
     /// \brief "Mesh"
     /// 
-    /// Schema identifer and family for UsdGeomMesh
+    /// Schema identifier and family for UsdGeomMesh
     const TfToken Mesh;
     /// \brief "MotionAPI"
     /// 
-    /// Schema identifer and family for UsdGeomMotionAPI
+    /// Schema identifier and family for UsdGeomMotionAPI
     const TfToken MotionAPI;
     /// \brief "NurbsCurves"
     /// 
-    /// Schema identifer and family for UsdGeomNurbsCurves
+    /// Schema identifier and family for UsdGeomNurbsCurves
     const TfToken NurbsCurves;
     /// \brief "NurbsPatch"
     /// 
-    /// Schema identifer and family for UsdGeomNurbsPatch
+    /// Schema identifier and family for UsdGeomNurbsPatch
     const TfToken NurbsPatch;
     /// \brief "Plane"
     /// 
-    /// Schema identifer and family for UsdGeomPlane
+    /// Schema identifier and family for UsdGeomPlane
     const TfToken Plane;
     /// \brief "PointBased"
     /// 
-    /// Schema identifer and family for UsdGeomPointBased
+    /// Schema identifier and family for UsdGeomPointBased
     const TfToken PointBased;
     /// \brief "PointInstancer"
     /// 
-    /// Schema identifer and family for UsdGeomPointInstancer
+    /// Schema identifier and family for UsdGeomPointInstancer
     const TfToken PointInstancer;
     /// \brief "Points"
     /// 
-    /// Schema identifer and family for UsdGeomPoints
+    /// Schema identifier and family for UsdGeomPoints
     const TfToken Points;
     /// \brief "PrimvarsAPI"
     /// 
-    /// Schema identifer and family for UsdGeomPrimvarsAPI
+    /// Schema identifier and family for UsdGeomPrimvarsAPI
     const TfToken PrimvarsAPI;
     /// \brief "Scope"
     /// 
-    /// Schema identifer and family for UsdGeomScope
+    /// Schema identifier and family for UsdGeomScope
     const TfToken Scope;
     /// \brief "Sphere"
     /// 
-    /// Schema identifer and family for UsdGeomSphere
+    /// Schema identifier and family for UsdGeomSphere
     const TfToken Sphere;
     /// \brief "TetMesh"
     /// 
-    /// Schema identifer and family for UsdGeomTetMesh
+    /// Schema identifier and family for UsdGeomTetMesh
     const TfToken TetMesh;
     /// \brief "VisibilityAPI"
     /// 
-    /// Schema identifer and family for UsdGeomVisibilityAPI
+    /// Schema identifier and family for UsdGeomVisibilityAPI
     const TfToken VisibilityAPI;
     /// \brief "Xform"
     /// 
-    /// Schema identifer and family for UsdGeomXform
+    /// Schema identifier and family for UsdGeomXform
     const TfToken Xform;
     /// \brief "Xformable"
     /// 
-    /// Schema identifer and family for UsdGeomXformable
+    /// Schema identifier and family for UsdGeomXformable
     const TfToken Xformable;
     /// \brief "XformCommonAPI"
     /// 
-    /// Schema identifer and family for UsdGeomXformCommonAPI
+    /// Schema identifier and family for UsdGeomXformCommonAPI
     const TfToken XformCommonAPI;
     /// A vector of all of the tokens listed above.
     const std::vector<TfToken> allTokens;

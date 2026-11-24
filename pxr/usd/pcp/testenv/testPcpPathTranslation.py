@@ -5,7 +5,6 @@
 # Licensed under the terms set forth in the LICENSE.txt file available at
 # https://openusd.org/license.
 
-from __future__ import print_function
 from pxr import Sdf, Tf, Pcp
 import unittest, sys
 
@@ -23,7 +22,7 @@ class TestPcpPathTranslation(unittest.TestCase):
         print("TestPathTranslationWithVariants...")
 
         pcpCache = self._GetPcpCacheForLayer(
-            "bug77818/unit_main_cam.sdf")
+            "bug77818/unit_main_cam.usda")
 
         # Verify that translating a path to a variant node keeps any relevant
         # variant selections.
@@ -45,7 +44,7 @@ class TestPcpPathTranslation(unittest.TestCase):
     def test_LocalAbsoluteTargetPaths(self):
         print("TestLocalAbsoluteTargetPaths...")
 
-        pcpCache = self._GetPcpCacheForLayer("Root.sdf")
+        pcpCache = self._GetPcpCacheForLayer("Root.usda")
 
         errors = []
         pathMap = {"/World/Chars/Ref1.localSelfAbs" : "/World/Chars/Ref1",
@@ -81,7 +80,7 @@ class TestPcpPathTranslation(unittest.TestCase):
     def test_LocalRelativeTargetPaths(self):
         print("TestLocalRelativeTargetPaths...")
 
-        pcpCache = self._GetPcpCacheForLayer("Root.sdf")
+        pcpCache = self._GetPcpCacheForLayer("Root.usda")
 
         errors = []
         pathMap = {"/World/Chars/Ref1.localSelfRel" : ".",
@@ -119,7 +118,7 @@ class TestPcpPathTranslation(unittest.TestCase):
     def test_ReferenceAbsoluteTargetPaths(self):
         print("TestReferenceAbsoluteTargetPaths...")
 
-        pcpCache = self._GetPcpCacheForLayer("Root.sdf")
+        pcpCache = self._GetPcpCacheForLayer("Root.usda")
 
         errors = []
         pathMap = {"/World/Chars/Ref1.refSelfAbs" : "/World/Chars/Ref1",
@@ -152,7 +151,7 @@ class TestPcpPathTranslation(unittest.TestCase):
     def test_ReferenceRelativeTargetPaths(self):
         print("TestReferenceRelativeTargetPaths...")
 
-        pcpCache = self._GetPcpCacheForLayer("Root.sdf")
+        pcpCache = self._GetPcpCacheForLayer("Root.usda")
 
         errors = []
         pathMap = {"/World/Chars/Ref1.refSelfRel" : ".",
@@ -187,7 +186,7 @@ class TestPcpPathTranslation(unittest.TestCase):
     def test_ReferenceErrorCases(self):
         print("TestReferenceErrorCases...")
 
-        pcpCache = self._GetPcpCacheForLayer("Root.sdf")
+        pcpCache = self._GetPcpCacheForLayer("Root.usda")
 
         errors = []
         paths = ["/World/Chars/Ref1.refBadAbs",

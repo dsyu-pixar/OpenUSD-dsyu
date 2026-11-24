@@ -26,6 +26,7 @@ HdRenderPassState::HdRenderPassState()
     , _pointSize(3.0)
     , _lightingEnabled(true)
     , _clippingEnabled(true)
+    , _enableExposureCompensation(true)
 
     , _maskColor(1.0f, 0.0f, 0.0f, 1.0f)
     , _indicatorColor(0.0f, 1.0f, 0.0f, 1.0f)
@@ -72,6 +73,13 @@ HdRenderPassState::HdRenderPassState()
 }
 
 HdRenderPassState::~HdRenderPassState() = default;
+
+/* virtual */
+void
+HdRenderPassState::Copy(HdRenderPassState const& src)
+{
+    *this = src;
+}
 
 /* virtual */
 void
@@ -280,6 +288,12 @@ void
 HdRenderPassState::SetClippingEnabled(bool enabled)
 {
     _clippingEnabled = enabled;
+}
+
+void
+HdRenderPassState::SetEnableExposureCompensation(bool enabled)
+{
+    _enableExposureCompensation = enabled;
 }
 
 void

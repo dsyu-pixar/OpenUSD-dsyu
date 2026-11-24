@@ -23,8 +23,8 @@ PXR_NAMESPACE_OPEN_SCOPE
 TF_DEFINE_PRIVATE_TOKENS(
     _tokens,
 
-    /* discoveryTypes */
-    ((sourceType, "USD"))
+    /* NOTE: shadingSystem will change to 'abstract' in a future release */
+    ((shadingSystem, "USD"))
     ((discoveryType, "usd-schema-gen"))
 
     (MeshLight)
@@ -38,9 +38,9 @@ TF_DEFINE_PRIVATE_TOKENS(
 
 /*static*/
 const TfToken &
-UsdLux_LightDefParserPlugin::_GetSourceType() 
+UsdLux_LightDefParserPlugin::_GetShadingSystem() 
 {
-    return _tokens->sourceType;
+    return _tokens->shadingSystem;
 }
 
 /*static*/
@@ -62,19 +62,25 @@ UsdLux_LightDefParserPlugin::_GetShaderIdToAPITypeNameMap() {
 }
 
 static
-NdrTokenMap
+SdrTokenMap
 _GetSdrMetadata(const UsdShadeConnectableAPI &connectable,
-                const NdrTokenMap &discoveryResultMetadata) 
+                const SdrTokenMap &discoveryResultMetadata) 
 {
-    NdrTokenMap metadata = discoveryResultMetadata;
+    SdrTokenMap metadata = discoveryResultMetadata;
 
     metadata[SdrNodeMetadata->Help] = TfStringPrintf(
         "Fallback shader node generated from the USD %s schema",
         connectable.GetPrim().GetTypeName().GetText());
 
-    metadata[SdrNodeMetadata->Primvars] = 
-        UsdShadeShaderDefUtils::GetPrimvarNamesMetadataString(
-            metadata, connectable);
+    const std::string primvarsStr = 
+        UsdShadeShaderDefUtils::GetPrimvarNamesMetadataString(metadata, 
+                                                              connectable);
+    if (!primvarsStr.empty()) {
+        metadata[SdrNodeMetadata->Primvars] = primvarsStr;
+    }
+
+    metadata[SdrNodeMetadata->Subdomain] = SdrNodeSubdomain->Lighting;
+    metadata[SdrNodeMetadata->Context] = SdrNodeContext->Light;
 
     return metadata;
 }
@@ -122,9 +128,9 @@ _CopyPropertiesFromSchema(
     return true;
 }
 
-NdrNodeUniquePtr
-UsdLux_LightDefParserPlugin::Parse(
-    const NdrNodeDiscoveryResult &discoveryResult)
+SdrShaderNodeUniquePtr
+UsdLux_LightDefParserPlugin::ParseShaderNode(
+    const SdrShaderNodeDiscoveryResult &discoveryResult)
 {
     TRACE_FUNCTION();
 
@@ -158,7 +164,7 @@ UsdLux_LightDefParserPlugin::Parse(
     // Find and open the generated schema layer.
     SdfLayerRefPtr schemaLayer = _GetGeneratedSchema();
     if (!schemaLayer) {
-        return NdrParserPlugin::GetInvalidNode(discoveryResult);
+        return SdrParserPlugin::GetInvalidShaderNode(discoveryResult);
     }
 
     // Since we're composing the prim ourselves create a new layer and prim
@@ -184,7 +190,7 @@ UsdLux_LightDefParserPlugin::Parse(
         // the typeName, apiSchemas, and the property children can affect what 
         // properties are included when we open this prim on a USD stage.
         if (!_CopyPropertiesFromSchema(schemaLayer, schemaName, primSpec)) {
-            return NdrParserPlugin::GetInvalidNode(discoveryResult);
+            return SdrParserPlugin::GetInvalidShaderNode(discoveryResult);
         }
     }
 
@@ -192,11 +198,11 @@ UsdLux_LightDefParserPlugin::Parse(
     // which we'll create the node from.
     UsdStageRefPtr stage = UsdStage::Open(layer, nullptr);
     if (!stage) {
-        return NdrParserPlugin::GetInvalidNode(discoveryResult);
+        return SdrParserPlugin::GetInvalidShaderNode(discoveryResult);
     }
     UsdPrim prim = stage->GetPrimAtPath(primSpec->GetPath());
     if (!prim) {
-        return NdrParserPlugin::GetInvalidNode(discoveryResult);
+        return SdrParserPlugin::GetInvalidShaderNode(discoveryResult);
     }
     // Note that we don't check the "conformance" of this prim to the 
     // connectable API because the prim is untyped and will not conform. But 
@@ -205,34 +211,33 @@ UsdLux_LightDefParserPlugin::Parse(
     // functions called below.
     UsdShadeConnectableAPI connectable(prim);
 
-    return NdrNodeUniquePtr(new SdrShaderNode(
+    return SdrShaderNodeUniquePtr(new SdrShaderNode(
         discoveryResult.identifier,
         discoveryResult.version,
         discoveryResult.name,
-        discoveryResult.family,
-        SdrNodeContext->Light,
-        discoveryResult.sourceType,
+        discoveryResult.function,
+        discoveryResult.shadingSystem,
         /*nodeUriAssetPath=*/ std::string(),
         /*resolvedImplementationUri=*/ std::string(),
-        UsdShadeShaderDefUtils::GetShaderProperties(connectable),
+        UsdShadeShaderDefUtils::GetProperties(connectable),
         _GetSdrMetadata(connectable, discoveryResult.metadata),
         discoveryResult.sourceCode
     ));
 }
 
-const NdrTokenVec &
+const SdrTokenVec &
 UsdLux_LightDefParserPlugin::GetDiscoveryTypes() const 
 {
-    static const NdrTokenVec discoveryTypes{_GetDiscoveryType()};
+    static const SdrTokenVec discoveryTypes{_GetDiscoveryType()};
     return discoveryTypes;
 }
 
 const TfToken &
-UsdLux_LightDefParserPlugin::GetSourceType() const
+UsdLux_LightDefParserPlugin::GetShadingSystem() const
 {
-    return _GetSourceType();
+    return _GetShadingSystem();
 }
 
-NDR_REGISTER_PARSER_PLUGIN(UsdLux_LightDefParserPlugin);
+SDR_REGISTER_PARSER_PLUGIN(UsdLux_LightDefParserPlugin);
 
 PXR_NAMESPACE_CLOSE_SCOPE

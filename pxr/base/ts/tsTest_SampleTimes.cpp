@@ -6,15 +6,14 @@
 //
 
 #include "pxr/pxr.h"
+#include "pxr/base/ts/spline.h"
 #include "pxr/base/ts/tsTest_SampleTimes.h"
-#include "pxr/base/ts/tsTest_SplineData.h"
 #include "pxr/base/tf/diagnostic.h"
 
 #include <algorithm>
+#include <limits>
 
 PXR_NAMESPACE_OPEN_SCOPE
-
-using SData = TsTest_SplineData;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -64,16 +63,16 @@ TsTest_SampleTimes::_GetKnotTimes() const
 
     // Examine all knots.
     bool held = false;
-    for (const SData::Knot &knot : _splineData.GetKnots())
+    for (const TsKnot& knot : _spline.GetKnots())
     {
-        if (held || knot.isDualValued)
+        if (held || knot.IsDualValued())
         {
-            result.insert(SampleTime(knot.time, /* pre = */ true));
+            result.insert(SampleTime(knot.GetTime(), /* pre = */ true));
         }
 
-        result.insert(SampleTime(knot.time));
+        result.insert(SampleTime(knot.GetTime()));
 
-        held = (knot.nextSegInterpMethod == SData::InterpHeld);
+        held = (knot.GetNextInterpolation() == TsInterpHeld);
     }
 
     return result;
@@ -82,14 +81,14 @@ TsTest_SampleTimes::_GetKnotTimes() const
 ////////////////////////////////////////////////////////////////////////////////
 
 TsTest_SampleTimes::TsTest_SampleTimes()
-    : _haveSplineData(false)
+    : _hasSpline(false)
 {
 }
 
 TsTest_SampleTimes::TsTest_SampleTimes(
-    const TsTest_SplineData &splineData)
-    : _haveSplineData(true),
-      _splineData(splineData)
+    const TsSpline& spline)
+    : _hasSpline(true),
+      _spline(spline)
 {
 }
 
@@ -108,9 +107,9 @@ void TsTest_SampleTimes::AddTimes(
 
 void TsTest_SampleTimes::AddKnotTimes()
 {
-    if (!_haveSplineData)
+    if (!_hasSpline)
     {
-        TF_CODING_ERROR("AddKnotTimes: no spline data");
+        TF_CODING_ERROR("AddKnotTimes: no spline");
         return;
     }
 
@@ -121,9 +120,9 @@ void TsTest_SampleTimes::AddKnotTimes()
 void TsTest_SampleTimes::AddUniformInterpolationTimes(
     const int numSamples)
 {
-    if (!_haveSplineData)
+    if (!_hasSpline)
     {
-        TF_CODING_ERROR("AddUniformInterpolationTimes: no spline data");
+        TF_CODING_ERROR("AddUniformInterpolationTimes: no spline");
         return;
     }
 
@@ -152,9 +151,9 @@ void TsTest_SampleTimes::AddUniformInterpolationTimes(
 void TsTest_SampleTimes::AddExtrapolationTimes(
     const double extrapolationFactor)
 {
-    if (!_haveSplineData)
+    if (!_hasSpline)
     {
-        TF_CODING_ERROR("AddExtrapolationTimes: no spline data");
+        TF_CODING_ERROR("AddExtrapolationTimes: no spline");
         return;
     }
 
@@ -166,10 +165,8 @@ void TsTest_SampleTimes::AddExtrapolationTimes(
 
     // Use this simplistic technique for non-looped extrapolation, which always
     // produces a straight line, and so can be illustrated with a single sample.
-    const bool preLoop =
-        (_splineData.GetPreExtrapolation().method == SData::ExtrapLoop);
-    const bool postLoop =
-        (_splineData.GetPostExtrapolation().method == SData::ExtrapLoop);
+    const bool preLoop = _spline.GetPreExtrapolation().IsLooping();
+    const bool postLoop = _spline.GetPostExtrapolation().IsLooping();
     if (preLoop && postLoop)
     {
         return;
@@ -201,9 +198,9 @@ void TsTest_SampleTimes::AddExtrapolatingLoopTimes(
     const int numIterations,
     const int numSamplesPerIteration)
 {
-    if (!_haveSplineData)
+    if (!_hasSpline)
     {
-        TF_CODING_ERROR("AddExtrapolatingLoopTimes: no spline data");
+        TF_CODING_ERROR("AddExtrapolatingLoopTimes: no spline");
         return;
     }
 
@@ -215,10 +212,8 @@ void TsTest_SampleTimes::AddExtrapolatingLoopTimes(
 
     // Use this technique for looped extrapolation, which requires copies of the
     // sample times from the knot range to illustrate properly.
-    const bool preLoop =
-        (_splineData.GetPreExtrapolation().method == SData::ExtrapLoop);
-    const bool postLoop =
-        (_splineData.GetPostExtrapolation().method == SData::ExtrapLoop);
+    const bool preLoop = _spline.GetPreExtrapolation().IsLooping();
+    const bool postLoop = _spline.GetPostExtrapolation().IsLooping();
     if (!preLoop && !postLoop)
     {
         return;
@@ -236,7 +231,7 @@ void TsTest_SampleTimes::AddExtrapolatingLoopTimes(
     const double knotRange = lastTime - firstTime;
 
     // Create standard times for the knot range using a sub-instance.
-    TsTest_SampleTimes knotRangeTimes(_splineData);
+    TsTest_SampleTimes knotRangeTimes(_spline);
     knotRangeTimes.AddKnotTimes();
     knotRangeTimes.AddUniformInterpolationTimes(numSamplesPerIteration);
     const SampleTimeSet &knotRangeSet = knotRangeTimes.GetTimes();
@@ -302,6 +297,28 @@ const TsTest_SampleTimes::SampleTimeSet&
 TsTest_SampleTimes::GetTimes() const
 {
     return _times;
+}
+
+double
+TsTest_SampleTimes::GetMinTime() const
+{
+    if (_times.empty()) {
+        return std::numeric_limits<double>::quiet_NaN();
+    } else {
+        // SampleTimeSets are sorted
+        return _times.begin()->time;
+    }
+}
+
+double
+TsTest_SampleTimes::GetMaxTime() const
+{
+    if (_times.empty()) {
+        return std::numeric_limits<double>::quiet_NaN();
+    } else {
+        // SampleTimeSets are sorted
+        return _times.rbegin()->time;
+    }
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE

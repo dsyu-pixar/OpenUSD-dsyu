@@ -79,6 +79,11 @@ HgiMetalGraphicsPipeline::_CreateVertexDescriptor()
             _vertexDescriptor.layouts[index].stepFunction =
                 MTLVertexStepFunctionPerPatchControlPoint;
             _vertexDescriptor.layouts[index].stepRate = 1;
+        } else if (vbo.vertexStepFunction ==
+                HgiVertexBufferStepFunctionPerInstance) {
+            _vertexDescriptor.layouts[index].stepFunction =
+                MTLVertexStepFunctionPerInstance;
+            _vertexDescriptor.layouts[index].stepRate = 1;
         }
         else {
             _vertexDescriptor.layouts[index].stepFunction =
@@ -296,12 +301,14 @@ HgiMetalGraphicsPipeline::_CreateRenderPipelineState(HgiMetal *hgi)
     }
 
     stateDesc.sampleCount = _descriptor.multiSampleState.sampleCount;
-    if (_descriptor.multiSampleState.alphaToCoverageEnable) {
+    if (_descriptor.multiSampleState.alphaToCoverageEnable &&
+        _descriptor.multiSampleState.sampleCount > HgiSampleCount1) {
         stateDesc.alphaToCoverageEnabled = YES;
     } else {
         stateDesc.alphaToCoverageEnabled = NO;
     }
-    if (_descriptor.multiSampleState.alphaToOneEnable) {
+    if (_descriptor.multiSampleState.alphaToOneEnable &&
+        _descriptor.multiSampleState.sampleCount > HgiSampleCount1) {
         stateDesc.alphaToOneEnabled = YES;
     } else {
         stateDesc.alphaToOneEnabled = NO;
@@ -437,9 +444,19 @@ HgiMetalGraphicsPipeline::BindPipeline(id<MTLRenderCommandEncoder> renderEncoder
     //
     HgiDepthStencilState const & dsState = _descriptor.depthState;
     if (_descriptor.depthState.depthBiasEnabled) {
+        const bool primitiveSupportsDepthBias =
+                !(_descriptor.primitiveType == HgiPrimitiveTypePointList ||
+                  _descriptor.primitiveType == HgiPrimitiveTypeLineList  ||
+                  _descriptor.primitiveType == HgiPrimitiveTypeLineStrip);
+        
+        // Points and lines have no depth gradient, so a slope scaled bias
+        // should have no effect, but instead it causes randomly broken
+        // depth values.
+        const float slopeScale =
+                primitiveSupportsDepthBias ? dsState.depthBiasSlopeFactor : 0.0f;
         [renderEncoder
             setDepthBias: dsState.depthBiasConstantFactor
-              slopeScale: dsState.depthBiasSlopeFactor
+              slopeScale: slopeScale
                    clamp: 0.0f];
     }
 

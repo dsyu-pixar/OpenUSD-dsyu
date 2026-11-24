@@ -14,11 +14,12 @@ TF_WRAP_MODULE
 {
     TF_WRAP( ArrayAssetPath );
     TF_WRAP( ArrayPath );
-    TF_WRAP( ArrayTimeCode );
+    TF_WRAP( ArrayPathExpression );
     TF_WRAP( AssetPath );
     TF_WRAP( ChangeBlock );
     TF_WRAP( CleanupEnabler );
     TF_WRAP( CopyUtils );
+    TF_WRAP( CrateInfo );
     TF_WRAP( FileFormat );
     TF_WRAP( Layer );
     TF_WRAP( LayerOffset );
@@ -33,10 +34,12 @@ TF_WRAP_MODULE
     TF_WRAP( Payload );
     TF_WRAP( PredicateFunctionResult );
     TF_WRAP( Reference );
-    TF_WRAP( TimeCode );
     TF_WRAP( Types );
+    TF_WRAP( UsdFileFormat );
     TF_WRAP( ValueType );
     TF_WRAP( VariableExpression );
+    TF_WRAP( VariableExpressionAST );
+    TF_WRAP( ZipFile );
 
     TF_WRAP( Spec );
     TF_WRAP( VariantSpec );

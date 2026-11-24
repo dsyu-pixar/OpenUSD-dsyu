@@ -418,11 +418,8 @@ def _ProcessSchemaDocs(schemaFile):
         # Get properties data
         # Use UsdClass.GetProperties to get inherited/composed properties as well
         for clsProp in cls.GetProperties():
-            propName = clsProp.GetBaseName()
-            # Include property namespace, if any
-            propNamespace = clsProp.GetNamespace()
-            if bool(propNamespace):
-                propName = propNamespace + ":" + propName 
+            # Get full property name, including namespace if any
+            propName = clsProp.GetName()
             # Get the property USD type and schema fallback value if any
             if isinstance(clsProp, Usd.Attribute):
                 propTypeName = clsProp.GetTypeName()
@@ -431,6 +428,20 @@ def _ProcessSchemaDocs(schemaFile):
                 # the UsdProperty values directly
                 if clsProp.HasAuthoredValue():
                     propDefault = clsProp.Get()
+                    # Convert token arrays into formatted string for 
+                    # better doc output (done by hand to ensure we use
+                    # double-quotes and not Python single-quotes for tokens)
+                    if clsProp.GetTypeName() == Sdf.ValueTypeNames.TokenArray:
+                        tokenArrayString = "[ "
+                        isFirstToken = True
+                        for token in propDefault:
+                            if not isFirstToken:
+                                tokenArrayString += ", "
+                            else:
+                                isFirstToken = False
+                            tokenArrayString += '"{0}"'.format(token)
+                        tokenArrayString += " ]"      
+                        propDefault = tokenArrayString
                 else:
                     propDefault = None
             elif isinstance(clsProp, Usd.Relationship):
@@ -507,11 +518,18 @@ def _GenerateSphinxTOC(fileList, outputFile, domain, domainTitle):
             file.write(workStr)
             workStr = "\n"
             file.write(workStr)
-            # Add the TOC entries in the order listed in fileList
             workStr = ".. toctree::\n"
             file.write(workStr)
-            for generatedFile in fileList:
-                workStr = "   " + os.path.basename(generatedFile) + "\n"
+            # Add the TOC entries in the order listed in fileList
+            # However, if there's an overview.md, list that first in the TOC
+            filteredFileList = []
+            for fullFile in fileList:
+                if os.path.basename(fullFile) == "overview.md":
+                    filteredFileList.insert(0, os.path.basename(fullFile))
+                else:
+                    filteredFileList.append(os.path.basename(fullFile))
+            for generatedFile in filteredFileList:
+                workStr = "   " + generatedFile + "\n"
                 file.write(workStr)
     except IOError as openException:
         Print.Err("Failed to write to " + outputFile + ": " + str(openException))

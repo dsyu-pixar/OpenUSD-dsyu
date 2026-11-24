@@ -7,6 +7,7 @@
 
 #include "pxr/imaging/hdsi/lightLinkingSceneIndex.h"
 
+#include "lightLinkingSceneIndex.h"
 #include "pxr/imaging/hd/collectionExpressionEvaluator.h"
 #include "pxr/imaging/hd/collectionPredicateLibrary.h"
 #include "pxr/imaging/hd/overlayContainerDataSource.h"
@@ -111,15 +112,16 @@ public:
 
     /// Updates tables and dirty state for the provided collection and
     /// expression.
-    /// 
+    ///
     void ProcessCollection(
         const SdfPath &primPath,
         const TfToken &collectionName,
-        const SdfPathExpression &expr)
+        const SdfPathExpression &expr,
+        const HdsiLightLinkingSceneIndex * const lightLinkingSi)
     {
         TRACE_FUNCTION();
 
-        const _CollectionId collectionId = 
+        const _CollectionId collectionId =
             _MakeCollectionId(primPath, collectionName);
 
         const auto colIdEntry = _collectionIdToCategoryId.find(collectionId);
@@ -148,13 +150,15 @@ public:
                 return;
             }
 
-            // Expression has changed.Remove table entries for the existing 
+            // Mark the old expression as dirty.
+            // Do this prior to removing the collection below, because
+            // that will make the table entry referenced by oldExpr expire.
+            _dirtyState.push_back({oldExpr, collectionId});
+
+            // Expression has changed.Remove table entries for the existing
             // collection and queue invalidation.
             _RemoveCollection(
                 collectionId, _InvalidationType::DirtyTargetsAndCollection);
-
-            _dirtyState.push_back({oldExpr, collectionId});
-
         }
 
         if (IsTrivial(expr)) {
@@ -179,7 +183,7 @@ public:
                  _ToStr(collectionId).c_str(), expr.GetText().c_str());
 
             // ... create evaluator.
-            eval = _MakePathExpressionEvaluator(expr);
+            eval = lightLinkingSi->MakeEvaluator(expr);
 
         } else {
             TF_DEBUG(HDSI_LIGHT_LINK_COLLECTION_CACHE).Msg(
@@ -231,7 +235,7 @@ public:
         return categories;
     }
 
-    /// Returns true and updates \p categoryId if the cache has an entry for 
+    /// Returns true and updates \p categoryId if the cache has an entry for
     /// the provided collection.
     /// Returns false otherwise (for trivial or untracked collections).
     ///
@@ -255,9 +259,14 @@ public:
     /// Processes the queued dirty state and updates \p dirtiedEntries to
     /// invalidate targeted prims and/or lights.
     ///
+    /// \a populating indicates that this is the first time prims are
+    /// being populated, so invalidation of existing prims is not required.
+    ///
     void
     InvalidatePrimsAndClearDirtyState(
-        HdSceneIndexObserver::DirtiedPrimEntries *dirtiedEntries)
+        HdSceneIndexObserver::DirtiedPrimEntries *dirtiedEntries,
+        bool populating,
+        const HdsiLightLinkingSceneIndex * const lightLinkingSi)
     {
         if (!dirtiedEntries) {
             TF_CODING_ERROR("Null dirty notice vector provided\n");
@@ -268,17 +277,24 @@ public:
             return;
         }
 
+        // If we are processing the initial population of the scene,
+        // we can skip scanning for existing prims to invalidate.
+        if (populating) {
+            _dirtyState.clear();
+            return;
+        }
+
         TRACE_FUNCTION();
 
         // Gather the set of unique expressions and collections to invalidate.
-        // XXX For now, we conservatively invalidate the union of all queued 
+        // XXX For now, we conservatively invalidate the union of all queued
         //     expressions.
-        //     We can consult the tables to skip expressions in certain 
-        //     scenarios. 
+        //     We can consult the tables to skip expressions in certain
+        //     scenarios.
         //     - The lightLink collection on N lights have the same category
         //       id. We edit the lightLink expression on one of the lights to
         //       the trivial expression '//'.
-        //       We don't need to evaluate the expression to invalidate the 
+        //       We don't need to evaluate the expression to invalidate the
         //       targets in this scenario since their categories are unaffected.
         //
         //     - The lightLink collection on light A shares the same category
@@ -290,7 +306,7 @@ public:
         //       "lighting:subset", which needs to be updated in this scenario.
         //       So, it is possibly renderer dependent and should perhaps be
         //       a configurable thing on the scene index at some point.
-        //         
+        //
         using _ExprSet = std::unordered_set<_Expr, TfHash>;
         _ExprSet exprs;
         _CollectionIdSet collectionIds;
@@ -305,7 +321,7 @@ public:
 
         // Evaluating an expression over a scene index can be expensive if
         // several prims need to be traversed.
-        // Compute the unioned expression to evaluate (and thus traverse) 
+        // Compute the unioned expression to evaluate (and thus traverse)
         // just the once.
         //
         SdfPathExpression combinedExpr;
@@ -317,14 +333,14 @@ public:
                 "Combined expression from %zu dirty expressions: %s\n",
                 exprs.size(), combinedExpr.GetText().c_str());
 
-        const auto eval = _MakePathExpressionEvaluator(combinedExpr);
+        const auto eval = lightLinkingSi->MakeEvaluator(combinedExpr);
         SdfPathVector targets = _ComputeAllMatches(eval);
         _InvalidateCategoriesOnTargets(targets, dirtiedEntries);
         _InvalidateLights(collectionIds, dirtiedEntries);
 
         _dirtyState.clear();
     }
-    
+
     /// Returns whether the provided expression is trivial meaning that all
     /// prims in the scene are targeted (illumniated or cast shadows for
     /// light linking).
@@ -428,7 +444,7 @@ private:
     {
         std::string strId =
             _tokens->groupPrefix.GetString() + std::to_string(_groupIdx++);
-        
+
         // We expect the number of unique expressions to be in the 100s,
         // not 2^64.
         if (_groupIdx == 0) {
@@ -490,21 +506,8 @@ private:
         // XXX This doesn't support instance proxy traversal.
         eval.PopulateMatches(
             SdfPath::AbsoluteRootPath(), matchKind, &resultVec);
-        
-        return resultVec;
-    }
 
-    HdCollectionExpressionEvaluator
-    _MakePathExpressionEvaluator(
-        const SdfPathExpression &expr) const
-    {
-        // XXX For now, use the base set of predicates that Hydra ships with.
-        //     If this needs to be configured for an application, then the
-        //     light linking scene index would need to be registered using the
-        //     callback registration mechanism rather than the plugin registry.
-        //
-        return HdCollectionExpressionEvaluator(
-            _si, expr, HdGetCollectionPredicateLibrary());
+        return resultVec;
     }
 
 private:
@@ -572,7 +575,7 @@ _GetAllLinkingCollectionNames()
     static const TfTokenVector names = {
         HdTokens->lightLink,
         HdTokens->shadowLink,
-        HdTokens->filterLink 
+        HdTokens->filterLink
     };
 
     return names;
@@ -614,7 +617,7 @@ _GetPrimTypes(
     return fallback;
 }
 
-// Returns whether `tokens` contains `key`. 
+// Returns whether `tokens` contains `key`.
 bool
 _Contains(
     const VtArray<TfToken> &tokens,
@@ -642,7 +645,7 @@ bool _IsInstanced(
 void
 _AddIfAbsent(
     const TfToken &token,
-    TfTokenVector *tokens) 
+    TfTokenVector *tokens)
 {
     if (!_Contains(*tokens, token)) {
         tokens->push_back(token);
@@ -663,7 +666,7 @@ _BuildCategoriesDataSource(
     if (categories.empty()) {
         return nullptr;
     }
-    
+
     return HdCategoriesSchema::BuildRetained(
         categories.size(), categories.data(),
         /*excludedNameCount = */ 0,
@@ -695,7 +698,7 @@ _BuildInstanceCategoriesDataSource(
     //     Note that the scene delegate API as well as the instance categories
     //     schema doesn't cater to specifying categories per instance-prototype
     //     tuple.
-    //     HdSceneDelegate::GetInstanceCategories returns a 
+    //     HdSceneDelegate::GetInstanceCategories returns a
     //     std::vector<VtArray<TfToken>> indexed by the instance idx.
     //
     const HdInstancerTopologySchema topologySchema =
@@ -703,7 +706,7 @@ _BuildInstanceCategoriesDataSource(
 
     const HdPathArrayDataSourceHandle instancePathsDs =
         topologySchema.GetInstanceLocations();
-    
+
     if (!instancePathsDs) {
         // Point instancer.
         // We can't link to instances of a point instancer (since they
@@ -743,7 +746,7 @@ _BuildInstanceCategoriesDataSource(
 }
 
 // Add dependency from the instancer to the instance prims it serves to
-// invalidate its instanceCategories locator. 
+// invalidate its instanceCategories locator.
 //
 HdContainerDataSourceHandle
 _BuildDependenciesDataSource(
@@ -754,7 +757,7 @@ _BuildDependenciesDataSource(
 
     const HdPathArrayDataSourceHandle instancePathsDs =
         topologySchema.GetInstanceLocations();
-    
+
     const bool isPointInstancer =
         !instancePathsDs || instancePathsDs->GetTypedValue(0.0).empty();
 
@@ -780,7 +783,7 @@ _BuildDependenciesDataSource(
     // XXX This is a bit hacky and relies on the invalidation behavior in the
     //     cache. Specifically, we rely on invalidating the categories
     //     on all prims targeted by the collection, including instance prims.
-    //     
+    //
     //     We publish categories only for geometry prims and not instance
     //     prims.  See HdsiLightLinkingSceneIndex::GetPrim.
     //     Note: categories is relevant for instancer prims corresponding
@@ -809,7 +812,7 @@ _BuildDependenciesDataSource(
 
 // Prim data source wrapper for geometry prims that provides the data source
 // for the 'categories' locator.
-// 
+//
 class _GprimDataSource : public HdContainerDataSource
 {
 public:
@@ -865,7 +868,7 @@ public:
     TfTokenVector GetNames() override
     {
         TfTokenVector names = _inputPrimDs->GetNames();
-        // instanceCategories is relevant for (hydra) instancer prims that 
+        // instanceCategories is relevant for (hydra) instancer prims that
         // implement native instancing USD semantics.
         _AddIfAbsent(
             HdInstanceCategoriesSchemaTokens->instanceCategories, &names);
@@ -895,10 +898,10 @@ public:
         if (name == HdCategoriesSchemaTokens->categories) {
             const HdInstancerTopologySchema topologySchema =
                 HdInstancerTopologySchema::GetFromParent(_inputPrimDs);
-            
+
             const HdPathArrayDataSourceHandle instancePathsDs =
                 topologySchema.GetInstanceLocations();
-    
+
             const bool isPointInstancer =
                 !instancePathsDs || instancePathsDs->GetTypedValue(0.0).empty();
 
@@ -915,7 +918,7 @@ public:
 
         if (name == HdDependenciesSchemaTokens->__dependencies) {
             return
-                HdOverlayContainerDataSource::OverlayedContainerDataSources(
+                HdCreateOverlayContainerDataSource(
                     _BuildDependenciesDataSource(_inputPrimDs),
                     HdContainerDataSource::Cast(result));
         }
@@ -960,12 +963,12 @@ public:
     {
         const TfTokenVector &schemaTokens = _GetLightLinkingSchemaTokens();
         if (_Contains(schemaTokens, name)) {
-            
+
             const TfToken &collectionName =
                 name == HdTokens->lightFilterLink
                 ? HdTokens->filterLink
                 : name;
-            
+
             // Note: Since this scene index relies on linking collections to
             //       be transported, provide an override only when we have a
             //       collections data source on the prim to provide the category
@@ -977,12 +980,12 @@ public:
             //
             const auto collectionsSchema =
                 HdCollectionsSchema::GetFromParent(_primDs);
-            
+
             if (collectionsSchema.GetCollection(collectionName)) {
                 TfToken id;
                 if (_cache->GetCategoryIdForLightLinkingCollection(
                     _primPath, collectionName, &id)) {
-                    
+
                     return HdRetainedTypedSampledDataSource<TfToken>::New(id);
                 }
 
@@ -1092,20 +1095,36 @@ static const VtArray<TfToken> LIGHT_FILTER_PRIM_TYPES = {
 HdSceneIndexBaseRefPtr
 HdsiLightLinkingSceneIndex::New(
     const HdSceneIndexBaseRefPtr &inputSceneIndex,
-    const HdContainerDataSourceHandle &inputArgs)
+    const HdContainerDataSourceHandle &inputArgs,
+    const HdCollectionPredicateLibrary &predicateLibrary)
 {
-    HdSceneIndexBaseRefPtr sceneIndex = 
+    HdSceneIndexBaseRefPtr sceneIndex =
         TfCreateRefPtr(
-            new HdsiLightLinkingSceneIndex(inputSceneIndex, inputArgs));
+            new HdsiLightLinkingSceneIndex(
+                inputSceneIndex, inputArgs, predicateLibrary));
 
     sceneIndex->SetDisplayName("Light Linking Scene Index");
-    
+
     return sceneIndex;
+}
+
+HdSceneIndexBaseRefPtr
+HdsiLightLinkingSceneIndex::New(
+    const HdSceneIndexBaseRefPtr &inputSceneIndex,
+    const HdContainerDataSourceHandle &inputArgs)
+{
+    // XXX Ideally, we'd want to use
+    // UsdImagingGetCollectionPredicateLibrary() here, but that would create a
+    // dependency on the usdImaging library, which we want to avoid in hdsi.
+    //
+    HdCollectionPredicateLibrary emptyPredicateLibrary;
+    return New(inputSceneIndex, inputArgs, emptyPredicateLibrary);
 }
 
 HdsiLightLinkingSceneIndex::HdsiLightLinkingSceneIndex(
     const HdSceneIndexBaseRefPtr &inputSceneIndex,
-    const HdContainerDataSourceHandle &inputArgs)
+    const HdContainerDataSourceHandle &inputArgs,
+    const HdCollectionPredicateLibrary &predicateLibrary)
   : HdSingleInputFilteringSceneIndexBase(inputSceneIndex)
   , _cache(std::make_shared<_Cache>(inputSceneIndex))
   , _lightPrimTypes(_GetPrimTypes(
@@ -1120,6 +1139,8 @@ HdsiLightLinkingSceneIndex::HdsiLightLinkingSceneIndex(
         inputArgs,
         HdsiLightLinkingSceneIndexTokens->geometryPrimTypes,
         GEOMETRY_PRIM_TYPES))
+  , _predicateLibrary(predicateLibrary)
+  , _wasPopulated(false)
 {
 }
 
@@ -1144,7 +1165,7 @@ HdsiLightLinkingSceneIndex::GetPrim(const SdfPath &primPath) const
                 prim.dataSource, primPath, _cache);
 
         } else if (_IsLight(prim.primType) || _IsLightFilter(prim.primType)) {
-            
+
             prim.dataSource = _LightPrimDataSource::New(
                 prim.dataSource, primPath, _cache);
         }
@@ -1160,6 +1181,13 @@ HdsiLightLinkingSceneIndex::GetChildPrimPaths(const SdfPath &primPath) const
     return _GetInputSceneIndex()->GetChildPrimPaths(primPath);
 }
 
+HdCollectionExpressionEvaluator
+HdsiLightLinkingSceneIndex::MakeEvaluator(const SdfPathExpression &expr) const
+{
+    return HdCollectionExpressionEvaluator(
+        _GetInputSceneIndex(), expr, _predicateLibrary);
+}
+
 void
 HdsiLightLinkingSceneIndex::_PrimsAdded(
     const HdSceneIndexBase &sender,
@@ -1168,8 +1196,11 @@ HdsiLightLinkingSceneIndex::_PrimsAdded(
     if (!_IsObserved()) {
         return;
     }
-    
+
     TRACE_FUNCTION();
+
+    const bool populating = !_wasPopulated;
+    _wasPopulated = true;
 
     // Notices for prims that need to refetch their categories.
     HdSceneIndexObserver::DirtiedPrimEntries dirtiedEntries;
@@ -1189,7 +1220,9 @@ HdsiLightLinkingSceneIndex::_PrimsAdded(
             _lightAndFilterPrimPaths.insert(entry.primPath);
 
             _ProcessAddedLightOrFilter(
-                entry, {HdTokens->filterLink}, &dirtiedEntries);
+                entry,
+                {HdTokens->filterLink, HdTokens->shadowLink},
+                &dirtiedEntries);
 
         } else if (auto it =_lightAndFilterPrimPaths.find(entry.primPath);
             it != _lightAndFilterPrimPaths.end()) {
@@ -1203,7 +1236,8 @@ HdsiLightLinkingSceneIndex::_PrimsAdded(
         }
     }
 
-    _cache->InvalidatePrimsAndClearDirtyState(&dirtiedEntries);
+    _cache->InvalidatePrimsAndClearDirtyState(
+        &dirtiedEntries, populating, this);
 
     _SendPrimsAdded(entries);
     _SendPrimsDirtied(dirtiedEntries);
@@ -1218,7 +1252,7 @@ HdsiLightLinkingSceneIndex::_ProcessAddedLightOrFilter(
     TF_DEBUG(HDSI_LIGHT_LINK_VERBOSE).Msg(
         "Processing added notice for %s.\n", entry.primPath.GetText());
 
-    const HdSceneIndexPrim prim = 
+    const HdSceneIndexPrim prim =
             _GetInputSceneIndex()->GetPrim(entry.primPath);
 
     HdCollectionsSchema collectionsSchema =
@@ -1238,16 +1272,16 @@ HdsiLightLinkingSceneIndex::_ProcessAddedLightOrFilter(
                 TF_DEBUG(HDSI_LIGHT_LINK_VERBOSE).Msg(
                     "   ... %s:%s is trivial. Nothing to do.\n",
                     entry.primPath.GetText(), colName.GetText());
-                
+
                 continue;
             }
 
-            _cache->ProcessCollection(entry.primPath, colName, expr);
+            _cache->ProcessCollection(entry.primPath, colName, expr, this);
         }
     }
 }
 
-void 
+void
 HdsiLightLinkingSceneIndex::_PrimsRemoved(
     const HdSceneIndexBase &sender,
     const HdSceneIndexObserver::RemovedPrimEntries &entries)
@@ -1277,7 +1311,7 @@ HdsiLightLinkingSceneIndex::_PrimsRemoved(
         for (auto it = begin; it != end; ++it) {
             const SdfPath &trackedPrimPath = *it;
 
-            // XXX We could track lights and light filters separately to 
+            // XXX We could track lights and light filters separately to
             // loop over only the relevant collections.
             //
             for (const TfToken &colName : _GetAllLinkingCollectionNames()) {
@@ -1288,7 +1322,8 @@ HdsiLightLinkingSceneIndex::_PrimsRemoved(
         _lightAndFilterPrimPaths.erase(begin, end);
     }
 
-    _cache->InvalidatePrimsAndClearDirtyState(&dirtiedEntries);
+    _cache->InvalidatePrimsAndClearDirtyState(
+        &dirtiedEntries, /* populating = */ false, this);
 
     _SendPrimsRemoved(entries);
     _SendPrimsDirtied(dirtiedEntries);
@@ -1315,6 +1350,8 @@ HdsiLightLinkingSceneIndex::_PrimsDirtied(
 
     HdSceneIndexObserver::DirtiedPrimEntries newEntries;
 
+    TRACE_FUNCTION();
+
     for (const auto &entry : entries) {
         const SdfPath &primPath = entry.primPath;
 
@@ -1326,18 +1363,18 @@ HdsiLightLinkingSceneIndex::_PrimsDirtied(
         if (!entry.dirtyLocators.Intersects(collectionLocators)) {
             continue;
         }
-        
-        const HdSceneIndexPrim prim = 
+
+        const HdSceneIndexPrim prim =
             _GetInputSceneIndex()->GetPrim(primPath);
 
         HdCollectionsSchema collectionsSchema =
             HdCollectionsSchema::GetFromParent(prim.dataSource);
-        
+
         if (!collectionsSchema) {
             continue;
         }
 
-        // XXX We could track lights and light filters separately to loop 
+        // XXX We could track lights and light filters separately to loop
         // over only the relevant collection locators.
         //
         for (const auto &locator : collectionLocators) {
@@ -1365,8 +1402,9 @@ HdsiLightLinkingSceneIndex::_PrimsDirtied(
                 const SdfPathExpression expr =
                     exprDs->GetTypedValue(0.0);
 
-                _cache->ProcessCollection(primPath, collectionName, expr);
-                
+                _cache->ProcessCollection(
+                    primPath, collectionName, expr, this);
+
             } else {
                 // XXX Issue warning? We do always expect a value
                 //     for the locator. Invoke RemoveCollections to clean
@@ -1375,7 +1413,8 @@ HdsiLightLinkingSceneIndex::_PrimsDirtied(
         }
     }
 
-    _cache->InvalidatePrimsAndClearDirtyState(&newEntries);
+    _cache->InvalidatePrimsAndClearDirtyState(
+        &newEntries, /* populating = */ false, this);
 
     _SendPrimsDirtied(entries);
     _SendPrimsDirtied(newEntries);

@@ -43,6 +43,9 @@ public:
     /// The default arena is used if a valid handle isn't provided.
     HGIGL_API
     void SetCurrentArena(HgiGLContextArenaHandle const& arenaHandle);
+
+    HGIGL_API
+    HgiGLContextArena* GetCurrentArena() const;
  
     /// Returns a framebuffer object id that is managed by the active arena.
     HGIGL_API
@@ -61,7 +64,7 @@ private:
     HgiGLDevice & operator=(const HgiGLDevice&) = delete;
     HgiGLDevice(const HgiGLDevice&) = delete;
 
-    friend std::ofstream& operator<<(
+    friend HGIGL_API std::ofstream& operator<<(
         std::ofstream& out,
         const HgiGLDevice& dev);
 

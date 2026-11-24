@@ -83,28 +83,40 @@ PXR_NAMESPACE_OPEN_SCOPE
     ((stormMsaaSampleCount, "storm:msaaSampleCount"))
 
 #define HDST_RENDER_SETTINGS_TOKENS             \
+    (defaultTransparencyMode)                   \
     (enableTinyPrimCulling)                     \
     (volumeRaymarchingStepSize)                 \
     (volumeRaymarchingStepSizeLighting)         \
     (volumeMaxTextureMemoryPerField)            \
-    (maxLights)
+    (maxLights)                                 \
+    (domeLightCubemapTargetMemory)
+
+#define HDST_DEFAULT_TRANSPARENCY_MODE_TOKENS   \
+    (screenDoor)                                \
+    (additive)                                  \
+    (oit)
 
 // Material tags help bucket prims into different queues for draw submission.
 // The tags supported by Storm are:
 //    defaultMaterialTag : opaque geometry
 //    masked : opaque geometry that uses cutout masks (e.g., foliage)
+//    displayInOverlay : geometry that should be drawn on top (e.g. guides)
 //    translucentToSelection: opaque geometry that allows occluded selection
 //                            to show through
 //    additive : transparent geometry (cheap OIT solution w/o sorting)
 //    translucent: transparent geometry (OIT solution w/ sorted fragment lists)
-//    volume : transparent geoometry (raymarched)
+//    volume : transparent geometry (raymarched)
+//    translucentWithCustomDepth : translucent geometry that overwrites depth
+//                                 (and needs a manual depth test alongside OIT)
 #define HDST_MATERIAL_TAG_TOKENS                \
     (defaultMaterialTag)                        \
     (masked)                                    \
+    (displayInOverlay)                          \
     (translucentToSelection)                    \
     (additive)                                  \
     (translucent)                               \
-    (volume)
+    (volume)                                    \
+    (translucentWithCustomDepth)
 
 #define HDST_SDR_METADATA_TOKENS                \
     (swizzle)
@@ -116,6 +128,20 @@ PXR_NAMESPACE_OPEN_SCOPE
     (drawItemsCacheMiss)                        \
     (drawItemsCacheStale)                       \
     (drawItemsFetched)
+
+#define HDST_NATIVE_IMPLICITS_TOKENS            \
+    (sphere)                                    \
+    (sphereRadius)                              \
+    (conicalFrustum)                            \
+    (conicalFrustumRadiusTop)                   \
+    (conicalFrustumRadiusBot)                   \
+    (conicalFrustumHeight)                      \
+    (conicalFrustumAxis)                        \
+    (capsule)                                   \
+    (capsuleRadiusTop)                          \
+    (capsuleRadiusBot)                          \
+    (capsuleHeight)                             \
+    (capsuleAxis)
 
 TF_DECLARE_PUBLIC_TOKENS(HdStGLSLProgramTokens, HDST_API,
                          HDST_GLSL_PROGRAM_TOKENS);
@@ -130,6 +156,9 @@ TF_DECLARE_PUBLIC_TOKENS(HdStRenderBufferTokens, HDST_API,
 TF_DECLARE_PUBLIC_TOKENS(HdStRenderSettingsTokens, HDST_API,
                          HDST_RENDER_SETTINGS_TOKENS);
 
+TF_DECLARE_PUBLIC_TOKENS(HdStDefaultTransparencyModeTokens, HDST_API,
+                         HDST_DEFAULT_TRANSPARENCY_MODE_TOKENS);
+
 TF_DECLARE_PUBLIC_TOKENS(HdStMaterialTagTokens, HDST_API,
                          HDST_MATERIAL_TAG_TOKENS);
 
@@ -137,6 +166,9 @@ TF_DECLARE_PUBLIC_TOKENS(HdStSdrMetadataTokens, HDST_API,
                          HDST_SDR_METADATA_TOKENS);   
 
 TF_DECLARE_PUBLIC_TOKENS(HdStPerfTokens, HDST_API, HDST_PERF_TOKENS);
+
+TF_DECLARE_PUBLIC_TOKENS(HdStNativeImplicitsTokens, HDST_API,
+                         HDST_NATIVE_IMPLICITS_TOKENS);
 
 PXR_NAMESPACE_CLOSE_SCOPE
 

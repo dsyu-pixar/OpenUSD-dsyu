@@ -29,14 +29,17 @@
 #include <math.h>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <set>
 #include <stdarg.h>
 #include <stddef.h>
 #include <string>
 #include <sys/types.h>
+#include <tuple>
 #include <type_traits>
 #include <typeindex>
 #include <typeinfo>
 #include <unordered_set>
 #include <utility>
+#include <variant>
 #include <vector>

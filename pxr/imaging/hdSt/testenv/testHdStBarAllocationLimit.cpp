@@ -5,9 +5,14 @@
 // https://openusd.org/license.
 //
 
+#include "pxr/imaging/hd/bufferArrayRange.h"
+#include "pxr/imaging/hd/bufferSpec.h"
+#include "pxr/imaging/hd/renderIndex.h"
 #include "pxr/imaging/hd/tokens.h"
+#include "pxr/imaging/hdSt/resourceRegistry.h"
 #include "pxr/imaging/hdSt/unitTestGLDrawing.h"
 #include "pxr/imaging/hdSt/unitTestHelper.h"
+#include "pxr/imaging/hdSt/vboMemoryManager.h"
 
 #include "pxr/imaging/hgi/capabilities.h"
 
@@ -15,7 +20,6 @@
 #include "pxr/base/gf/rotation.h"
 #include "pxr/base/gf/vec3d.h"
 #include "pxr/base/tf/errorMark.h"
-#include "pxr/base/tf/diagnostic.h"
 
 #include <iostream>
 #include <vector>
@@ -39,6 +43,7 @@ public:
 protected:
     void ParseArgs(int argc, char *argv[]) override;
     void AddLargeCurve(HdUnitTestDelegate *delegate);
+    void ResizeSingleBarPastLimit(HdUnitTestDelegate *delegate);
 
 private:
     HdSt_TestDriverUniquePtr _driver;
@@ -58,6 +63,7 @@ My_TestGLDrawing::InitTest()
     delegate.SetRefineLevel(_refineLevel);
    
     AddLargeCurve(&delegate);
+    ResizeSingleBarPastLimit(&delegate);
         
     // center camera
     SetCameraTranslate(GetCameraTranslate() + GfVec3f(0.0, 0.0, 0.0));
@@ -120,8 +126,8 @@ My_TestGLDrawing::AddLargeCurve(HdUnitTestDelegate *delegate)
 {
     HdInterpolation colorInterp, widthInterp, opacityInterp;
     colorInterp = widthInterp = opacityInterp = HdInterpolationConstant;
-    
-    static constexpr size_t vboMaxSize = 1 << 30; // default for HD_MAX_VBO_SIZE
+
+    static size_t vboMaxSize = TfGetEnvSetting(HD_MAX_VBO_SIZE);
     const size_t storageMaxSize = _driver->GetHgi()->GetCapabilities()->
         GetMaxShaderStorageBlockSize();
     const size_t maxPointsInVBO = std::min(storageMaxSize, vboMaxSize) / sizeof(GfVec3f);
@@ -198,6 +204,42 @@ My_TestGLDrawing::AddLargeCurve(HdUnitTestDelegate *delegate)
                             opacity, opacityInterp,
                             width, widthInterp);
 
+}
+
+// Resize a single (non-aggregated) BAR beyond the maximum number of elements
+// and commit. HdStBufferArrayRegistry::ReallocateAll should warn, clamp the
+// range to the maximum, and reallocate it in place. Previously it kept using
+// the stale, oversized element count, which made it try to split the range
+// into a new buffer array; HdStVBOSimpleMemoryManager can't do that and
+// failed a verify on curRangeOwner.
+void
+My_TestGLDrawing::ResizeSingleBarPastLimit(HdUnitTestDelegate *delegate)
+{
+    HdStResourceRegistrySharedPtr const &registry =
+        std::static_pointer_cast<HdStResourceRegistry>(
+            delegate->GetRenderIndex().GetResourceRegistry());
+
+    HdBufferSpecVector bufferSpecs{
+        { HdTokens->points, HdTupleType{HdTypeFloatVec4, 1} } };
+
+    HdBufferArrayRangeSharedPtr range =
+        registry->AllocateSingleBufferArrayRange(
+            HdTokens->primvar, bufferSpecs, HdBufferArrayUsageHintBitsStorage);
+    TF_VERIFY(range);
+
+    const size_t maxElements = range->GetMaxNumElements();
+    TF_VERIFY(maxElements > 0);
+
+    // Expect a "larger than the maximum" warning here.
+    range->Resize(static_cast<int>(maxElements + 0x1000));
+    registry->Commit();
+
+    // The range must have been clamped, not split or dropped.
+    TF_VERIFY(range->IsAssigned());
+    TF_VERIFY(range->GetNumElements() == maxElements);
+
+    range.reset();
+    registry->GarbageCollect();
 }
 
 void

@@ -35,11 +35,16 @@ class SdfAssetPath;
 
 /// \class UsdPhysicsCollisionAPI
 ///
-/// Applies collision attributes to a UsdGeomXformable prim. If a 
-/// simulation is running, this geometry will collide with other geometries that 
-/// have PhysicsCollisionAPI applied. If a prim in the parent hierarchy has the
-/// RigidBodyAPI applied, this collider is a part of that body. If there is 
-/// no body in the parent hierarchy, this collider is considered to be static.
+/// Applies collision attributes to a UsdGeomXformable prim. If a
+/// simulation is running, this geometry will collide with other geometries that
+/// have PhysicsCollisionAPI applied. If any prim in the parent hierarchy has
+/// the RigidBodyAPI applied, the collider is considered a part of the closest
+/// ancestor body. If there is no body in the parent hierarchy, this collider
+/// is considered to be static.
+/// 
+/// Note: UsdGeomPlane colliders may only be used as static or kinematic
+/// colliders. A plane collider attached to a simulated (non-kinematic) rigid
+/// body is not supported.
 ///
 class UsdPhysicsCollisionAPI : public UsdAPISchemaBase
 {
@@ -199,6 +204,15 @@ public:
     //  - Close the include guard with #endif
     // ===================================================================== //
     // --(BEGIN CUSTOM CODE)--
+
+    /// Get the rigid body that owns this collider.
+    ///
+    /// Searches this prim and its ancestors for the nearest enabled
+    /// UsdPhysicsRigidBodyAPI.
+    ///
+    /// \return The owning rigid body prim, or an invalid prim if there is none.
+    USDPHYSICS_API
+    UsdPrim GetBody() const;
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

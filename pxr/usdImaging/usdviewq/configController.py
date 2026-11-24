@@ -5,7 +5,6 @@
 # https://openusd.org/license.
 #
 
-from __future__ import print_function
 
 import os, subprocess, sys
 from functools import partial
@@ -91,7 +90,7 @@ class ConfigController:
         fieldsLayout.addStretch()
 
         buttonBox = QtWidgets.QDialogButtonBox(
-            QtWidgets.QDialogButtonBox.Cancel | QtWidgets.QDialogButtonBox.Save)
+            QtWidgets.QDialogButtonBox.StandardButton.Cancel | QtWidgets.QDialogButtonBox.StandardButton.Save)
         buttonBox.rejected.connect(configDialog.close)
         buttonBox.accepted.connect(lambda :
             self._validateAndSaveConfig(field.text(), configDialog))

@@ -16,17 +16,13 @@
 #include "pxr/imaging/hd/renderPass.h"
 #include "pxr/imaging/hd/rprimCollection.h"
 #include "pxr/imaging/hd/sceneDelegate.h"
-#include "pxr/imaging/hd/vtBufferSource.h"
 
 #include "pxr/imaging/hdSt/renderPassShader.h"
 #include "pxr/imaging/hdSt/renderPassState.h"
 #include "pxr/imaging/hdSt/renderDelegate.h"
-#include "pxr/imaging/hdSt/resourceRegistry.h"
 #include "pxr/imaging/hdSt/imageShaderRenderPass.h"
 
 #include "pxr/imaging/hdx/oitBufferAccessor.h"
-
-#include "pxr/imaging/glf/diagnostic.h"
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -35,36 +31,36 @@ using HdBufferSourceSharedPtrVector = std::vector<HdBufferSourceSharedPtr>;
 static GfVec2i
 _GetScreenSize()
 {
-    // XXX Ideally we want screenSize to be passed in via the app. 
+    // XXX Ideally we want screenSize to be passed in via the app.
     // (see Presto Stagecontext/TaskGraph), but for now we query this from GL.
     //
     // Using GL_VIEWPORT here (or viewport from RenderParams) is in-correct!
     //
-    // The gl_FragCoord we use in the OIT shaders is relative to the FRAMEBUFFER 
+    // The gl_FragCoord we use in the OIT shaders is relative to the FRAMEBUFFER
     // size (screen size), not the gl_viewport size.
     // We do various tricks with glViewport for Presto slate mode so we cannot
     // rely on it to determine the 'screenWidth' we need in the gl shaders.
-    // 
+    //
     // The CounterBuffer is especially fragile to this because in the glsl shdr
     // we calculate a 'screenIndex' based on gl_fragCoord that indexes into
     // the CounterBuffer. If we did not make enough room in the CounterBuffer
     // we may be reading/writing an invalid index into the CounterBuffer.
     //
-    
+
     GLint attachType = 0;
     glGetFramebufferAttachmentParameteriv(
-        GL_DRAW_FRAMEBUFFER, 
+        GL_DRAW_FRAMEBUFFER,
         GL_COLOR_ATTACHMENT0,
         GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE,
         &attachType);
-    
+
     GLint attachId = 0;
     glGetFramebufferAttachmentParameteriv(
-        GL_DRAW_FRAMEBUFFER, 
+        GL_DRAW_FRAMEBUFFER,
         GL_COLOR_ATTACHMENT0,
         GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME,
         &attachId);
-    
+
     // XXX Fallback to gl viewport in case we do not find a non-default FBO for
     // bakends that do not attach a custom FB. This is in-correct, but gl does
     // not let us query size properties of default framebuffer. For this we
@@ -74,7 +70,7 @@ _GetScreenSize()
         glGetIntegerv(GL_VIEWPORT, viewport);
         return GfVec2i(viewport[2], viewport[3]);
     }
-    
+
     if (attachType == GL_TEXTURE) {
         GLint w, h;
         glGetTextureLevelParameteriv(attachId, 0, GL_TEXTURE_WIDTH, &w);
@@ -92,13 +88,13 @@ _GetScreenSize()
     constexpr int oitScreenSizeFallback = 2048;
 
     return GfVec2i(oitScreenSizeFallback, oitScreenSizeFallback);
-}        
+}
 
 HdxOitResolveTask::HdxOitResolveTask(
-    HdSceneDelegate* delegate, 
+    HdSceneDelegate* delegate,
     SdfPath const& id)
     : HdTask(id)
-    , _screenSize(0)
+    , _oitShouldDraw(false)
 {
 }
 
@@ -122,15 +118,15 @@ HdxOitResolveTask::Sync(
         _renderPassState->SetAlphaToCoverageEnabled(false);
         _renderPassState->SetColorMasks({HdRenderPassState::ColorMaskRGBA});
         _renderPassState->SetBlendEnabled(true);
-        
+
         // We expect pre-multiplied color as input into the OIT resolve shader
-        // e.g. vec4(rgb * a, a). Hence the src factor for rgb is "One" since 
-        // src alpha is already accounted for. 
+        // e.g. vec4(rgb * a, a). Hence the src factor for rgb is "One" since
+        // src alpha is already accounted for.
         // Alpha's are blended with the same blending equation as the rgb's.
-        // Thinking about it conceptually, if you're looking through two glass 
-        // windows both occluding 50% of light, some light would still be 
-        // passing through. 50% of light passes through the first window, then 
-        // 50% of the remaining light through the second window. Hence the 
+        // Thinking about it conceptually, if you're looking through two glass
+        // windows both occluding 50% of light, some light would still be
+        // passing through. 50% of light passes through the first window, then
+        // 50% of the remaining light through the second window. Hence the
         // equation: 0.5 + 0.5 * (1 - 0.5) = 0.75, as 75% of light is occluded.
         _renderPassState->SetBlend(
             HdBlendOp::HdBlendOpAdd,
@@ -241,135 +237,91 @@ HdxOitResolveTask::_ComputeScreenSize(
     return GfVec2i(buffer->GetWidth(), buffer->GetHeight());
 }
 
-void
+bool
 HdxOitResolveTask::_PrepareOitBuffers(
-    HdTaskContext* ctx, 
+    HdTaskContext* ctx,
     HdRenderIndex* renderIndex,
     GfVec2i const& screenSize)
 {
-    static const int numSamples = 8; // Should match glslfx files
-
-    if (!(screenSize[0] >= 0 && screenSize[1] >= 0)) {
-        TF_CODING_ERROR("Invalid screen size for OIT resolve task %s",
-                        GetId().GetText());
-        return;
+    // Pick up bars pre-allocated by AllocateOitBuffersIfNecessary in the OIT
+    // render tasks' Prepare().
+    if (!_counterBar) {
+        const auto it = ctx->find(HdxTokens->oitCounterBufferBar);
+        if (it != ctx->end()) {
+            _counterBar = it->second.Get<HdBufferArrayRangeSharedPtr>();
+            _jointBar   = (*ctx)[HdxTokens->oitJointBufferBar]
+                              .Get<HdBufferArrayRangeSharedPtr>();
+            _dataBar    = (*ctx)[HdxTokens->oitDataBufferBar]
+                              .Get<HdBufferArrayRangeSharedPtr>();
+            _uniformBar = (*ctx)[HdxTokens->oitUniformBar]
+                              .Get<HdBufferArrayRangeSharedPtr>();
+        }
     }
 
-    HdStResourceRegistrySharedPtr const& hdStResourceRegistry =
-        std::static_pointer_cast<HdStResourceRegistry>(
-            renderIndex->GetResourceRegistry());
-    
-    const bool createOitBuffers = !_counterBar;
-    if (createOitBuffers) {
-        //
-        // Counter Buffer
-        //
-        HdBufferSpecVector counterSpecs{
-            { HdxTokens->hdxOitCounterBuffer, HdTupleType{HdTypeInt32, 1} }
-        };
-        _counterBar = hdStResourceRegistry->AllocateSingleBufferArrayRange(
-                                            /*role*/HdxTokens->oitCounter,
-                                            counterSpecs,
-                                            HdBufferArrayUsageHintBitsStorage);
-        //
-        // Index Buffer
-        //
-        HdBufferSpecVector indexSpecs{
-            { HdxTokens->hdxOitIndexBuffer, HdTupleType{HdTypeInt32, 1} }
-        };
-        _indexBar = hdStResourceRegistry->AllocateSingleBufferArrayRange(
-                                            /*role*/HdxTokens->oitIndices,
-                                            indexSpecs,
-                                            HdBufferArrayUsageHintBitsStorage);
-
-        //
-        // Data Buffer
-        //        
-        HdBufferSpecVector dataSpecs{
-            { HdxTokens->hdxOitDataBuffer, HdTupleType{HdTypeFloatVec4, 1} }
-        };
-        _dataBar = hdStResourceRegistry->AllocateSingleBufferArrayRange(
-                                            /*role*/HdxTokens->oitData,
-                                            dataSpecs,
-                                            HdBufferArrayUsageHintBitsStorage);
-
-        //
-        // Depth Buffer
-        //
-        HdBufferSpecVector depthSpecs{
-            { HdxTokens->hdxOitDepthBuffer, HdTupleType{HdTypeFloat, 1} }
-        };
-        _depthBar = hdStResourceRegistry->AllocateSingleBufferArrayRange(
-                                            /*role*/HdxTokens->oitDepth,
-                                            depthSpecs,
-                                            HdBufferArrayUsageHintBitsStorage);
-
-        //
-        // Uniforms
-        //
-        HdBufferSpecVector uniformSpecs{
-            { HdxTokens->oitScreenSize, HdTupleType{HdTypeInt32Vec2, 1} }
-        };
-        _uniformBar = hdStResourceRegistry->AllocateUniformBufferArrayRange(
-                                            /*role*/HdxTokens->oitUniforms,
-                                            uniformSpecs,
-                                            HdBufferArrayUsageHintBitsUniform);
+    if (!_counterBar) {
+        return false;
     }
 
-    // Make sure task context has our buffer each frame (in case its cleared)
+    // Restore bars to ctx each frame in case the context was cleared.
+    (*ctx)[HdxTokens->oitJointBufferBar] = _jointBar;
     (*ctx)[HdxTokens->oitCounterBufferBar] = _counterBar;
-    (*ctx)[HdxTokens->oitIndexBufferBar] = _indexBar;
     (*ctx)[HdxTokens->oitDataBufferBar] = _dataBar;
-    (*ctx)[HdxTokens->oitDepthBufferBar] = _depthBar;
     (*ctx)[HdxTokens->oitUniformBar] = _uniformBar;
 
-    // The OIT buffer are sized based on the size of the screen and use 
-    // fragCoord to index into the buffers.
-    // We must update uniform screenSize when either X or Y increases in size.
-    const bool resizeOitBuffers = (screenSize[0] > _screenSize[0] ||
-                                   screenSize[1] > _screenSize[1]);
+    return HdxOitBufferAccessor(ctx).ResizeOitBuffersIfNecessary(
+        renderIndex, screenSize);
+}
 
-    if (resizeOitBuffers) {
-        _screenSize = screenSize;
-        const int newBufferSize = screenSize[0] * screenSize[1];
-
-        // +1 because element 0 of the counter buffer is used as an atomic
-        // counter in the shader to give each fragment a unique index.
-        _counterBar->Resize(newBufferSize + 1);
-        _indexBar->Resize(newBufferSize * numSamples);
-        _dataBar->Resize(newBufferSize * numSamples);
-        _depthBar->Resize(newBufferSize * numSamples);
-
-        // Update the values in the uniform buffer
-        hdStResourceRegistry->AddSource(
-            _uniformBar,
-            std::make_shared<HdVtBufferSource>(
-                HdxTokens->oitScreenSize,
-                VtValue(screenSize)));
-    }
+static
+bool
+_HasColorAov(HdRenderPassAovBindingVector const& aovBindings)
+{
+    return std::find_if(aovBindings.begin(), aovBindings.end(),
+        [](HdRenderPassAovBinding const& binding){
+            return binding.aovName == HdAovTokens->color; })
+                != aovBindings.end();
 }
 
 void
 HdxOitResolveTask::Prepare(HdTaskContext* ctx,
                            HdRenderIndex* renderIndex)
 {
-    // Only allocate/resize buffer if a render task requested it.
-    if (ctx->find(HdxTokens->oitRequestFlag) == ctx->end()) {
-        // Deallocate buffers here?
+    HD_TRACE_FUNCTION();
+
+    _oitShouldDraw = false;
+
+    // Pull OIT buffers off the context and size them for this screen. If there
+    // aren't any OIT buffers (OIT disabled, or not Storm), or they can't be
+    // sized for this screen, we can early out.
+    if (!_PrepareOitBuffers(
+            ctx, renderIndex, _ComputeScreenSize(ctx, renderIndex))) {
         return;
     }
 
-    // The HdTaskContext might not be cleared between two engine execute
-    // iterations, so we explicitly delete the cleared flag here so that the
-    // execute of the first oit render task will clear the buffer in this
-    // iteration.
-    ctx->erase(HdxTokens->oitClearedFlag);
+    const HdRenderPassAovBindingVector aovBindings = _GetAovBindings(ctx);
 
+    // If we're not rendering color, we can early out of prepare.
+    if (!aovBindings.empty() && !_HasColorAov(aovBindings)) {
+        return;
+    }
+
+    _oitShouldDraw = true;
+
+    // OitRenderTask also earlies out if there are no relevant draw items;
+    // we can't check that here, so we need to prepare the resolve pass,
+    // but we can potentially skip execute due to the oitRequest flag.
+
+    // Update renderpass state.
+    _renderPassState->SetAovBindings(aovBindings);
+    _UpdateCameraFraming(ctx);
+    _renderPassState->Prepare(renderIndex->GetResourceRegistry());
+
+    // Create the renderpass if needed.
     if (!_renderPass) {
         HdRprimCollection collection;
         HdRenderDelegate* renderDelegate = renderIndex->GetRenderDelegate();
 
-        if (!TF_VERIFY(dynamic_cast<HdStRenderDelegate*>(renderDelegate), 
+        if (!TF_VERIFY(dynamic_cast<HdStRenderDelegate*>(renderDelegate),
              "OIT Task only works with HdSt")) {
             return;
         }
@@ -379,8 +331,13 @@ HdxOitResolveTask::Prepare(HdTaskContext* ctx,
         _renderPass->SetupFullscreenTriangleDrawItem();
     }
 
-    _PrepareOitBuffers(
-        ctx, renderIndex, _ComputeScreenSize(ctx, renderIndex)); 
+    // Add OIT buffer bindings to the renderpass shader.
+    HdxOitBufferAccessor oitBufferAccessor(ctx);
+    if (!oitBufferAccessor.AddOitBufferBindings(_renderPassShader)) {
+        TF_CODING_ERROR(
+            "No OIT buffers allocated but needed by OIT resolve task");
+        return;
+    }
 }
 
 void
@@ -389,37 +346,30 @@ HdxOitResolveTask::Execute(HdTaskContext* ctx)
     HD_TRACE_FUNCTION();
     HF_MALLOC_TAG_FUNCTION();
 
-    GLF_GROUP_FUNCTION();
-
-    // Check whether the request flag was set and delete it so that for the
-    // next iteration the request flag is not set unless an OIT render task
-    // explicitly sets it.
+    // Render tasks that write to the OIT buffers will set oitRequestFlag if
+    // they contain any draw items.  If we don't see oitRequestFlag, skip this
+    // task. If we *do* see oitRequestFlag, we continue, but we also delete it
+    // to reset the state for the next frame, since this is the last OIT task.
     if (ctx->erase(HdxTokens->oitRequestFlag) == 0) {
         return;
     }
 
-    // Explicitly erase clear flag so that it can be re-used by subsequent
-    // OIT render and resolve tasks.
+    // Explicitly erase clear flag (if set) so that the next frame knows to
+    // re-clear the OIT buffers.
     ctx->erase(HdxTokens->oitClearedFlag);
+
+    if (!_oitShouldDraw) {
+        return;
+    }
 
     if (!TF_VERIFY(_renderPassState)) return;
     if (!TF_VERIFY(_renderPassShader)) return;
-
-    _renderPassState->SetAovBindings(_GetAovBindings(ctx));
-    _UpdateCameraFraming(ctx);
-
-    HdxOitBufferAccessor oitBufferAccessor(ctx);
-    if (!oitBufferAccessor.AddOitBufferBindings(_renderPassShader)) {
-        TF_CODING_ERROR(
-            "No OIT buffers allocated but needed by OIT resolve task");
-        return;
-    }
 
     _renderPass->Execute(_renderPassState, GetRenderTags());
 }
 
 bool
-operator==(HdxOitResolveTaskParams const& lhs, 
+operator==(HdxOitResolveTaskParams const& lhs,
            HdxOitResolveTaskParams const& rhs)
 {
     return lhs.useAovMultiSample == rhs.useAovMultiSample
@@ -427,7 +377,7 @@ operator==(HdxOitResolveTaskParams const& lhs,
 }
 
 bool
-operator!=(HdxOitResolveTaskParams const& lhs, 
+operator!=(HdxOitResolveTaskParams const& lhs,
            HdxOitResolveTaskParams const& rhs)
 {
     return !(lhs==rhs);

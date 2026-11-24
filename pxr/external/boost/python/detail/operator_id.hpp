@@ -13,10 +13,6 @@
 #include "pxr/pxr.h"
 #include "pxr/external/boost/python/common.hpp"
 
-#ifndef PXR_USE_INTERNAL_BOOST_PYTHON
-#include <boost/python/detail/operator_id.hpp>
-#else
-
 namespace PXR_BOOST_NAMESPACE { namespace python { namespace detail {
 
 enum operator_id
@@ -51,7 +47,11 @@ enum operator_id
     op_iadd,
     op_isub,
     op_imul,
+#if PY_VERSION_HEX >= 0x03000000
+    op_itruediv,
+#else
     op_idiv,
+#endif
     op_imod,
     op_ilshift,
     op_irshift,
@@ -72,5 +72,4 @@ enum operator_id
 
 }}} // namespace PXR_BOOST_NAMESPACE::python::detail
 
-#endif // PXR_USE_INTERNAL_BOOST_PYTHON
 #endif // PXR_EXTERNAL_BOOST_PYTHON_DETAIL_OPERATOR_ID_HPP

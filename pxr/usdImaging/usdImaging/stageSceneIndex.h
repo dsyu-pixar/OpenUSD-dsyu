@@ -11,6 +11,7 @@
 
 #include "pxr/usdImaging/usdImaging/api.h"
 #include "pxr/usdImaging/usdImaging/dataSourceStageGlobals.h"
+#include "pxr/usdImaging/usdImaging/stageSceneIndexInterface.h"
 #include "pxr/usdImaging/usdImaging/types.h"
 
 #include "pxr/imaging/hd/sceneIndex.h"
@@ -23,19 +24,21 @@
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-#define USDIMAGING_STAGE_SCENE_INDEX_TOKENS \
-    (includeUnloadedPrims)                  \
-
-TF_DECLARE_PUBLIC_TOKENS(UsdImagingStageSceneIndexTokens, USDIMAGING_API,
-                         USDIMAGING_STAGE_SCENE_INDEX_TOKENS);
-
 using UsdImagingPrimAdapterSharedPtr =
     std::shared_ptr<class UsdImagingPrimAdapter>;
 class UsdImaging_AdapterManager;
 
 TF_DECLARE_REF_PTRS(UsdImagingStageSceneIndex);
 
-class UsdImagingStageSceneIndex : public HdSceneIndexBase
+///
+/// A scene index consuming a UsdStage.
+///
+/// This scene index does not perform any transformations such as
+/// flattening visibility or transforms or aggregating native
+/// instances. Use UsdImagingSceneIndex to get a chain
+/// of scene indices to resolve those.
+///
+class UsdImagingStageSceneIndex : public UsdImagingStageSceneIndexInterface
 {
 public:
     static UsdImagingStageSceneIndexRefPtr New(
@@ -55,32 +58,41 @@ public:
     USDIMAGING_API
     SdfPathVector GetChildPrimPaths(const SdfPath & primPath) const override;
 
-    // ------------------------------------------------------------------------
-    // App-facing API
+    /// \name App-facing API
+    /// @{
 
-    // Set the USD stage to pull data from. Note that this will delete all
-    // scene index prims and reset stage global data.
+    /// Set the USD stage to pull data from. Note that this will delete all
+    /// scene index prims and reset stage global data.
+    ///
     USDIMAGING_API
-    void SetStage(UsdStageRefPtr stage);
+    void SetStage(UsdStageRefPtr stage) override;
 
-    // Set the time, and call PrimsDirtied for any time-varying attributes.
-    //
-    // PrimsDirtied is only called if the time is different from the last call
-    // or forceDirtyingTimeDeps is true.
+    /// Set the time, and call PrimsDirtied for any time-varying attributes.
+    ///
+    /// PrimsDirtied is only called if the time is different from the last call.
     USDIMAGING_API
-    void SetTime(UsdTimeCode time, bool forceDirtyingTimeDeps = false);
+    void SetTime(UsdTimeCode time) override;
 
-    // Return the current time.
+    /// Set the time, and call PrimsDirtied for any time-varying attributes.
+    ///
+    /// PrimsDirtied is only called if the time is different from the last call
+    /// or forceDirtyingTimeDeps is true.
     USDIMAGING_API
-    UsdTimeCode GetTime() const;
+    void SetTime(UsdTimeCode time, bool forceDirtyingTimeDeps);
 
-    // Apply queued stage edits to imaging scene.
-    // If the USD stage is edited while the scene index is pulling from it,
-    // those edits get queued and deferred.  Calling ApplyPendingUpdates will
-    // turn resync requests into PrimsAdded/PrimsRemoved, and property changes
-    // into PrimsDirtied.
+    /// Return the current time.
     USDIMAGING_API
-    void ApplyPendingUpdates();
+    UsdTimeCode GetTime() const override;
+
+    /// Apply queued stage edits to imaging scene.
+    /// If the USD stage is edited while the scene index is pulling from it,
+    /// those edits get queued and deferred.  Calling ApplyPendingUpdates will
+    /// turn resync requests into PrimsAdded/PrimsRemoved, and property changes
+    /// into PrimsDirtied.
+    USDIMAGING_API
+    void ApplyPendingUpdates() override;
+
+    /// @}
 
 private:
     USDIMAGING_API
@@ -146,14 +158,20 @@ private:
     UsdStageRefPtr _stage;
     _StageGlobals _stageGlobals;
 
+    void _SetTime(UsdTimeCode time);
+
     // Population
     void _Populate();
-    void _PopulateSubtree(UsdPrim subtreeRoot);
+    void _PopulateSubtree(UsdPrim subtreeRoot,
+        HdSceneIndexObserver::AddedPrimEntries *addedPrims);
 
     // Edit processing
     void _OnUsdObjectsChanged(UsdNotice::ObjectsChanged const& notice,
                               UsdStageWeakPtr const& sender);
     TfNotice::Key _objectsChangedNoticeKey;
+
+    // Keep track of populated paths for use in _ApplyPendingResyncs().
+    SdfPathSet _populatedPaths;
 
     // Note: resync paths mean we remove the whole subtree and repopulate.
     SdfPathVector _usdPrimsToResync;
@@ -162,7 +180,9 @@ private:
     std::map<SdfPath, TfTokenVector> _usdPropertiesToResync;
 
     using _PrimAdapterPair = std::pair<UsdPrim, UsdImagingPrimAdapterSharedPtr>;
-    _PrimAdapterPair _FindResponsibleAncestor(const UsdPrim &prim) const;
+    using _PrimAdapterPairVec = std::vector<_PrimAdapterPair>;
+    _PrimAdapterPairVec _FindResponsibleAncestors(const UsdPrim &prim) const;
+    bool _HasResponsibleAncestor(const UsdPrim &prim) const;
 
     std::unique_ptr<UsdImaging_AdapterManager> const _adapterManager;
 };

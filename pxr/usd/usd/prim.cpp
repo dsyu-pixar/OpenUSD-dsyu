@@ -32,16 +32,17 @@
 #include "pxr/base/work/dispatcher.h"
 #include "pxr/base/work/loops.h"
 #include "pxr/base/work/singularTask.h"
+#include "pxr/base/work/sort.h"
 #include "pxr/base/work/utils.h"
 #include "pxr/base/work/withScopedParallelism.h"
 
 #include "pxr/base/tf/ostreamMethods.h"
 #include "pxr/base/tf/pxrTslRobinMap/robin_set.h"
 #include "pxr/base/tf/hash.h"
+#include "pxr/base/tf/span.h"
 
 #include <tbb/concurrent_queue.h>
 #include <tbb/concurrent_unordered_set.h>
-#include <tbb/parallel_sort.h>
 
 #include <algorithm>
 #include <functional>
@@ -108,27 +109,62 @@ UsdPrim::IsA(const TfToken& schemaFamily,
 
 // Helper implementations for wrapping UsdSchemaRegistry's 
 // FindSchemaInfosInFamily with all possible inputs to the 
-// IsAny/HasAnyAPI#VersionInFamily functions.
+// IsAny/HasAnyAPI#VersionInFamily functions. They return a view into the
+// registry's list of the family's schemas rather than a copy, since these
+// queries can run for every prim on a stage.
+using _SchemaInfoSpan = TfSpan<const UsdSchemaRegistry::SchemaInfo * const>;
+
 static
-const std::vector<const UsdSchemaRegistry::SchemaInfo *> &
+_SchemaInfoSpan
 _FindSchemaInfosInFamily(const TfToken &schemaFamily)
 {
     return UsdSchemaRegistry::FindSchemaInfosInFamily(schemaFamily);
 }
 
 static 
-std::vector<const UsdSchemaRegistry::SchemaInfo *>
+_SchemaInfoSpan
 _FindSchemaInfosInFamily(
     const TfToken &schemaFamily, 
     UsdSchemaVersion schemaVersion, 
     UsdSchemaRegistry::VersionPolicy versionPolicy)
 {
-    return UsdSchemaRegistry::FindSchemaInfosInFamily(
-        schemaFamily, schemaVersion, versionPolicy);
+    // The registry orders a family's schemas from highest version to lowest,
+    // so each version policy selects a contiguous range of them: the same
+    // range the filtered UsdSchemaRegistry::FindSchemaInfosInFamily overload
+    // copies into a new vector.
+    using SchemaInfoPtr = const UsdSchemaRegistry::SchemaInfo *;
+    const _SchemaInfoSpan schemas = 
+        UsdSchemaRegistry::FindSchemaInfosInFamily(schemaFamily);
+    const auto lowerBound = [&schemas, schemaVersion]() {
+        return std::lower_bound(schemas.begin(), schemas.end(), schemaVersion,
+            [](SchemaInfoPtr lhs, UsdSchemaVersion version) {
+                return lhs->version > version;
+            });
+    };
+    const auto upperBound = [&schemas, schemaVersion]() {
+        return std::upper_bound(schemas.begin(), schemas.end(), schemaVersion,
+            [](UsdSchemaVersion version, SchemaInfoPtr rhs) {
+                return version > rhs->version;
+            });
+    };
+
+    switch (versionPolicy) {
+    case UsdSchemaRegistry::VersionPolicy::All:
+        return schemas;
+    case UsdSchemaRegistry::VersionPolicy::GreaterThan:
+        return _SchemaInfoSpan(schemas.begin(), lowerBound());
+    case UsdSchemaRegistry::VersionPolicy::GreaterThanOrEqual:
+        return _SchemaInfoSpan(schemas.begin(), upperBound());
+    case UsdSchemaRegistry::VersionPolicy::LessThan:
+        return _SchemaInfoSpan(upperBound(), schemas.end());
+    case UsdSchemaRegistry::VersionPolicy::LessThanOrEqual:
+        return _SchemaInfoSpan(lowerBound(), schemas.end());
+    }
+    return {};
 }
 
 static 
-std::vector<const UsdSchemaRegistry::SchemaInfo *>
+_SchemaInfoSpan
 _FindSchemaInfosInFamily(
     const TfType& schemaType,
     UsdSchemaRegistry::VersionPolicy versionPolicy)
@@ -145,7 +181,7 @@ _FindSchemaInfosInFamily(
 }
 
 static 
-std::vector<const UsdSchemaRegistry::SchemaInfo *>
+_SchemaInfoSpan
 _FindSchemaInfosInFamily(
     const TfToken& schemaIdentifier,
     UsdSchemaRegistry::VersionPolicy versionPolicy)
@@ -281,11 +317,21 @@ _IsSchemaInstanceInAppliedSchemas(
         return false;
     }
 
-    // We're looking for exact match of "<schemaIdentifier>:<instanceName>"
-    const TfToken apiSchemaName(
-        SdfPath::JoinIdentifier(schemaInfo.identifier, instanceName));
-    return std::find(appliedSchemas.begin(), appliedSchemas.end(), 
-        apiSchemaName) != appliedSchemas.end();
+    // We're looking for exact match of "<schemaIdentifier>:<instanceName>".
+    // Compare the applied schema names in place rather than building that
+    // name, since interning it as a token would allocate and lock the token
+    // registry on every call.
+    static const char delim = UsdObject::GetNamespaceDelimiter();
+    const std::string &identifier = schemaInfo.identifier.GetString();
+    const std::string &instance = instanceName.GetString();
+    return std::any_of(appliedSchemas.begin(), appliedSchemas.end(),
+        [&](const TfToken &appliedSchema) {
+            const std::string &name = appliedSchema.GetString();
+            return name.size() == identifier.size() + 1 + instance.size() &&
+                name[identifier.size()] == delim &&
+                TfStringStartsWith(name, identifier) &&
+                TfStringEndsWith(name, instance);
+        });
 }
 
 bool 
@@ -295,7 +341,7 @@ UsdPrim::_HasAPI(const UsdSchemaRegistry::SchemaInfo *schemaInfo) const
         return false;
     }
 
-    const TfTokenVector appliedSchemas = GetAppliedSchemas();
+    const TfTokenVector &appliedSchemas = GetAppliedSchemas();
     if (appliedSchemas.empty()) {
         return false;
     }
@@ -317,7 +363,7 @@ UsdPrim::_HasAPIInstance(
         return false;
     }
 
-    const TfTokenVector appliedSchemas = GetAppliedSchemas();
+    const TfTokenVector &appliedSchemas = GetAppliedSchemas();
     if (appliedSchemas.empty()) {
         return false;
     }
@@ -381,7 +427,7 @@ const UsdSchemaRegistry::SchemaInfo *
 _GetFirstSchemaInFamilyPrimHasAPI(
     const UsdPrim &prim, const FindInFamilyArgs &... findInFamilyArgs) 
 {
-    const TfTokenVector appliedSchemas = prim.GetAppliedSchemas();
+    const TfTokenVector &appliedSchemas = prim.GetAppliedSchemas();
     if (appliedSchemas.empty()) {
         return nullptr;
     }
@@ -412,7 +458,7 @@ _GetFirstSchemaInFamilyPrimHasAPIInstance(
         return nullptr;
     }
 
-    const TfTokenVector appliedSchemas = prim.GetAppliedSchemas();
+    const TfTokenVector &appliedSchemas = prim.GetAppliedSchemas();
     if (appliedSchemas.empty()) {
         return nullptr;
     }
@@ -617,34 +663,47 @@ _ValidateIsMultipleApplyAPI(
     return true;
 }
 
-// Determines whether the given prim type can have the given API schema applied 
-// to it based on a list of types the API "can only be applied to". If the 
-// list is empty, this always returns true, otherwise the prim type must be in 
-// the list or derived from a type in the list.
+// Determines whether the given prim is a valid target for applying the given
+// API schema, per the API's "can only be applied to" list. The list may name
+// typed schemas and / or applied API schemas and means "any of": valid if the
+// prim's type is (or derives from) a listed typed schema, or the prim has a
+// listed API schema applied. An empty list allows any prim.
 static bool 
-_IsPrimTypeValidApplyToTarget(const TfType &primType, 
-                              const TfToken &apiSchemaTypeName,
-                              const TfToken &instanceName,
-                              std::string *whyNot)
+_IsPrimValidApplyToTarget(
+    const UsdPrim &prim, 
+    const TfToken &apiSchemaTypeName,
+    const TfToken &instanceName,
+    std::string *whyNot)
 {
-    // Get the list of prim types this API "can only apply to" if any.
-    const TfTokenVector &canOnlyApplyToTypes =
+    // Get the list of prim types and API Schemas this API "can only apply to" 
+    // if any.
+    const TfTokenVector &canOnlyApplyToNames =
         UsdSchemaRegistry::GetAPISchemaCanOnlyApplyToTypeNames(
             apiSchemaTypeName, instanceName);
 
     // If no "can only apply to" types are found, the schema can be 
     // applied to any prim type (including empty or invalid prims types)
-    if (canOnlyApplyToTypes.empty()) {
+    if (canOnlyApplyToNames.empty()) {
         return true;
     }
 
-    // If the prim type or any of its ancestor types are in the list, then it's
-    // valid!
-    if (!primType.IsUnknown()) {
-        for (const TfToken &allowedPrimTypeName : canOnlyApplyToTypes) {
+    const TfType primType = prim.GetPrimTypeInfo().GetSchemaType();
+    for (const TfToken &allowedName : canOnlyApplyToNames) {
+        // We can have API Schemas applied on a type-less prim, so no check for
+        // unknown prim type here. But we must check for typed schema check, 
+        // in the else branch below.
+        const std::pair<TfToken, TfToken> typeAndInstance =
+            UsdSchemaRegistry::GetTypeNameAndInstance(allowedName);
+        if (UsdSchemaRegistry::IsAppliedAPISchema(typeAndInstance.first)) {
+            const bool hasAPI = typeAndInstance.second.IsEmpty() ?
+                prim.HasAPI(typeAndInstance.first) :
+                prim.HasAPI(typeAndInstance.first, typeAndInstance.second);
+            if (hasAPI) {
+                return true;
+            }
+        } else if (!primType.IsUnknown()) {
             const TfType allowedPrimType = 
-                UsdSchemaRegistry::GetTypeFromSchemaTypeName(
-                    allowedPrimTypeName);
+                UsdSchemaRegistry::GetTypeFromSchemaTypeName(allowedName);
             if (primType.IsA(allowedPrimType)) {
                 return true;
             }
@@ -654,11 +713,11 @@ _IsPrimTypeValidApplyToTarget(const TfType &primType,
     // Otherwise, it wasn't in the list and can't be applied to.
     if (whyNot) {
         *whyNot = TfStringPrintf(
-            "API schema '%s' can only be applied to prims of the following "
-            "types: %s.", 
+            "API schema '%s' can only be applied to prims that are of "
+            "following type, or have following API schema applied: %s.", 
             SdfPath::JoinIdentifier(apiSchemaTypeName, instanceName).c_str(), 
-            TfStringJoin(canOnlyApplyToTypes.begin(),
-                         canOnlyApplyToTypes.end(), ", ").c_str());
+            TfStringJoin(canOnlyApplyToNames.begin(),
+                         canOnlyApplyToNames.end(), ", ").c_str());
     }
     return false;
 }
@@ -680,10 +739,10 @@ UsdPrim::_CanApplySingleApplyAPI(
         return false;
     }
 
-    // Return whether this prim's type is a valid target for applying the given
+    // Return whether this prim is a valid target for applying the given
     // API schema.
-    return _IsPrimTypeValidApplyToTarget(
-        GetPrimTypeInfo().GetSchemaType(), 
+    return _IsPrimValidApplyToTarget(
+        *this,
         schemaInfo.identifier,
         /*instanceName=*/ TfToken(),
         whyNot);
@@ -729,10 +788,10 @@ UsdPrim::_CanApplyMultipleApplyAPI(
         return false;
     }
 
-    // Return whether this prim's type is a valid target for applying the given
+    // Return whether this prim is a valid target for applying the given
     // API schema and instance name.
-    return _IsPrimTypeValidApplyToTarget(
-        GetPrimTypeInfo().GetSchemaType(), 
+    return _IsPrimValidApplyToTarget(
+        *this,
         schemaInfo.identifier,
         instanceName,
         whyNot);
@@ -1186,40 +1245,6 @@ UsdPrim::_MakeProperties(const TfTokenVector &names) const
     return props;
 }
 
-// Change the order of items in 'names' so that all the things in 'order' that
-// are also in 'names' are at the beginning in the order that they appear in
-// 'order', followed by any remaining items in 'names' in their existing order.
-static void
-_ApplyOrdering(const TfTokenVector &order, TfTokenVector *names)
-{
-    // If order is empty or names is empty, nothing to do.
-    if (order.empty() || names->empty())
-        return;
-
-    // Perf note: this walks 'order' and linear searches 'names' to find each
-    // element, for O(M*N) operations, where M and N are the lengths of 'order'
-    // and 'names'.  We hope 1) that propertyOrder stmts are relatively rare and
-    // 2) that property lists are relatively short.  If those assumptions fail,
-    // this may need revisiting.  In some quick microbenchmarking, this linear
-    // search seems to outperform binary search up to about 5000 names.  We
-    // suspect this is because linear search does TfToken pointer comparisons,
-    // while binary search has to dereference and do string comparisons.
-
-    typedef TfTokenVector::iterator Iter;
-
-    Iter namesRest = names->begin(), namesEnd = names->end();
-    for (const TfToken &oName: order) {
-        // Look for this name from 'order' in the rest of 'names'.
-        Iter i = std::find(namesRest, namesEnd, oName);
-        if (i != namesEnd) {
-            // Found.  Move to the front by rotating the sub-range.  Using
-            // std::rotate invokes swap(), which avoids TfToken refcounting.
-            // Also advance 'namesRest' to the next element.
-            std::rotate(namesRest++, i, i+1);
-        }
-    }
-}
-
 bool 
 UsdPrim::RemoveProperty(const TfToken &propName) 
 {
@@ -1275,6 +1300,38 @@ UsdPrim::GetPropertyOrder() const
     TfTokenVector order;
     GetMetadata(SdfFieldKeys->PropertyOrder, &order);
     return order;
+}
+
+void
+UsdPrim::ApplyPropertyOrder(const TfTokenVector &order, TfTokenVector *names)
+{
+    // If order is empty or names is empty, nothing to do.
+    if (order.empty() || names->empty()) {
+        return;
+    }
+
+    // Perf note: this walks 'order' and linear searches 'names' to find each
+    // element, for O(M*N) operations, where M and N are the lengths of 'order'
+    // and 'names'.  We hope 1) that propertyOrder stmts are relatively rare and
+    // 2) that property lists are relatively short.  If those assumptions fail,
+    // this may need revisiting.  In some quick microbenchmarking, this linear
+    // search seems to outperform binary search up to about 5000 names.  We
+    // suspect this is because linear search does TfToken pointer comparisons,
+    // while binary search has to dereference and do string comparisons.
+
+    typedef TfTokenVector::iterator Iter;
+
+    Iter namesRest = names->begin(), namesEnd = names->end();
+    for (const TfToken &oName: order) {
+        // Look for this name from 'order' in the rest of 'names'.
+        Iter i = std::find(namesRest, namesEnd, oName);
+        if (i != namesEnd) {
+            // Found.  Move to the front by rotating the sub-range.  Using
+            // std::rotate invokes swap(), which avoids TfToken refcounting.
+            // Also advance 'namesRest' to the next element.
+            std::rotate(namesRest++, i, i+1);
+        }
+    }
 }
 
 using TokenRobinSet = pxr_tsl::robin_set<TfToken, TfToken::HashFunctor>;
@@ -1354,14 +1411,14 @@ UsdPrim::_GetPropertyNames(
         std::copy(names.begin(), names.end(), namesVec.begin());
         sort(namesVec.begin(), namesVec.end(), TfDictionaryLessThan());
         if (applyOrder) {
-            _ApplyOrdering(GetPropertyOrder(), &namesVec);
+            ApplyPropertyOrder(GetPropertyOrder(), &namesVec);
         }
     }
 
     return namesVec;
 }
 
-TfTokenVector
+const TfTokenVector &
 UsdPrim::GetAppliedSchemas() const
 {
     return GetPrimDefinition().GetAppliedAPISchemas();
@@ -1678,8 +1735,7 @@ private:
         WorkWithScopedParallelism([this]() {
                 _VisitSubtree(_prim);
                 _dispatcher.Wait();
-                tbb::parallel_sort(_result.begin(), _result.end(),
-                                   SdfPath::FastLessThan());
+                WorkParallelSort(&_result, SdfPath::FastLessThan());
             });
 
         _result.erase(unique(_result.begin(), _result.end()), _result.end());
@@ -2010,9 +2066,10 @@ UsdPrim::ComputeExpandedPrimIndex() const
     PcpCache* cache = _GetStage()->_GetPcpCache();
     
     PcpPrimIndexOutputs outputs;
+    PcpPrimIndexInputs inputs = cache->GetPrimIndexInputs();
     PcpComputePrimIndex(
         primIndexPath, cache->GetLayerStack(),
-        cache->GetPrimIndexInputs().Cull(false), 
+        inputs.Cull(false), 
         &outputs);
 
     _GetStage()->_ReportPcpErrors(

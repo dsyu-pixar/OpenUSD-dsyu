@@ -17,7 +17,8 @@
 #include "pxr/usd/usdPhysics/tokens.h"
 
 #include "pxr/base/gf/matrix3f.h"
-#include "pxr/base/gf/quatf.h" 
+#include "pxr/base/gf/quatf.h"
+#include <vector> 
 
 #include "pxr/base/vt/value.h"
 
@@ -41,7 +42,9 @@ class SdfAssetPath;
 /// Applies physics body attributes to any UsdGeomXformable prim and
 /// marks that prim to be driven by a simulation. If a simulation is running
 /// it will update this prim's pose. All prims in the hierarchy below this 
-/// prim should move accordingly.
+/// prim should move rigidly along with the body, except when the descendant
+/// prim has its own UsdPhysicsRigidBodyAPI (marking a separate rigid body
+/// subtree which moves independently of the parent rigid body).
 ///
 class UsdPhysicsRigidBodyAPI : public UsdAPISchemaBase
 {
@@ -319,6 +322,17 @@ public:
     USDPHYSICS_API
     float ComputeMassProperties(GfVec3f* diagonalInertia, GfVec3f* com, GfQuatf* principalAxes, 
         const MassInformationFn& massInfoFn) const;
+
+    /// Get the enabled colliders that belong to this rigid body.
+    ///
+    /// The body's subtree is traversed, including instance proxies. The
+    /// subtree of a nested enabled rigid body is skipped, since its colliders
+    /// belong to the nested rigid body. These are the colliders that
+    /// ComputeMassProperties() accumulates.
+    ///
+    /// \return The enabled collider prims belonging to this rigid body.
+    USDPHYSICS_API
+    std::vector<UsdPrim> GetCollisionPrims() const;
 
 };
 

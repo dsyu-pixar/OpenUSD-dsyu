@@ -7,6 +7,17 @@
 
 #include "pxr/imaging/hd/dataSourceHash.h"
 
+#include "pxr/usd/sdf/path.h"
+
+#include "pxr/base/tf/token.h"
+#include "pxr/base/vt/array.h"
+#include "pxr/base/vt/types.h"
+#include "pxr/base/vt/value.h"
+#include "pxr/base/vt/visitValue.h"
+
+#include <string>
+#include <vector>
+
 PXR_NAMESPACE_OPEN_SCOPE
 
 namespace
@@ -27,6 +38,86 @@ _MakePair(Handle const &ds, const _Args &args)
 {
     return {ds, args};
 }
+
+// _HashVisitor will be used to intercept sampled data source values
+// and provide an alternate hash value to the one that would otherwise
+// result from the value type's TfHash implementation. This is important
+// for some value types whose TfHash implementations are not stable from
+// one run to the next. Currently, these include:
+//
+//  - TfToken: default hash includes a pointer address
+//  - SdfPath: GetHash() uses pool-handle indices that can change when
+//    a transiently-created path node is freed
+//
+// Ideally, value type hash implementations should be stable, and that is the
+// preferred solution to unstable data source hashes. However, sometimes a
+// value type's hash needs to be unstable for performance reasons (as is the
+// case with TfToken), so this visitor should restrict itself to those cases.
+//
+// TODO: There exist other specializations of HdTypedSampledDataSource that may
+// produce hash instability:
+//
+//  - ArResolverContext
+//  - UsdStageRefPtr
+//  - HdExtComputationCpuCallbackSharedPtr
+//  - HdLegacyTaskFactorySharedPtr
+//  - HdsiPrimManagingSceneIndexObserver::PrimFactoryBaseHandle
+//  - HdsiPrimTypeNoticeBatchingSceneIndex::PrimTypePriorityFunctorHandle
+//
+// These should be investigated first if data source hash instability becomes
+// a problem again.
+struct _HashVisitor
+{
+    VtValue
+    operator()(const TfToken& x) const
+    {
+        return VtValue(x.GetString());
+    }
+
+    VtValue
+    operator()(const VtArray<TfToken>& x) const
+    {
+        const size_t arraySize = x.size();
+        VtArray<std::string> stringArray;
+        stringArray.resize(arraySize,
+            [&] (std::string* start, std::string* end) {
+                for (size_t i = 0; i < arraySize; ++i) {
+                    new (start + i) std::string(x[i].GetString());
+                }
+            });
+        return VtValue(stringArray);
+    }
+
+    VtValue
+    operator()(const std::vector<TfToken>& x) const
+    {
+        return (*this)(VtArray<TfToken>(x.cbegin(), x.cend()));
+    }
+
+    VtValue
+    operator()(const VtValue& x) const
+    {
+        // SdfPath is not a registered VtVisitValue type, so it falls
+        // through to this catch-all. Hash path strings for stability.
+        if (x.IsHolding<SdfPath>()) {
+            return VtValue(x.UncheckedGet<SdfPath>().GetString());
+        }
+        if (x.IsHolding<VtArray<SdfPath>>()) {
+            const VtArray<SdfPath> &pathArray =
+                x.UncheckedGet<VtArray<SdfPath>>();
+            const size_t arraySize = pathArray.size();
+            VtArray<std::string> stringArray;
+            stringArray.resize(arraySize,
+                [&] (std::string* start, std::string* end) {
+                    for (size_t i = 0; i < arraySize; ++i) {
+                        new (start + i) std::string(pathArray[i].GetString());
+                    }
+                });
+            return VtValue(stringArray);
+        }
+        return x;
+    }
+};
 
 }
 
@@ -63,7 +154,8 @@ template <class HashState>
 void TfHashAppend(HashState &h, _Pair<HdSampledDataSourceHandle> ds)
 {
     if (ds.second.startTime == ds.second.endTime) {
-        h.Append(ds.first->GetValue(ds.second.startTime));
+        h.Append(VtVisitValue(
+            ds.first->GetValue(ds.second.startTime), _HashVisitor()));
     } else {
         std::vector<HdSampledDataSource::Time> sampleTimes;
         ds.first->GetContributingSampleTimesForInterval(
@@ -76,7 +168,7 @@ void TfHashAppend(HashState &h, _Pair<HdSampledDataSourceHandle> ds)
             h.Append(TfHashAsCStr("Time"));
             h.Append(t);
             h.Append(TfHashAsCStr("Value"));
-            h.Append(ds.first->GetValue(t));
+            h.Append(VtVisitValue(ds.first->GetValue(t), _HashVisitor()));
         }
         h.Append(TfHashAsCStr("TSE"));
     }
@@ -109,10 +201,12 @@ void TfHashAppend(HashState &h, _Pair<HdContainerDataSourceHandle> ds)
     for (const TfToken &name : names) {
         if (HdDataSourceBaseHandle const childDs = ds.first->Get(name)) {
             h.Append(TfHashAsCStr("Key"));
-            h.Append(name);
+            // TfToken::Hash() includes a pointer address, so use the hash of
+            // the string value instead.
+            h.Append(name.GetString());
             h.Append(TfHashAsCStr("Value"));
             h.Append(_MakePair(childDs, ds.second));
-        }            
+        }
     }
     h.Append(TfHashAsCStr("CE"));
 }

@@ -3,15 +3,27 @@
 #import $TOOLS/hdSt/shaders/mesh.glslfx
 -- configuration
 {"techniques": {"default": {
-"vertexShader" : { "source" : ["Instancing.Transform", "MeshNormal.Pass", "PointId.Vertex.None", "Mesh.Vertex"] }
+"vertexShader" : { "source" : ["Instancing.Transform", "Vertex.SkinPoints", "MeshNormal.Pass", "PointId.Vertex.None", "PointDisk.Vertex.None", "Mesh.Vertex"] }
 , "geometryShader" : { "source" : ["Instancing.Transform", "MeshNormal.Flat", "MeshNormal.Geometry.NoFlat", "Geometry.NoCustomDisplacement", "Mesh.Geometry.Triangle"] }
-, "fragmentShader" : { "source" : ["Instancing.Transform", "MeshNormal.Pass", "MeshNormal.Fragment.SingleSided", "MeshFaceCull.Fragment.None", "MeshWire.Fragment.EdgeCoord.Barycentric", "MeshWire.Fragment.EdgeMaskTriangle", "MeshWire.Fragment.EdgeCommon", "MeshWire.Fragment.EdgeParam", "MeshWire.Fragment.FinalEdgeOpacityForce", "MeshWire.Fragment.EdgeOnlyNoBlend", "Fragment.CommonTerminals", "Fragment.Surface", "Fragment.ScalarOverride", "EdgeId.Fragment.Common", "EdgeId.Fragment.TriangleLines", "EdgeId.Fragment.TriangleParam", "PointId.Fragment.Fallback", "Visibility.Fragment.Fallback", "Mesh.Fragment.PatchCoord", "Mesh.Fragment"] }
+, "fragmentShader" : { "source" : ["Instancing.Transform", "MeshNormal.Pass", "MeshNormal.Fragment.SingleSided", "MeshFaceCull.Fragment.None", "MeshWire.Fragment.EdgeCoord.Barycentric", "MeshWire.Fragment.EdgeMaskTriangle", "MeshWire.Fragment.EdgeCommon", "MeshWire.Fragment.EdgeParam", "MeshWire.Fragment.FinalEdgeOpacityForce", "MeshWire.Fragment.EdgeOnlyNoBlend", "Fragment.CommonTerminals", "Fragment.Surface", "Fragment.ScalarOverride", "EdgeId.Fragment.Common", "EdgeId.Fragment.TriangleLines", "EdgeId.Fragment.TriangleParam", "PointId.Fragment.Fallback", "PointDisk.Fragment.None", "Visibility.Fragment.Fallback", "Mesh.Fragment.PatchCoord", "Mesh.Fragment"] }
 }}}
 -------------------------------------------------------
 =======================================================
   VERTEX SHADER                                        
 =======================================================
 #version 450
+#if defined(GL_EXT_control_flow_attributes)
+	#extension GL_EXT_control_flow_attributes: require
+	#define HGI_COMPILER_ATTR_UNROLL [[unroll]]
+	#define HGI_COMPILER_ATTR_DONT_UNROLL [[dont_unroll]]
+	#define HGI_COMPILER_ATTR_FLATTEN [[flatten]]
+	#define HGI_COMPILER_ATTR_DONT_FLATTEN [[dont_flatten]]
+#else
+	#define HGI_COMPILER_ATTR_UNROLL
+	#define HGI_COMPILER_ATTR_DONT_UNROLL
+	#define HGI_COMPILER_ATTR_FLATTEN
+	#define HGI_COMPILER_ATTR_DONT_FLATTEN
+#endif
 #extension GL_ARB_shader_draw_parameters : require
 int HgiGetBaseVertex() {
   return gl_BaseVertexARB;
@@ -28,6 +40,7 @@ int HgiGetBaseInstance() {
 #define ATOMIC_COMP_SWAP(a, expected, desired) atomicCompSwap(a, expected, desired)
 #define atomic_int int
 #define atomic_uint uint
+#define hd_SampleMask gl_SampleMask[0]
 
 #define HGI_HAS_DOUBLE_TYPE 1
 
@@ -43,8 +56,9 @@ struct hgi_dmat3 { double m00, m01, m02,
                           m20, m21, m22; };
 
 // //////// Codegen Defines //////// 
-#define HD_SHADER_API 2
+#define HD_SHADER_API 3
 #define MAT4 mat4
+#define HD_USE_HARDWARE_CLIPPING
 // Alias hgi vec and matrix types to hd.
 #define hd_ivec3 hgi_ivec3
 #define hd_vec3 hgi_vec3
@@ -296,6 +310,13 @@ MAT4  GetProjectionMatrix() {
     return MAT4(1);
 #endif
 }
+MAT4  GetProjectionInverseMatrix() {
+#if defined(HD_HAS_projectionInverseMatrix)
+    return MAT4(HdGet_projectionInverseMatrix());
+#else
+    return MAT4(1);
+#endif
+}
 vec3 GetPositionInWorldSpace(vec3 windowRelativeCoord)
 {
 #if defined(HD_HAS_imageToWorldMatrix)
@@ -309,6 +330,13 @@ vec3 GetPositionInWorldSpace(vec3 windowRelativeCoord)
 float GetLightingBlendAmount() {
 #if defined(HD_HAS_lightingBlendAmount)
     return HdGet_lightingBlendAmount();
+#else
+    return 1;
+#endif
+}
+float GetLinearExposure() {
+#if defined(HD_HAS_linearExposure)
+    return HdGet_linearExposure();
 #else
     return 1;
 #endif
@@ -385,6 +413,7 @@ vec2 ApplyAxisAlignedAffineTransform(vec4 t, vec2 pt)
 
 
 
+#ifdef HD_USE_HARDWARE_CLIPPING
 void ApplyClipPlanes(vec4 Peye)
 {
 #if defined(HD_HAS_numClipPlanes)
@@ -402,6 +431,7 @@ void ApplyClipPlanes(vec4 Peye)
 #endif
 #endif
 }
+#endif
 
 
 
@@ -534,6 +564,7 @@ MAT4 GetInstanceTransform()
 {
     MAT4 m = MAT4(1);
 #ifdef HD_INSTANCER_NUM_LEVELS
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         m = GetInstanceTransform(i) * m;
 #ifdef HD_HAS_instancerTransform
@@ -548,6 +579,7 @@ MAT4 GetInstanceTransformInverse()
 {
     MAT4 m = MAT4(1);
 #ifdef HD_INSTANCER_NUM_LEVELS
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         m = m * GetInstanceTransformInverse(i);
 #ifdef HD_HAS_instancerTransformInverse
@@ -582,11 +614,13 @@ bool IsFlipped()
 #endif
 
 #ifdef HD_HAS_INSTANCE_hydra_instanceScales
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         vec3 scale = HdGetInstance_hydra_instanceScales(i, /*default=*/vec3(1));
         flip = flip != ((sign(scale.x) * sign(scale.y) * sign(scale.z)) < 0);
     }
 #elif defined(HD_HAS_INSTANCE_scale)
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         vec3 scale = HdGetInstance_scale(i, /*default=*/vec3(1));
         flip = flip != ((sign(scale.x) * sign(scale.y) * sign(scale.z)) < 0);
@@ -594,11 +628,13 @@ bool IsFlipped()
 #endif
 
 #ifdef HD_HAS_INSTANCE_hydra_instanceTransforms
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         MAT4 m = HdGetInstance_hydra_instanceTransforms(i, MAT4(1));
         flip = flip != (determinant(m) < 0.0);
     }
 #elif defined(HD_HAS_INSTANCE_instanceTransform)
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         MAT4 m = HdGetInstance_instanceTransform(i, MAT4(1));
         flip = flip != (determinant(m) < 0.0);
@@ -606,6 +642,273 @@ bool IsFlipped()
 #endif
 
     return flip;
+}
+
+
+const float EPS = 1e-5;
+
+vec3 ApplySkinningLBS(vec3 restP)
+{
+#if defined(HD_HAS_skel_geomBindTransform) && \
+    defined(HD_HAS_hydra_numInfluencesPerComponent) && \
+    defined(HD_HAS_hydra_hasConstantInfluences) && \
+    defined(HD_HAS_hydra_influences) && \
+    defined(HD_HAS_hydra_skinningXforms) && \
+    defined(HD_HAS_hydra_primWorldToLocal) && \
+    defined(HD_HAS_hydra_skelLocalToWorld) && \
+    defined(HD_HAS_hydra_numJoints)
+
+    int numInfluencesPerComponent = HdGet_hydra_numInfluencesPerComponent();
+    if (numInfluencesPerComponent > 0) {
+        const int index = int(hd_VertexID) - GetBaseVertexOffset();
+        const int instanceOffset =
+            GetDrawingCoord().instanceIndex[0] * HdGet_hydra_numJoints();
+
+        // model space -> bind space
+        mat4 geomBindXform = HdGet_skel_geomBindTransform();
+        vec4 initP = geomBindXform * vec4(restP, 1);
+
+        vec3 p = vec3(0, 0, 0);
+
+        bool constantPointInfluence = HdGet_hydra_hasConstantInfluences();
+        int offset = constantPointInfluence ? 0 :
+            numInfluencesPerComponent * index;
+
+        for (int i = 0; i < numInfluencesPerComponent; i++) {
+            vec2 influence = HdGet_hydra_influences(offset + i);
+            float jointWeight = influence.y;
+            // float jointWeight = HdGet_skel_jointWeights(i);
+
+            if (jointWeight > EPS) {
+                // HYD-3510
+                // we have to do multiple mem fetch to compute jointIdx here.
+                // potentially causing vertex implementation to be much slower
+                // than extComputation compute shader.
+                int jointIdx = int(influence.x) + instanceOffset;
+                // int jointIdx = HdGet_skel_jointIndices(i) + instanceOffset;
+                mat4 skinningXform = HdGet_hydra_skinningXforms(jointIdx);
+
+                p += ((skinningXform * initP) * jointWeight).xyz;
+            }
+        }
+
+        // skel space -> world space -> model space
+        // XXX: Casts to mat4 below are necessary because the matrices passed
+        // down use doubles and not floats.
+        mat4 skelToPrimLocal = mat4( HdGet_hydra_primWorldToLocal() ) *
+                               mat4( HdGet_hydra_skelLocalToWorld() );
+        p = (skelToPrimLocal * vec4(p, 1)).xyz;
+        return p;
+    }
+#endif
+    return restP;
+}
+
+// ---------------------------------------------------------------------------
+
+const float NORM_EPS = 1e-10;
+
+vec4 GetPivotQuaternion(
+    int numInfluencesPerComponent, int offset, int instanceOffset)
+{
+    vec4 pivotQuat = vec4(0);
+
+#if defined(HD_HAS_hydra_influences) && \
+    defined(HD_HAS_hydra_skinningDualQuats)
+
+    int pivotIdx = -1;
+    float maxw = -1;
+    for (int i = 0; i < numInfluencesPerComponent; i++) {
+        vec2 influence = HdGet_hydra_influences(offset + i);
+        float jointWeight = influence.y;
+        if (pivotIdx < 0 || maxw < jointWeight) {
+            int jointIdx = int(influence.x) + instanceOffset;
+            maxw = jointWeight;
+            pivotIdx = jointIdx;
+        }
+    }
+    if (pivotIdx >= 0) {
+        pivotQuat = HdGet_hydra_skinningDualQuats(pivotIdx*2);
+    }
+#endif
+
+    return pivotQuat;
+}
+
+vec3 TransformByQuaternion(vec4 quat, vec3 vec)
+{
+    // See GfQuat::Transform() for algorithm
+
+    float r1 = quat.w;
+    vec3  i1 = quat.xyz;
+
+    vec3  i2 = vec3(r1 * vec[0] + (i1[1] * vec[2] - i1[2] * vec[1]),
+                    r1 * vec[1] + (i1[2] * vec[0] - i1[0] * vec[2]),
+                    r1 * vec[2] + (i1[0] * vec[1] - i1[1] * vec[0]));
+
+    return vec3(vec[0] + 2.0 * (i1[1] * i2[2] - i1[2] * i2[1]),
+                vec[1] + 2.0 * (i1[2] * i2[0] - i1[0] * i2[2]),
+                vec[2] + 2.0 * (i1[0] * i2[1] - i1[1] * i2[0]));
+}
+
+vec3 GetDualQuaternionTranslation(vec4 real, vec4 dual)
+{
+    // See GfDualQuat::GetTranslation() for algorithm
+
+    float scale = -2.0;
+
+    float rw = real.w;
+    vec3  ri = real.xyz;
+
+    float dw = dual.w;
+    vec3  di = dual.xyz;
+
+    return vec3( (dw*ri[0] - rw*di[0] + di[1]*ri[2] - di[2]*ri[1])*scale,
+                 (dw*ri[1] - rw*di[1] + di[2]*ri[0] - di[0]*ri[2])*scale,
+                 (dw*ri[2] - rw*di[2] + di[0]*ri[1] - di[1]*ri[0])*scale );
+}
+
+vec3 ApplySkinningDQS(vec3 restP)
+{
+#if defined(HD_HAS_skel_geomBindTransform) && \
+    defined(HD_HAS_hydra_numInfluencesPerComponent) && \
+    defined(HD_HAS_hydra_hasConstantInfluences) && \
+    defined(HD_HAS_hydra_influences) && \
+    defined(HD_HAS_hydra_skinningDualQuats) && \
+    defined(HD_HAS_hydra_primWorldToLocal) && \
+    defined(HD_HAS_hydra_skelLocalToWorld) && \
+    defined(HD_HAS_hydra_numJoints)
+
+    vec3 p;
+    int numInfluencesPerComponent = HdGet_hydra_numInfluencesPerComponent();
+    if (numInfluencesPerComponent > 0) {
+        const int index = int(hd_VertexID) - GetBaseVertexOffset();
+        const int instanceOffset =
+            GetDrawingCoord().instanceIndex[0] * HdGet_hydra_numJoints();
+
+        // model space -> bind space
+        mat4 geomBindXform = HdGet_skel_geomBindTransform();
+        vec3 initP = (geomBindXform * vec4(restP, 1)).xyz;
+
+#ifdef HD_HAS_hydra_skinningScaleXforms
+        vec3 scaledP = vec3(0, 0, 0);
+#endif
+
+        bool constantPointInfluence = HdGet_hydra_hasConstantInfluences();
+        int offset = constantPointInfluence ? 0 :
+            numInfluencesPerComponent * index;
+
+        // find the pivot quaternion
+        vec4 pivotQuat = GetPivotQuaternion(
+            numInfluencesPerComponent, offset, instanceOffset);
+
+        // find the weighted sum dual quaternion
+        vec4 weightedSumDQReal = vec4(0);
+        vec4 weightedSumDQDual = vec4(0);
+
+        for (int i = 0; i < numInfluencesPerComponent; i++) {
+            vec2 influence = HdGet_hydra_influences(offset + i);
+            float jointWeight = influence.y;
+
+            if (jointWeight > EPS) {
+                int jointIdx = int(influence.x) + instanceOffset;
+
+#ifdef HD_HAS_hydra_skinningScaleXforms
+                // Apply scale using LBS, if any of the skinning xforms has scales
+                mat3 scaleXform = HdGet_hydra_skinningScaleXforms(jointIdx);
+                scaledP += ((scaleXform * initP) * jointWeight);
+#endif
+
+                // Apply rotation & translation using DQS
+                vec4 skinningDQReal = HdGet_hydra_skinningDualQuats(jointIdx*2);
+                vec4 skinningDQDual = HdGet_hydra_skinningDualQuats(jointIdx*2+1);
+                // Flip the dual quaternion, if necessary, to make it
+                // on the same hemisphere as the pivotQuat.
+                if (dot(skinningDQReal, pivotQuat) < 0.0) {
+                   jointWeight = -jointWeight;
+                }
+
+                weightedSumDQReal += (skinningDQReal * jointWeight);
+                weightedSumDQDual += (skinningDQDual * jointWeight);
+            }
+        }
+
+        // normalize weightedSumDQ
+        float realLength = length(weightedSumDQReal);
+        if (realLength < NORM_EPS) {
+            weightedSumDQReal = vec4(0, 0, 0, 1);  // identity quaternion
+            weightedSumDQDual = vec4(0);           // zero quaternion
+        } else {
+            float inverseRealLength = 1.0 / realLength;
+            // rotation normalization
+            weightedSumDQReal *= inverseRealLength;
+            weightedSumDQDual *= inverseRealLength;
+            // plucker normalization
+            weightedSumDQDual -=
+                (dot(weightedSumDQReal, weightedSumDQDual) * weightedSumDQReal);
+        }
+
+#ifdef HD_HAS_hydra_skinningScaleXforms
+        // transform scaledP by weightedSumDQ
+        p = TransformByQuaternion(weightedSumDQReal, scaledP)
+            + GetDualQuaternionTranslation(weightedSumDQReal, weightedSumDQDual);
+#else
+        // transform initP by weightedSumDQ
+        p = TransformByQuaternion(weightedSumDQReal, initP)
+            + GetDualQuaternionTranslation(weightedSumDQReal, weightedSumDQDual);
+#endif
+
+        // skel space -> world space -> model space
+        // XXX: Casts to mat4 below are necessary because the matrices passed
+        // down use doubles and not floats.
+        mat4 skelToPrimLocal = mat4(HdGet_hydra_primWorldToLocal()) *
+                               mat4(HdGet_hydra_skelLocalToWorld());
+        p = (skelToPrimLocal * vec4(p, 1)).xyz;
+        return p;
+    }
+#endif
+    return restP;
+}
+
+// ---------------------------------------------------------------------------
+
+vec3 ApplyBlendShapes(vec3 restP)
+{
+#if defined(HD_HAS_hydra_numBlendShapeOffsetRanges) && \
+    defined(HD_HAS_hydra_blendShapeOffsetRanges) && \
+    defined(HD_HAS_hydra_blendShapeOffsets) && \
+    defined(HD_HAS_hydra_numBlendShapeWeights) && \
+    defined(HD_HAS_hydra_blendShapeWeights)
+
+    const int index = int(hd_VertexID) - GetBaseVertexOffset();
+    const int instanceOffset =
+        GetDrawingCoord().instanceIndex[0] * HdGet_hydra_numBlendShapeWeights();
+
+    const int numBlendShapeOffsetRanges = HdGet_hydra_numBlendShapeOffsetRanges();
+    if (index < numBlendShapeOffsetRanges) {
+        ivec2 blendShapeOffsetRange = HdGet_hydra_blendShapeOffsetRanges(index);
+        for (int i = blendShapeOffsetRange.x; i < blendShapeOffsetRange.y; ++i) {
+            const vec4 offset = HdGet_hydra_blendShapeOffsets(i);
+            const int shapeIndex = instanceOffset + int(offset.w);
+            const float weight = HdGet_hydra_blendShapeWeights(shapeIndex);
+            restP += offset.xyz * weight;
+        }
+    }
+#endif
+    return restP;
+}
+
+vec3 ApplySkinning(vec3 restP)
+{
+    vec3 p = ApplyBlendShapes(restP);
+
+#ifdef HD_HAS_hydra_numSkinningMethod
+    const int skinningMethod = HdGet_hydra_numSkinningMethod();
+    if (skinningMethod == 1) {
+        return ApplySkinningDQS(p);
+    }
+#endif
+    return ApplySkinningLBS(p);
 }
 
 
@@ -638,6 +941,14 @@ void ProcessPointId(int pointId)
 
 
 
+float ApplyPointSizeBias(float pointSize)
+{
+    // do nothing
+    return pointSize;
+}
+
+
+
 // Fwd declare methods defined in pointId.glslfx, that are used below.
 FORWARD_DECL(int GetPointId());
 FORWARD_DECL(float GetPointRasterSize(int));
@@ -648,13 +959,13 @@ void main(void)
     ProcessPrimvarsIn();
 
     MAT4 transform    = ApplyInstanceTransform(HdGet_transform());
-    vec4 point        = vec4(HdGet_points().xyz, 1);
+    vec4 point        = vec4(ApplySkinning(HdGet_points().xyz), 1);
     outData.Peye = vec4(GetWorldToViewMatrix() * transform * point);
 
     outData.Neye = GetNormal(vec3(0), 0); // normalized
 
     int pointId = GetPointId();
-    gl_PointSize = GetPointRasterSize(pointId);
+    gl_PointSize = ApplyPointSizeBias(GetPointRasterSize(pointId));
     ProcessPointId(pointId);
 
     gl_Position = vec4(GetProjectionMatrix() * outData.Peye);
@@ -672,6 +983,18 @@ void main(void)
   GEOMETRY SHADER                                      
 =======================================================
 #version 450
+#if defined(GL_EXT_control_flow_attributes)
+	#extension GL_EXT_control_flow_attributes: require
+	#define HGI_COMPILER_ATTR_UNROLL [[unroll]]
+	#define HGI_COMPILER_ATTR_DONT_UNROLL [[dont_unroll]]
+	#define HGI_COMPILER_ATTR_FLATTEN [[flatten]]
+	#define HGI_COMPILER_ATTR_DONT_FLATTEN [[dont_flatten]]
+#else
+	#define HGI_COMPILER_ATTR_UNROLL
+	#define HGI_COMPILER_ATTR_DONT_UNROLL
+	#define HGI_COMPILER_ATTR_FLATTEN
+	#define HGI_COMPILER_ATTR_DONT_FLATTEN
+#endif
 #define REF(space,type) inout type
 #define FORWARD_DECL(func_decl) func_decl
 #define ATOMIC_LOAD(a) (a)
@@ -681,6 +1004,7 @@ void main(void)
 #define ATOMIC_COMP_SWAP(a, expected, desired) atomicCompSwap(a, expected, desired)
 #define atomic_int int
 #define atomic_uint uint
+#define hd_SampleMask gl_SampleMask[0]
 
 #define HGI_HAS_DOUBLE_TYPE 1
 
@@ -696,8 +1020,9 @@ struct hgi_dmat3 { double m00, m01, m02,
                           m20, m21, m22; };
 
 // //////// Codegen Defines //////// 
-#define HD_SHADER_API 2
+#define HD_SHADER_API 3
 #define MAT4 mat4
+#define HD_USE_HARDWARE_CLIPPING
 // Alias hgi vec and matrix types to hd.
 #define hd_ivec3 hgi_ivec3
 #define hd_vec3 hgi_vec3
@@ -835,15 +1160,14 @@ layout(location = 5) in PrimvarData {
   vec3 normals;
 } inPrimvars[HD_NUM_PRIMITIVE_VERTS];
 layout(location = 2) out vec4 gsPatchCoord;
-noperspective layout(location = 3) out vec3 hd_barycentricCoord;
-flat layout(location = 4) out ivec4 gs_interstageDrawingCoord0;
-flat layout(location = 5) out ivec4 gs_interstageDrawingCoord1;
-flat layout(location = 6) out ivec4 gs_interstageDrawingCoord2;
+flat layout(location = 3) out ivec4 gs_interstageDrawingCoord0;
+flat layout(location = 4) out ivec4 gs_interstageDrawingCoord1;
+flat layout(location = 5) out ivec4 gs_interstageDrawingCoord2;
 layout(location = 0) out VertexData {
   vec4 Peye;
   vec3 Neye;
 } outData;
-layout(location = 7) out PrimvarData {
+layout(location = 6) out PrimvarData {
   vec3 points;
   vec3 normals;
   vec2 dispTextureCoord;
@@ -991,10 +1315,6 @@ void ProcessSamplingTransforms(MAT4 instanceModelViewInverse) {
 FORWARD_DECL(vec4 GetPatchCoord(int index));
 void ProcessPrimvarsOut(int index) {
   vec2 localST = GetPatchCoord(index).xy;
-  const vec3 coords[3] = vec3[](
-   vec3(1,0,0), vec3(0,1,0), vec3(0,0,1)
-  );
-  hd_barycentricCoord = coords[index];
   hd_drawingCoord dc = GetDrawingCoord();
   gs_interstageDrawingCoord0[0] = dc.modelCoord;
   gs_interstageDrawingCoord0[1] = dc.constantCoord;
@@ -1048,6 +1368,13 @@ MAT4  GetProjectionMatrix() {
     return MAT4(1);
 #endif
 }
+MAT4  GetProjectionInverseMatrix() {
+#if defined(HD_HAS_projectionInverseMatrix)
+    return MAT4(HdGet_projectionInverseMatrix());
+#else
+    return MAT4(1);
+#endif
+}
 vec3 GetPositionInWorldSpace(vec3 windowRelativeCoord)
 {
 #if defined(HD_HAS_imageToWorldMatrix)
@@ -1061,6 +1388,13 @@ vec3 GetPositionInWorldSpace(vec3 windowRelativeCoord)
 float GetLightingBlendAmount() {
 #if defined(HD_HAS_lightingBlendAmount)
     return HdGet_lightingBlendAmount();
+#else
+    return 1;
+#endif
+}
+float GetLinearExposure() {
+#if defined(HD_HAS_linearExposure)
+    return HdGet_linearExposure();
 #else
     return 1;
 #endif
@@ -1137,6 +1471,7 @@ vec2 ApplyAxisAlignedAffineTransform(vec4 t, vec2 pt)
 
 
 
+#ifdef HD_USE_HARDWARE_CLIPPING
 void ApplyClipPlanes(vec4 Peye)
 {
 #if defined(HD_HAS_numClipPlanes)
@@ -1154,6 +1489,7 @@ void ApplyClipPlanes(vec4 Peye)
 #endif
 #endif
 }
+#endif
 
 
 
@@ -1292,6 +1628,7 @@ MAT4 GetInstanceTransform()
 {
     MAT4 m = MAT4(1);
 #ifdef HD_INSTANCER_NUM_LEVELS
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         m = GetInstanceTransform(i) * m;
 #ifdef HD_HAS_instancerTransform
@@ -1306,6 +1643,7 @@ MAT4 GetInstanceTransformInverse()
 {
     MAT4 m = MAT4(1);
 #ifdef HD_INSTANCER_NUM_LEVELS
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         m = m * GetInstanceTransformInverse(i);
 #ifdef HD_HAS_instancerTransformInverse
@@ -1340,11 +1678,13 @@ bool IsFlipped()
 #endif
 
 #ifdef HD_HAS_INSTANCE_hydra_instanceScales
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         vec3 scale = HdGetInstance_hydra_instanceScales(i, /*default=*/vec3(1));
         flip = flip != ((sign(scale.x) * sign(scale.y) * sign(scale.z)) < 0);
     }
 #elif defined(HD_HAS_INSTANCE_scale)
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         vec3 scale = HdGetInstance_scale(i, /*default=*/vec3(1));
         flip = flip != ((sign(scale.x) * sign(scale.y) * sign(scale.z)) < 0);
@@ -1352,11 +1692,13 @@ bool IsFlipped()
 #endif
 
 #ifdef HD_HAS_INSTANCE_hydra_instanceTransforms
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         MAT4 m = HdGetInstance_hydra_instanceTransforms(i, MAT4(1));
         flip = flip != (determinant(m) < 0.0);
     }
 #elif defined(HD_HAS_INSTANCE_instanceTransform)
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         MAT4 m = HdGetInstance_instanceTransform(i, MAT4(1));
         flip = flip != (determinant(m) < 0.0);
@@ -1476,6 +1818,19 @@ void main(void)
   FRAGMENT SHADER                                      
 =======================================================
 #version 450
+#if defined(GL_EXT_control_flow_attributes)
+	#extension GL_EXT_control_flow_attributes: require
+	#define HGI_COMPILER_ATTR_UNROLL [[unroll]]
+	#define HGI_COMPILER_ATTR_DONT_UNROLL [[dont_unroll]]
+	#define HGI_COMPILER_ATTR_FLATTEN [[flatten]]
+	#define HGI_COMPILER_ATTR_DONT_FLATTEN [[dont_flatten]]
+#else
+	#define HGI_COMPILER_ATTR_UNROLL
+	#define HGI_COMPILER_ATTR_DONT_UNROLL
+	#define HGI_COMPILER_ATTR_FLATTEN
+	#define HGI_COMPILER_ATTR_DONT_FLATTEN
+#endif
+#extension GL_EXT_fragment_shader_barycentric: require
 #define REF(space,type) inout type
 #define FORWARD_DECL(func_decl) func_decl
 #define ATOMIC_LOAD(a) (a)
@@ -1485,6 +1840,7 @@ void main(void)
 #define ATOMIC_COMP_SWAP(a, expected, desired) atomicCompSwap(a, expected, desired)
 #define atomic_int int
 #define atomic_uint uint
+#define hd_SampleMask gl_SampleMask[0]
 
 #define HGI_HAS_DOUBLE_TYPE 1
 
@@ -1500,8 +1856,9 @@ struct hgi_dmat3 { double m00, m01, m02,
                           m20, m21, m22; };
 
 // //////// Codegen Defines //////// 
-#define HD_SHADER_API 2
+#define HD_SHADER_API 3
 #define MAT4 mat4
+#define HD_USE_HARDWARE_CLIPPING
 // Alias hgi vec and matrix types to hd.
 #define hd_ivec3 hgi_ivec3
 #define hd_vec3 hgi_vec3
@@ -1626,15 +1983,15 @@ layout(std430, binding = 2) readonly buffer ssbo_edgeIndices { int edgeIndices[]
 layout(std430, binding = 3) readonly buffer ssbo_faceVisibility { float faceVisibility[]; };
 layout(std430, binding = 4) readonly buffer ssbo_dispTextureCoord { vec2 dispTextureCoord[]; };
 layout(location = 2) in vec4 gsPatchCoord;
-noperspective layout(location = 3) in vec3 hd_barycentricCoord;
-flat layout(location = 4) in ivec4 gs_interstageDrawingCoord0;
-flat layout(location = 5) in ivec4 gs_interstageDrawingCoord1;
-flat layout(location = 6) in ivec4 gs_interstageDrawingCoord2;
+flat layout(location = 3) in ivec4 gs_interstageDrawingCoord0;
+flat layout(location = 4) in ivec4 gs_interstageDrawingCoord1;
+flat layout(location = 5) in ivec4 gs_interstageDrawingCoord2;
+vec3 hd_BaryCoordNoPersp = gl_BaryCoordNoPerspEXT;
 layout(location = 0) in VertexData {
   vec4 Peye;
   vec3 Neye;
 } inData;
-layout(location = 7) in PrimvarData {
+layout(location = 6) in PrimvarData {
   vec3 points;
   vec3 normals;
   vec2 dispTextureCoord;
@@ -1680,7 +2037,7 @@ float HdGetScalar_widths() { return HdGet_widths(0); }
 // //////// Codegen FS Source //////// 
 #define HD_SHADER_SUPPORTS_DOUBLE_PRECISION
 vec3 GetBarycentricCoord() {
-  return hd_barycentricCoord;
+  return hd_BaryCoordNoPersp;
 }
 int GetPrimitiveID() {
   return gl_PrimitiveID;
@@ -1804,6 +2161,13 @@ MAT4  GetProjectionMatrix() {
     return MAT4(1);
 #endif
 }
+MAT4  GetProjectionInverseMatrix() {
+#if defined(HD_HAS_projectionInverseMatrix)
+    return MAT4(HdGet_projectionInverseMatrix());
+#else
+    return MAT4(1);
+#endif
+}
 vec3 GetPositionInWorldSpace(vec3 windowRelativeCoord)
 {
 #if defined(HD_HAS_imageToWorldMatrix)
@@ -1817,6 +2181,13 @@ vec3 GetPositionInWorldSpace(vec3 windowRelativeCoord)
 float GetLightingBlendAmount() {
 #if defined(HD_HAS_lightingBlendAmount)
     return HdGet_lightingBlendAmount();
+#else
+    return 1;
+#endif
+}
+float GetLinearExposure() {
+#if defined(HD_HAS_linearExposure)
+    return HdGet_linearExposure();
 #else
     return 1;
 #endif
@@ -1911,11 +2282,21 @@ vec4 ApplySelectionColor(vec4 color)
     return color;
 }
 
+// No-op stub for passes without selection highlighting (e.g. pick and
+// shadow passes). It satisfies the forward declaration called from
+// ApplyColorOverridesPostLighting. The real minimum selection opacity floor
+// is in hdx/shaders/selection.glslfx.
+vec4 ApplySelectionOpacity(vec4 color)
+{
+    return color;
+}
+
 
 
 // Forward declare selection functionality.
 // XXX: Currently, the non-empty implementation of this is in hdx.
 FORWARD_DECL(vec4 ApplySelectionColor(vec4 color));
+FORWARD_DECL(vec4 ApplySelectionOpacity(vec4 color));
 
 // XXX: Make sure to update hdx/shaders/renderPass.glslfx when editing these
 // color override methods, since they're currently duplicated. This is because
@@ -1948,7 +2329,7 @@ vec4 ApplyColorOverridesPostLighting(vec4 color)
         vec4 indicatorColor = GetIndicatorColor();
         color.rgb = ApplyMaskColor(color.rgb, indicatorWeight, indicatorColor);
     #endif
-    return color;
+    return ApplySelectionOpacity(color);
 }
 
 
@@ -2168,6 +2549,7 @@ MAT4 GetInstanceTransform()
 {
     MAT4 m = MAT4(1);
 #ifdef HD_INSTANCER_NUM_LEVELS
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         m = GetInstanceTransform(i) * m;
 #ifdef HD_HAS_instancerTransform
@@ -2182,6 +2564,7 @@ MAT4 GetInstanceTransformInverse()
 {
     MAT4 m = MAT4(1);
 #ifdef HD_INSTANCER_NUM_LEVELS
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         m = m * GetInstanceTransformInverse(i);
 #ifdef HD_HAS_instancerTransformInverse
@@ -2216,11 +2599,13 @@ bool IsFlipped()
 #endif
 
 #ifdef HD_HAS_INSTANCE_hydra_instanceScales
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         vec3 scale = HdGetInstance_hydra_instanceScales(i, /*default=*/vec3(1));
         flip = flip != ((sign(scale.x) * sign(scale.y) * sign(scale.z)) < 0);
     }
 #elif defined(HD_HAS_INSTANCE_scale)
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         vec3 scale = HdGetInstance_scale(i, /*default=*/vec3(1));
         flip = flip != ((sign(scale.x) * sign(scale.y) * sign(scale.z)) < 0);
@@ -2228,11 +2613,13 @@ bool IsFlipped()
 #endif
 
 #ifdef HD_HAS_INSTANCE_hydra_instanceTransforms
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         MAT4 m = HdGetInstance_hydra_instanceTransforms(i, MAT4(1));
         flip = flip != (determinant(m) < 0.0);
     }
 #elif defined(HD_HAS_INSTANCE_instanceTransform)
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         MAT4 m = HdGetInstance_instanceTransform(i, MAT4(1));
         flip = flip != (determinant(m) < 0.0);
@@ -2344,9 +2731,9 @@ vec4 GetEdgeDistanceQuad()
 
 
 
-vec4 ApplyFinalEdgeOpacity(vec4 Cfill)
+vec4 ApplyFinalEdgeOpacity(vec4 Cfill, float p)
 {
-    Cfill.a = 1.0;
+    Cfill.a = mix(Cfill.a, 1, p);
     return Cfill;
 }
 
@@ -2355,9 +2742,11 @@ vec4 ApplyFinalEdgeOpacity(vec4 Cfill)
 vec4 ApplyEdgeColor(vec4 Cfill, vec4 patchCoord)
 {
     float p = GetEdgeOpacity();
-    if (p < 0.5) discard;
+    if (p < 0.5) {
+        discard;
+    }
 
-    return ApplyFinalEdgeOpacity(Cfill);
+    return ApplyFinalEdgeOpacity(Cfill, p);
 }
 
 
@@ -2383,6 +2772,7 @@ FORWARD_DECL(ScalarOverride GetScalarOverride());
 FORWARD_DECL(
     vec4 surfaceShader(vec4 Peye, vec3 Neye, vec4 color, vec4 patchCoord));
 FORWARD_DECL(vec4 postSurfaceShader(vec4 Peye, vec3 Neye, vec4 color));
+FORWARD_DECL(vec4 ApplySelectionOpacity(vec4 color));
 
 vec4 ShadingTerminal(vec4 Peye, vec3 Neye, vec4 color, vec4 patchCoord)
 {
@@ -2399,7 +2789,9 @@ vec4 ShadingTerminal(vec4 Peye, vec3 Neye, vec4 color, vec4 patchCoord)
         vec4 colorOverride = ApplyColorOverrides(result);
         result = reprStyle.applyColorOverride ? colorOverride : result;
 
-        return result;
+        // This path skips ApplyColorOverridesPostLighting, so apply the
+        // selection opacity floor here.
+        return ApplySelectionOpacity(result);
     }
 
     // Draw mode can override face color
@@ -2430,6 +2822,9 @@ vec4 ShadingTerminal(vec4 Peye, vec3 Neye, vec4 color, vec4 patchCoord)
                                          Neye,
                                          shadingColor);
 #endif
+
+        // Modify the shaded color by camera exposure.
+        shadingColor.rgb *= GetLinearExposure();
 
         reprColor.rgb = reprStyle.useSurfaceShaderColor ?
                         shadingColor.rgb :
@@ -2614,6 +3009,13 @@ int GetPointId()
 }
 
 
+
+void ApplyDiskSampleMask()
+{
+    // do nothing
+}
+
+
 void DiscardBasedOnTopologicalVisibility()
 {
     // Nothing to do, since there's no authored opinion.
@@ -2661,6 +3063,8 @@ vec3 ComputeScreenSpaceNeye()
 
 void main(void)
 {
+    ApplyDiskSampleMask();
+
     bool isFlipped = IsFlipped();
 
     DiscardBasedOnShading(gl_FrontFacing, isFlipped);
@@ -2690,6 +3094,17 @@ void main(void)
     vec4 patchCoord = GetPatchCoord();
     color = ShadingTerminal(vec4(Peye, 1), Neye, color, patchCoord);
 
+#if defined(HD_HAS_depthReadback) && defined(HD_EARLY_FRAGMENT_TESTS)
+    // This section needs to come after ShadingTerminal to avoid possible
+    // non-uniform paths when sampling textures required for shading
+    const float bufferVal = texelFetch(HdGetSampler_depthReadback(),
+                                       ivec2(gl_FragCoord.xy),
+                                       /* lod = */ 0).x;
+    if (gl_FragCoord.z >= bufferVal) {
+      discard;
+    }
+#endif
+
     color = ApplyEdgeColor(color, patchCoord);
 
 #ifdef HD_MATERIAL_TAG_MASKED
@@ -2707,15 +3122,27 @@ void main(void)
 #import $TOOLS/hdSt/shaders/mesh.glslfx
 -- configuration
 {"techniques": {"default": {
-"vertexShader" : { "source" : ["Instancing.Transform", "MeshNormal.Pass", "PointId.Vertex.None", "Mesh.Vertex"] }
+"vertexShader" : { "source" : ["Instancing.Transform", "Vertex.SkinPoints", "MeshNormal.Pass", "PointId.Vertex.None", "PointDisk.Vertex.None", "Mesh.Vertex"] }
 , "geometryShader" : { "source" : ["Instancing.Transform", "MeshNormal.Flat", "MeshNormal.Geometry.NoFlat", "Geometry.NoCustomDisplacement", "Mesh.Geometry.Quad"] }
-, "fragmentShader" : { "source" : ["Instancing.Transform", "MeshNormal.Pass", "MeshNormal.Fragment.SingleSided", "MeshFaceCull.Fragment.None", "MeshWire.Fragment.EdgeCoord.Barycentric", "MeshWire.Fragment.EdgeMaskQuad", "MeshWire.Fragment.EdgeCommon", "MeshWire.Fragment.EdgeParam", "MeshWire.Fragment.FinalEdgeOpacityForce", "MeshWire.Fragment.EdgeOnlyNoBlend", "Fragment.CommonTerminals", "Fragment.Surface", "Fragment.ScalarOverride", "EdgeId.Fragment.Common", "EdgeId.Fragment.QuadLines", "EdgeId.Fragment.QuadParam", "PointId.Fragment.Fallback", "Visibility.Fragment.Fallback", "Mesh.Fragment.PatchCoord", "Mesh.Fragment"] }
+, "fragmentShader" : { "source" : ["Instancing.Transform", "MeshNormal.Pass", "MeshNormal.Fragment.SingleSided", "MeshFaceCull.Fragment.None", "MeshWire.Fragment.EdgeCoord.Barycentric", "MeshWire.Fragment.EdgeMaskQuad", "MeshWire.Fragment.EdgeCommon", "MeshWire.Fragment.EdgeParam", "MeshWire.Fragment.FinalEdgeOpacityForce", "MeshWire.Fragment.EdgeOnlyNoBlend", "Fragment.CommonTerminals", "Fragment.Surface", "Fragment.ScalarOverride", "EdgeId.Fragment.Common", "EdgeId.Fragment.QuadLines", "EdgeId.Fragment.QuadParam", "PointId.Fragment.Fallback", "PointDisk.Fragment.None", "Visibility.Fragment.Fallback", "Mesh.Fragment.PatchCoord", "Mesh.Fragment"] }
 }}}
 -------------------------------------------------------
 =======================================================
   VERTEX SHADER                                        
 =======================================================
 #version 450
+#if defined(GL_EXT_control_flow_attributes)
+	#extension GL_EXT_control_flow_attributes: require
+	#define HGI_COMPILER_ATTR_UNROLL [[unroll]]
+	#define HGI_COMPILER_ATTR_DONT_UNROLL [[dont_unroll]]
+	#define HGI_COMPILER_ATTR_FLATTEN [[flatten]]
+	#define HGI_COMPILER_ATTR_DONT_FLATTEN [[dont_flatten]]
+#else
+	#define HGI_COMPILER_ATTR_UNROLL
+	#define HGI_COMPILER_ATTR_DONT_UNROLL
+	#define HGI_COMPILER_ATTR_FLATTEN
+	#define HGI_COMPILER_ATTR_DONT_FLATTEN
+#endif
 #extension GL_ARB_shader_draw_parameters : require
 int HgiGetBaseVertex() {
   return gl_BaseVertexARB;
@@ -2732,6 +3159,7 @@ int HgiGetBaseInstance() {
 #define ATOMIC_COMP_SWAP(a, expected, desired) atomicCompSwap(a, expected, desired)
 #define atomic_int int
 #define atomic_uint uint
+#define hd_SampleMask gl_SampleMask[0]
 
 #define HGI_HAS_DOUBLE_TYPE 1
 
@@ -2747,8 +3175,9 @@ struct hgi_dmat3 { double m00, m01, m02,
                           m20, m21, m22; };
 
 // //////// Codegen Defines //////// 
-#define HD_SHADER_API 2
+#define HD_SHADER_API 3
 #define MAT4 mat4
+#define HD_USE_HARDWARE_CLIPPING
 // Alias hgi vec and matrix types to hd.
 #define hd_ivec3 hgi_ivec3
 #define hd_vec3 hgi_vec3
@@ -3000,6 +3429,13 @@ MAT4  GetProjectionMatrix() {
     return MAT4(1);
 #endif
 }
+MAT4  GetProjectionInverseMatrix() {
+#if defined(HD_HAS_projectionInverseMatrix)
+    return MAT4(HdGet_projectionInverseMatrix());
+#else
+    return MAT4(1);
+#endif
+}
 vec3 GetPositionInWorldSpace(vec3 windowRelativeCoord)
 {
 #if defined(HD_HAS_imageToWorldMatrix)
@@ -3013,6 +3449,13 @@ vec3 GetPositionInWorldSpace(vec3 windowRelativeCoord)
 float GetLightingBlendAmount() {
 #if defined(HD_HAS_lightingBlendAmount)
     return HdGet_lightingBlendAmount();
+#else
+    return 1;
+#endif
+}
+float GetLinearExposure() {
+#if defined(HD_HAS_linearExposure)
+    return HdGet_linearExposure();
 #else
     return 1;
 #endif
@@ -3089,6 +3532,7 @@ vec2 ApplyAxisAlignedAffineTransform(vec4 t, vec2 pt)
 
 
 
+#ifdef HD_USE_HARDWARE_CLIPPING
 void ApplyClipPlanes(vec4 Peye)
 {
 #if defined(HD_HAS_numClipPlanes)
@@ -3106,6 +3550,7 @@ void ApplyClipPlanes(vec4 Peye)
 #endif
 #endif
 }
+#endif
 
 
 
@@ -3238,6 +3683,7 @@ MAT4 GetInstanceTransform()
 {
     MAT4 m = MAT4(1);
 #ifdef HD_INSTANCER_NUM_LEVELS
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         m = GetInstanceTransform(i) * m;
 #ifdef HD_HAS_instancerTransform
@@ -3252,6 +3698,7 @@ MAT4 GetInstanceTransformInverse()
 {
     MAT4 m = MAT4(1);
 #ifdef HD_INSTANCER_NUM_LEVELS
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         m = m * GetInstanceTransformInverse(i);
 #ifdef HD_HAS_instancerTransformInverse
@@ -3286,11 +3733,13 @@ bool IsFlipped()
 #endif
 
 #ifdef HD_HAS_INSTANCE_hydra_instanceScales
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         vec3 scale = HdGetInstance_hydra_instanceScales(i, /*default=*/vec3(1));
         flip = flip != ((sign(scale.x) * sign(scale.y) * sign(scale.z)) < 0);
     }
 #elif defined(HD_HAS_INSTANCE_scale)
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         vec3 scale = HdGetInstance_scale(i, /*default=*/vec3(1));
         flip = flip != ((sign(scale.x) * sign(scale.y) * sign(scale.z)) < 0);
@@ -3298,11 +3747,13 @@ bool IsFlipped()
 #endif
 
 #ifdef HD_HAS_INSTANCE_hydra_instanceTransforms
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         MAT4 m = HdGetInstance_hydra_instanceTransforms(i, MAT4(1));
         flip = flip != (determinant(m) < 0.0);
     }
 #elif defined(HD_HAS_INSTANCE_instanceTransform)
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         MAT4 m = HdGetInstance_instanceTransform(i, MAT4(1));
         flip = flip != (determinant(m) < 0.0);
@@ -3310,6 +3761,273 @@ bool IsFlipped()
 #endif
 
     return flip;
+}
+
+
+const float EPS = 1e-5;
+
+vec3 ApplySkinningLBS(vec3 restP)
+{
+#if defined(HD_HAS_skel_geomBindTransform) && \
+    defined(HD_HAS_hydra_numInfluencesPerComponent) && \
+    defined(HD_HAS_hydra_hasConstantInfluences) && \
+    defined(HD_HAS_hydra_influences) && \
+    defined(HD_HAS_hydra_skinningXforms) && \
+    defined(HD_HAS_hydra_primWorldToLocal) && \
+    defined(HD_HAS_hydra_skelLocalToWorld) && \
+    defined(HD_HAS_hydra_numJoints)
+
+    int numInfluencesPerComponent = HdGet_hydra_numInfluencesPerComponent();
+    if (numInfluencesPerComponent > 0) {
+        const int index = int(hd_VertexID) - GetBaseVertexOffset();
+        const int instanceOffset =
+            GetDrawingCoord().instanceIndex[0] * HdGet_hydra_numJoints();
+
+        // model space -> bind space
+        mat4 geomBindXform = HdGet_skel_geomBindTransform();
+        vec4 initP = geomBindXform * vec4(restP, 1);
+
+        vec3 p = vec3(0, 0, 0);
+
+        bool constantPointInfluence = HdGet_hydra_hasConstantInfluences();
+        int offset = constantPointInfluence ? 0 :
+            numInfluencesPerComponent * index;
+
+        for (int i = 0; i < numInfluencesPerComponent; i++) {
+            vec2 influence = HdGet_hydra_influences(offset + i);
+            float jointWeight = influence.y;
+            // float jointWeight = HdGet_skel_jointWeights(i);
+
+            if (jointWeight > EPS) {
+                // HYD-3510
+                // we have to do multiple mem fetch to compute jointIdx here.
+                // potentially causing vertex implementation to be much slower
+                // than extComputation compute shader.
+                int jointIdx = int(influence.x) + instanceOffset;
+                // int jointIdx = HdGet_skel_jointIndices(i) + instanceOffset;
+                mat4 skinningXform = HdGet_hydra_skinningXforms(jointIdx);
+
+                p += ((skinningXform * initP) * jointWeight).xyz;
+            }
+        }
+
+        // skel space -> world space -> model space
+        // XXX: Casts to mat4 below are necessary because the matrices passed
+        // down use doubles and not floats.
+        mat4 skelToPrimLocal = mat4( HdGet_hydra_primWorldToLocal() ) *
+                               mat4( HdGet_hydra_skelLocalToWorld() );
+        p = (skelToPrimLocal * vec4(p, 1)).xyz;
+        return p;
+    }
+#endif
+    return restP;
+}
+
+// ---------------------------------------------------------------------------
+
+const float NORM_EPS = 1e-10;
+
+vec4 GetPivotQuaternion(
+    int numInfluencesPerComponent, int offset, int instanceOffset)
+{
+    vec4 pivotQuat = vec4(0);
+
+#if defined(HD_HAS_hydra_influences) && \
+    defined(HD_HAS_hydra_skinningDualQuats)
+
+    int pivotIdx = -1;
+    float maxw = -1;
+    for (int i = 0; i < numInfluencesPerComponent; i++) {
+        vec2 influence = HdGet_hydra_influences(offset + i);
+        float jointWeight = influence.y;
+        if (pivotIdx < 0 || maxw < jointWeight) {
+            int jointIdx = int(influence.x) + instanceOffset;
+            maxw = jointWeight;
+            pivotIdx = jointIdx;
+        }
+    }
+    if (pivotIdx >= 0) {
+        pivotQuat = HdGet_hydra_skinningDualQuats(pivotIdx*2);
+    }
+#endif
+
+    return pivotQuat;
+}
+
+vec3 TransformByQuaternion(vec4 quat, vec3 vec)
+{
+    // See GfQuat::Transform() for algorithm
+
+    float r1 = quat.w;
+    vec3  i1 = quat.xyz;
+
+    vec3  i2 = vec3(r1 * vec[0] + (i1[1] * vec[2] - i1[2] * vec[1]),
+                    r1 * vec[1] + (i1[2] * vec[0] - i1[0] * vec[2]),
+                    r1 * vec[2] + (i1[0] * vec[1] - i1[1] * vec[0]));
+
+    return vec3(vec[0] + 2.0 * (i1[1] * i2[2] - i1[2] * i2[1]),
+                vec[1] + 2.0 * (i1[2] * i2[0] - i1[0] * i2[2]),
+                vec[2] + 2.0 * (i1[0] * i2[1] - i1[1] * i2[0]));
+}
+
+vec3 GetDualQuaternionTranslation(vec4 real, vec4 dual)
+{
+    // See GfDualQuat::GetTranslation() for algorithm
+
+    float scale = -2.0;
+
+    float rw = real.w;
+    vec3  ri = real.xyz;
+
+    float dw = dual.w;
+    vec3  di = dual.xyz;
+
+    return vec3( (dw*ri[0] - rw*di[0] + di[1]*ri[2] - di[2]*ri[1])*scale,
+                 (dw*ri[1] - rw*di[1] + di[2]*ri[0] - di[0]*ri[2])*scale,
+                 (dw*ri[2] - rw*di[2] + di[0]*ri[1] - di[1]*ri[0])*scale );
+}
+
+vec3 ApplySkinningDQS(vec3 restP)
+{
+#if defined(HD_HAS_skel_geomBindTransform) && \
+    defined(HD_HAS_hydra_numInfluencesPerComponent) && \
+    defined(HD_HAS_hydra_hasConstantInfluences) && \
+    defined(HD_HAS_hydra_influences) && \
+    defined(HD_HAS_hydra_skinningDualQuats) && \
+    defined(HD_HAS_hydra_primWorldToLocal) && \
+    defined(HD_HAS_hydra_skelLocalToWorld) && \
+    defined(HD_HAS_hydra_numJoints)
+
+    vec3 p;
+    int numInfluencesPerComponent = HdGet_hydra_numInfluencesPerComponent();
+    if (numInfluencesPerComponent > 0) {
+        const int index = int(hd_VertexID) - GetBaseVertexOffset();
+        const int instanceOffset =
+            GetDrawingCoord().instanceIndex[0] * HdGet_hydra_numJoints();
+
+        // model space -> bind space
+        mat4 geomBindXform = HdGet_skel_geomBindTransform();
+        vec3 initP = (geomBindXform * vec4(restP, 1)).xyz;
+
+#ifdef HD_HAS_hydra_skinningScaleXforms
+        vec3 scaledP = vec3(0, 0, 0);
+#endif
+
+        bool constantPointInfluence = HdGet_hydra_hasConstantInfluences();
+        int offset = constantPointInfluence ? 0 :
+            numInfluencesPerComponent * index;
+
+        // find the pivot quaternion
+        vec4 pivotQuat = GetPivotQuaternion(
+            numInfluencesPerComponent, offset, instanceOffset);
+
+        // find the weighted sum dual quaternion
+        vec4 weightedSumDQReal = vec4(0);
+        vec4 weightedSumDQDual = vec4(0);
+
+        for (int i = 0; i < numInfluencesPerComponent; i++) {
+            vec2 influence = HdGet_hydra_influences(offset + i);
+            float jointWeight = influence.y;
+
+            if (jointWeight > EPS) {
+                int jointIdx = int(influence.x) + instanceOffset;
+
+#ifdef HD_HAS_hydra_skinningScaleXforms
+                // Apply scale using LBS, if any of the skinning xforms has scales
+                mat3 scaleXform = HdGet_hydra_skinningScaleXforms(jointIdx);
+                scaledP += ((scaleXform * initP) * jointWeight);
+#endif
+
+                // Apply rotation & translation using DQS
+                vec4 skinningDQReal = HdGet_hydra_skinningDualQuats(jointIdx*2);
+                vec4 skinningDQDual = HdGet_hydra_skinningDualQuats(jointIdx*2+1);
+                // Flip the dual quaternion, if necessary, to make it
+                // on the same hemisphere as the pivotQuat.
+                if (dot(skinningDQReal, pivotQuat) < 0.0) {
+                   jointWeight = -jointWeight;
+                }
+
+                weightedSumDQReal += (skinningDQReal * jointWeight);
+                weightedSumDQDual += (skinningDQDual * jointWeight);
+            }
+        }
+
+        // normalize weightedSumDQ
+        float realLength = length(weightedSumDQReal);
+        if (realLength < NORM_EPS) {
+            weightedSumDQReal = vec4(0, 0, 0, 1);  // identity quaternion
+            weightedSumDQDual = vec4(0);           // zero quaternion
+        } else {
+            float inverseRealLength = 1.0 / realLength;
+            // rotation normalization
+            weightedSumDQReal *= inverseRealLength;
+            weightedSumDQDual *= inverseRealLength;
+            // plucker normalization
+            weightedSumDQDual -=
+                (dot(weightedSumDQReal, weightedSumDQDual) * weightedSumDQReal);
+        }
+
+#ifdef HD_HAS_hydra_skinningScaleXforms
+        // transform scaledP by weightedSumDQ
+        p = TransformByQuaternion(weightedSumDQReal, scaledP)
+            + GetDualQuaternionTranslation(weightedSumDQReal, weightedSumDQDual);
+#else
+        // transform initP by weightedSumDQ
+        p = TransformByQuaternion(weightedSumDQReal, initP)
+            + GetDualQuaternionTranslation(weightedSumDQReal, weightedSumDQDual);
+#endif
+
+        // skel space -> world space -> model space
+        // XXX: Casts to mat4 below are necessary because the matrices passed
+        // down use doubles and not floats.
+        mat4 skelToPrimLocal = mat4(HdGet_hydra_primWorldToLocal()) *
+                               mat4(HdGet_hydra_skelLocalToWorld());
+        p = (skelToPrimLocal * vec4(p, 1)).xyz;
+        return p;
+    }
+#endif
+    return restP;
+}
+
+// ---------------------------------------------------------------------------
+
+vec3 ApplyBlendShapes(vec3 restP)
+{
+#if defined(HD_HAS_hydra_numBlendShapeOffsetRanges) && \
+    defined(HD_HAS_hydra_blendShapeOffsetRanges) && \
+    defined(HD_HAS_hydra_blendShapeOffsets) && \
+    defined(HD_HAS_hydra_numBlendShapeWeights) && \
+    defined(HD_HAS_hydra_blendShapeWeights)
+
+    const int index = int(hd_VertexID) - GetBaseVertexOffset();
+    const int instanceOffset =
+        GetDrawingCoord().instanceIndex[0] * HdGet_hydra_numBlendShapeWeights();
+
+    const int numBlendShapeOffsetRanges = HdGet_hydra_numBlendShapeOffsetRanges();
+    if (index < numBlendShapeOffsetRanges) {
+        ivec2 blendShapeOffsetRange = HdGet_hydra_blendShapeOffsetRanges(index);
+        for (int i = blendShapeOffsetRange.x; i < blendShapeOffsetRange.y; ++i) {
+            const vec4 offset = HdGet_hydra_blendShapeOffsets(i);
+            const int shapeIndex = instanceOffset + int(offset.w);
+            const float weight = HdGet_hydra_blendShapeWeights(shapeIndex);
+            restP += offset.xyz * weight;
+        }
+    }
+#endif
+    return restP;
+}
+
+vec3 ApplySkinning(vec3 restP)
+{
+    vec3 p = ApplyBlendShapes(restP);
+
+#ifdef HD_HAS_hydra_numSkinningMethod
+    const int skinningMethod = HdGet_hydra_numSkinningMethod();
+    if (skinningMethod == 1) {
+        return ApplySkinningDQS(p);
+    }
+#endif
+    return ApplySkinningLBS(p);
 }
 
 
@@ -3342,6 +4060,14 @@ void ProcessPointId(int pointId)
 
 
 
+float ApplyPointSizeBias(float pointSize)
+{
+    // do nothing
+    return pointSize;
+}
+
+
+
 // Fwd declare methods defined in pointId.glslfx, that are used below.
 FORWARD_DECL(int GetPointId());
 FORWARD_DECL(float GetPointRasterSize(int));
@@ -3352,13 +4078,13 @@ void main(void)
     ProcessPrimvarsIn();
 
     MAT4 transform    = ApplyInstanceTransform(HdGet_transform());
-    vec4 point        = vec4(HdGet_points().xyz, 1);
+    vec4 point        = vec4(ApplySkinning(HdGet_points().xyz), 1);
     outData.Peye = vec4(GetWorldToViewMatrix() * transform * point);
 
     outData.Neye = GetNormal(vec3(0), 0); // normalized
 
     int pointId = GetPointId();
-    gl_PointSize = GetPointRasterSize(pointId);
+    gl_PointSize = ApplyPointSizeBias(GetPointRasterSize(pointId));
     ProcessPointId(pointId);
 
     gl_Position = vec4(GetProjectionMatrix() * outData.Peye);
@@ -3376,6 +4102,18 @@ void main(void)
   GEOMETRY SHADER                                      
 =======================================================
 #version 450
+#if defined(GL_EXT_control_flow_attributes)
+	#extension GL_EXT_control_flow_attributes: require
+	#define HGI_COMPILER_ATTR_UNROLL [[unroll]]
+	#define HGI_COMPILER_ATTR_DONT_UNROLL [[dont_unroll]]
+	#define HGI_COMPILER_ATTR_FLATTEN [[flatten]]
+	#define HGI_COMPILER_ATTR_DONT_FLATTEN [[dont_flatten]]
+#else
+	#define HGI_COMPILER_ATTR_UNROLL
+	#define HGI_COMPILER_ATTR_DONT_UNROLL
+	#define HGI_COMPILER_ATTR_FLATTEN
+	#define HGI_COMPILER_ATTR_DONT_FLATTEN
+#endif
 #define REF(space,type) inout type
 #define FORWARD_DECL(func_decl) func_decl
 #define ATOMIC_LOAD(a) (a)
@@ -3385,6 +4123,7 @@ void main(void)
 #define ATOMIC_COMP_SWAP(a, expected, desired) atomicCompSwap(a, expected, desired)
 #define atomic_int int
 #define atomic_uint uint
+#define hd_SampleMask gl_SampleMask[0]
 
 #define HGI_HAS_DOUBLE_TYPE 1
 
@@ -3400,8 +4139,9 @@ struct hgi_dmat3 { double m00, m01, m02,
                           m20, m21, m22; };
 
 // //////// Codegen Defines //////// 
-#define HD_SHADER_API 2
+#define HD_SHADER_API 3
 #define MAT4 mat4
+#define HD_USE_HARDWARE_CLIPPING
 // Alias hgi vec and matrix types to hd.
 #define hd_ivec3 hgi_ivec3
 #define hd_vec3 hgi_vec3
@@ -3539,15 +4279,14 @@ layout(location = 5) in PrimvarData {
   vec3 normals;
 } inPrimvars[HD_NUM_PRIMITIVE_VERTS];
 layout(location = 2) out vec4 gsPatchCoord;
-noperspective layout(location = 3) out vec3 hd_barycentricCoord;
-flat layout(location = 4) out ivec4 gs_interstageDrawingCoord0;
-flat layout(location = 5) out ivec4 gs_interstageDrawingCoord1;
-flat layout(location = 6) out ivec4 gs_interstageDrawingCoord2;
+flat layout(location = 3) out ivec4 gs_interstageDrawingCoord0;
+flat layout(location = 4) out ivec4 gs_interstageDrawingCoord1;
+flat layout(location = 5) out ivec4 gs_interstageDrawingCoord2;
 layout(location = 0) out VertexData {
   vec4 Peye;
   vec3 Neye;
 } outData;
-layout(location = 7) out PrimvarData {
+layout(location = 6) out PrimvarData {
   vec3 points;
   vec3 normals;
   vec2 dispTextureCoord;
@@ -3695,10 +4434,6 @@ void ProcessSamplingTransforms(MAT4 instanceModelViewInverse) {
 FORWARD_DECL(vec4 GetPatchCoord(int index));
 void ProcessPrimvarsOut(int index) {
   vec2 localST = GetPatchCoord(index).xy;
-  const vec3 coords[4] = vec3[](
-   vec3(1,0,0), vec3(0,1,0), vec3(0,0,1), vec3(0,1,0)
-  );
-  hd_barycentricCoord = coords[index];
   hd_drawingCoord dc = GetDrawingCoord();
   gs_interstageDrawingCoord0[0] = dc.modelCoord;
   gs_interstageDrawingCoord0[1] = dc.constantCoord;
@@ -3752,6 +4487,13 @@ MAT4  GetProjectionMatrix() {
     return MAT4(1);
 #endif
 }
+MAT4  GetProjectionInverseMatrix() {
+#if defined(HD_HAS_projectionInverseMatrix)
+    return MAT4(HdGet_projectionInverseMatrix());
+#else
+    return MAT4(1);
+#endif
+}
 vec3 GetPositionInWorldSpace(vec3 windowRelativeCoord)
 {
 #if defined(HD_HAS_imageToWorldMatrix)
@@ -3765,6 +4507,13 @@ vec3 GetPositionInWorldSpace(vec3 windowRelativeCoord)
 float GetLightingBlendAmount() {
 #if defined(HD_HAS_lightingBlendAmount)
     return HdGet_lightingBlendAmount();
+#else
+    return 1;
+#endif
+}
+float GetLinearExposure() {
+#if defined(HD_HAS_linearExposure)
+    return HdGet_linearExposure();
 #else
     return 1;
 #endif
@@ -3841,6 +4590,7 @@ vec2 ApplyAxisAlignedAffineTransform(vec4 t, vec2 pt)
 
 
 
+#ifdef HD_USE_HARDWARE_CLIPPING
 void ApplyClipPlanes(vec4 Peye)
 {
 #if defined(HD_HAS_numClipPlanes)
@@ -3858,6 +4608,7 @@ void ApplyClipPlanes(vec4 Peye)
 #endif
 #endif
 }
+#endif
 
 
 
@@ -3996,6 +4747,7 @@ MAT4 GetInstanceTransform()
 {
     MAT4 m = MAT4(1);
 #ifdef HD_INSTANCER_NUM_LEVELS
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         m = GetInstanceTransform(i) * m;
 #ifdef HD_HAS_instancerTransform
@@ -4010,6 +4762,7 @@ MAT4 GetInstanceTransformInverse()
 {
     MAT4 m = MAT4(1);
 #ifdef HD_INSTANCER_NUM_LEVELS
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         m = m * GetInstanceTransformInverse(i);
 #ifdef HD_HAS_instancerTransformInverse
@@ -4044,11 +4797,13 @@ bool IsFlipped()
 #endif
 
 #ifdef HD_HAS_INSTANCE_hydra_instanceScales
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         vec3 scale = HdGetInstance_hydra_instanceScales(i, /*default=*/vec3(1));
         flip = flip != ((sign(scale.x) * sign(scale.y) * sign(scale.z)) < 0);
     }
 #elif defined(HD_HAS_INSTANCE_scale)
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         vec3 scale = HdGetInstance_scale(i, /*default=*/vec3(1));
         flip = flip != ((sign(scale.x) * sign(scale.y) * sign(scale.z)) < 0);
@@ -4056,11 +4811,13 @@ bool IsFlipped()
 #endif
 
 #ifdef HD_HAS_INSTANCE_hydra_instanceTransforms
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         MAT4 m = HdGetInstance_hydra_instanceTransforms(i, MAT4(1));
         flip = flip != (determinant(m) < 0.0);
     }
 #elif defined(HD_HAS_INSTANCE_instanceTransform)
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         MAT4 m = HdGetInstance_instanceTransform(i, MAT4(1));
         flip = flip != (determinant(m) < 0.0);
@@ -4209,6 +4966,19 @@ void main(void)
   FRAGMENT SHADER                                      
 =======================================================
 #version 450
+#if defined(GL_EXT_control_flow_attributes)
+	#extension GL_EXT_control_flow_attributes: require
+	#define HGI_COMPILER_ATTR_UNROLL [[unroll]]
+	#define HGI_COMPILER_ATTR_DONT_UNROLL [[dont_unroll]]
+	#define HGI_COMPILER_ATTR_FLATTEN [[flatten]]
+	#define HGI_COMPILER_ATTR_DONT_FLATTEN [[dont_flatten]]
+#else
+	#define HGI_COMPILER_ATTR_UNROLL
+	#define HGI_COMPILER_ATTR_DONT_UNROLL
+	#define HGI_COMPILER_ATTR_FLATTEN
+	#define HGI_COMPILER_ATTR_DONT_FLATTEN
+#endif
+#extension GL_EXT_fragment_shader_barycentric: require
 #define REF(space,type) inout type
 #define FORWARD_DECL(func_decl) func_decl
 #define ATOMIC_LOAD(a) (a)
@@ -4218,6 +4988,7 @@ void main(void)
 #define ATOMIC_COMP_SWAP(a, expected, desired) atomicCompSwap(a, expected, desired)
 #define atomic_int int
 #define atomic_uint uint
+#define hd_SampleMask gl_SampleMask[0]
 
 #define HGI_HAS_DOUBLE_TYPE 1
 
@@ -4233,8 +5004,9 @@ struct hgi_dmat3 { double m00, m01, m02,
                           m20, m21, m22; };
 
 // //////// Codegen Defines //////// 
-#define HD_SHADER_API 2
+#define HD_SHADER_API 3
 #define MAT4 mat4
+#define HD_USE_HARDWARE_CLIPPING
 // Alias hgi vec and matrix types to hd.
 #define hd_ivec3 hgi_ivec3
 #define hd_vec3 hgi_vec3
@@ -4359,15 +5131,15 @@ layout(std430, binding = 2) readonly buffer ssbo_edgeIndices { ivec2 edgeIndices
 layout(std430, binding = 3) readonly buffer ssbo_faceVisibility { float faceVisibility[]; };
 layout(std430, binding = 4) readonly buffer ssbo_dispTextureCoord { vec2 dispTextureCoord[]; };
 layout(location = 2) in vec4 gsPatchCoord;
-noperspective layout(location = 3) in vec3 hd_barycentricCoord;
-flat layout(location = 4) in ivec4 gs_interstageDrawingCoord0;
-flat layout(location = 5) in ivec4 gs_interstageDrawingCoord1;
-flat layout(location = 6) in ivec4 gs_interstageDrawingCoord2;
+flat layout(location = 3) in ivec4 gs_interstageDrawingCoord0;
+flat layout(location = 4) in ivec4 gs_interstageDrawingCoord1;
+flat layout(location = 5) in ivec4 gs_interstageDrawingCoord2;
+vec3 hd_BaryCoordNoPersp = gl_BaryCoordNoPerspEXT;
 layout(location = 0) in VertexData {
   vec4 Peye;
   vec3 Neye;
 } inData;
-layout(location = 7) in PrimvarData {
+layout(location = 6) in PrimvarData {
   vec3 points;
   vec3 normals;
   vec2 dispTextureCoord;
@@ -4413,7 +5185,7 @@ float HdGetScalar_widths() { return HdGet_widths(0); }
 // //////// Codegen FS Source //////// 
 #define HD_SHADER_SUPPORTS_DOUBLE_PRECISION
 vec3 GetBarycentricCoord() {
-  return hd_barycentricCoord;
+  return hd_BaryCoordNoPersp;
 }
 int GetPrimitiveID() {
   return gl_PrimitiveID;
@@ -4537,6 +5309,13 @@ MAT4  GetProjectionMatrix() {
     return MAT4(1);
 #endif
 }
+MAT4  GetProjectionInverseMatrix() {
+#if defined(HD_HAS_projectionInverseMatrix)
+    return MAT4(HdGet_projectionInverseMatrix());
+#else
+    return MAT4(1);
+#endif
+}
 vec3 GetPositionInWorldSpace(vec3 windowRelativeCoord)
 {
 #if defined(HD_HAS_imageToWorldMatrix)
@@ -4550,6 +5329,13 @@ vec3 GetPositionInWorldSpace(vec3 windowRelativeCoord)
 float GetLightingBlendAmount() {
 #if defined(HD_HAS_lightingBlendAmount)
     return HdGet_lightingBlendAmount();
+#else
+    return 1;
+#endif
+}
+float GetLinearExposure() {
+#if defined(HD_HAS_linearExposure)
+    return HdGet_linearExposure();
 #else
     return 1;
 #endif
@@ -4644,11 +5430,21 @@ vec4 ApplySelectionColor(vec4 color)
     return color;
 }
 
+// No-op stub for passes without selection highlighting (e.g. pick and
+// shadow passes). It satisfies the forward declaration called from
+// ApplyColorOverridesPostLighting. The real minimum selection opacity floor
+// is in hdx/shaders/selection.glslfx.
+vec4 ApplySelectionOpacity(vec4 color)
+{
+    return color;
+}
+
 
 
 // Forward declare selection functionality.
 // XXX: Currently, the non-empty implementation of this is in hdx.
 FORWARD_DECL(vec4 ApplySelectionColor(vec4 color));
+FORWARD_DECL(vec4 ApplySelectionOpacity(vec4 color));
 
 // XXX: Make sure to update hdx/shaders/renderPass.glslfx when editing these
 // color override methods, since they're currently duplicated. This is because
@@ -4681,7 +5477,7 @@ vec4 ApplyColorOverridesPostLighting(vec4 color)
         vec4 indicatorColor = GetIndicatorColor();
         color.rgb = ApplyMaskColor(color.rgb, indicatorWeight, indicatorColor);
     #endif
-    return color;
+    return ApplySelectionOpacity(color);
 }
 
 
@@ -4901,6 +5697,7 @@ MAT4 GetInstanceTransform()
 {
     MAT4 m = MAT4(1);
 #ifdef HD_INSTANCER_NUM_LEVELS
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         m = GetInstanceTransform(i) * m;
 #ifdef HD_HAS_instancerTransform
@@ -4915,6 +5712,7 @@ MAT4 GetInstanceTransformInverse()
 {
     MAT4 m = MAT4(1);
 #ifdef HD_INSTANCER_NUM_LEVELS
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         m = m * GetInstanceTransformInverse(i);
 #ifdef HD_HAS_instancerTransformInverse
@@ -4949,11 +5747,13 @@ bool IsFlipped()
 #endif
 
 #ifdef HD_HAS_INSTANCE_hydra_instanceScales
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         vec3 scale = HdGetInstance_hydra_instanceScales(i, /*default=*/vec3(1));
         flip = flip != ((sign(scale.x) * sign(scale.y) * sign(scale.z)) < 0);
     }
 #elif defined(HD_HAS_INSTANCE_scale)
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         vec3 scale = HdGetInstance_scale(i, /*default=*/vec3(1));
         flip = flip != ((sign(scale.x) * sign(scale.y) * sign(scale.z)) < 0);
@@ -4961,11 +5761,13 @@ bool IsFlipped()
 #endif
 
 #ifdef HD_HAS_INSTANCE_hydra_instanceTransforms
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         MAT4 m = HdGetInstance_hydra_instanceTransforms(i, MAT4(1));
         flip = flip != (determinant(m) < 0.0);
     }
 #elif defined(HD_HAS_INSTANCE_instanceTransform)
+    HGI_COMPILER_ATTR_UNROLL
     for (int i = 0; i < HD_INSTANCER_NUM_LEVELS; ++i) {
         MAT4 m = HdGetInstance_instanceTransform(i, MAT4(1));
         flip = flip != (determinant(m) < 0.0);
@@ -5077,9 +5879,9 @@ vec4 GetEdgeDistanceQuad()
 
 
 
-vec4 ApplyFinalEdgeOpacity(vec4 Cfill)
+vec4 ApplyFinalEdgeOpacity(vec4 Cfill, float p)
 {
-    Cfill.a = 1.0;
+    Cfill.a = mix(Cfill.a, 1, p);
     return Cfill;
 }
 
@@ -5088,9 +5890,11 @@ vec4 ApplyFinalEdgeOpacity(vec4 Cfill)
 vec4 ApplyEdgeColor(vec4 Cfill, vec4 patchCoord)
 {
     float p = GetEdgeOpacity();
-    if (p < 0.5) discard;
+    if (p < 0.5) {
+        discard;
+    }
 
-    return ApplyFinalEdgeOpacity(Cfill);
+    return ApplyFinalEdgeOpacity(Cfill, p);
 }
 
 
@@ -5116,6 +5920,7 @@ FORWARD_DECL(ScalarOverride GetScalarOverride());
 FORWARD_DECL(
     vec4 surfaceShader(vec4 Peye, vec3 Neye, vec4 color, vec4 patchCoord));
 FORWARD_DECL(vec4 postSurfaceShader(vec4 Peye, vec3 Neye, vec4 color));
+FORWARD_DECL(vec4 ApplySelectionOpacity(vec4 color));
 
 vec4 ShadingTerminal(vec4 Peye, vec3 Neye, vec4 color, vec4 patchCoord)
 {
@@ -5132,7 +5937,9 @@ vec4 ShadingTerminal(vec4 Peye, vec3 Neye, vec4 color, vec4 patchCoord)
         vec4 colorOverride = ApplyColorOverrides(result);
         result = reprStyle.applyColorOverride ? colorOverride : result;
 
-        return result;
+        // This path skips ApplyColorOverridesPostLighting, so apply the
+        // selection opacity floor here.
+        return ApplySelectionOpacity(result);
     }
 
     // Draw mode can override face color
@@ -5163,6 +5970,9 @@ vec4 ShadingTerminal(vec4 Peye, vec3 Neye, vec4 color, vec4 patchCoord)
                                          Neye,
                                          shadingColor);
 #endif
+
+        // Modify the shaded color by camera exposure.
+        shadingColor.rgb *= GetLinearExposure();
 
         reprColor.rgb = reprStyle.useSurfaceShaderColor ?
                         shadingColor.rgb :
@@ -5352,6 +6162,13 @@ int GetPointId()
 }
 
 
+
+void ApplyDiskSampleMask()
+{
+    // do nothing
+}
+
+
 void DiscardBasedOnTopologicalVisibility()
 {
     // Nothing to do, since there's no authored opinion.
@@ -5399,6 +6216,8 @@ vec3 ComputeScreenSpaceNeye()
 
 void main(void)
 {
+    ApplyDiskSampleMask();
+
     bool isFlipped = IsFlipped();
 
     DiscardBasedOnShading(gl_FrontFacing, isFlipped);
@@ -5427,6 +6246,17 @@ void main(void)
 
     vec4 patchCoord = GetPatchCoord();
     color = ShadingTerminal(vec4(Peye, 1), Neye, color, patchCoord);
+
+#if defined(HD_HAS_depthReadback) && defined(HD_EARLY_FRAGMENT_TESTS)
+    // This section needs to come after ShadingTerminal to avoid possible
+    // non-uniform paths when sampling textures required for shading
+    const float bufferVal = texelFetch(HdGetSampler_depthReadback(),
+                                       ivec2(gl_FragCoord.xy),
+                                       /* lod = */ 0).x;
+    if (gl_FragCoord.z >= bufferVal) {
+      discard;
+    }
+#endif
 
     color = ApplyEdgeColor(color, patchCoord);
 

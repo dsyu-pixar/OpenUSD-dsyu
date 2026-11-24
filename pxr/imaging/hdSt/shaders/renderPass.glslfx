@@ -49,6 +49,13 @@ MAT4  GetProjectionMatrix() {
     return MAT4(1);
 #endif
 }
+MAT4  GetProjectionInverseMatrix() {
+#if defined(HD_HAS_projectionInverseMatrix)
+    return MAT4(HdGet_projectionInverseMatrix());
+#else
+    return MAT4(1);
+#endif
+}
 vec3 GetPositionInWorldSpace(vec3 windowRelativeCoord)
 {
 #if defined(HD_HAS_imageToWorldMatrix)
@@ -62,6 +69,13 @@ vec3 GetPositionInWorldSpace(vec3 windowRelativeCoord)
 float GetLightingBlendAmount() {
 #if defined(HD_HAS_lightingBlendAmount)
     return HdGet_lightingBlendAmount();
+#else
+    return 1;
+#endif
+}
+float GetLinearExposure() {
+#if defined(HD_HAS_linearExposure)
+    return HdGet_linearExposure();
 #else
     return 1;
 #endif
@@ -151,6 +165,7 @@ vec2 HorizontallyNormalizedFilmbackCoordinates()
 
 -- glsl RenderPass.ApplyClipPlanes
 
+#ifdef HD_USE_HARDWARE_CLIPPING
 void ApplyClipPlanes(vec4 Peye)
 {
 #if defined(HD_HAS_numClipPlanes)
@@ -168,6 +183,7 @@ void ApplyClipPlanes(vec4 Peye)
 #endif
 #endif
 }
+#endif
 
 -- glsl RenderPass.NoColorOverrides
 
@@ -193,11 +209,21 @@ vec4 ApplySelectionColor(vec4 color)
     return color;
 }
 
+// No-op stub for passes without selection highlighting (e.g. pick and
+// shadow passes). It satisfies the forward declaration called from
+// ApplyColorOverridesPostLighting. The real minimum selection opacity floor
+// is in hdx/shaders/selection.glslfx.
+vec4 ApplySelectionOpacity(vec4 color)
+{
+    return color;
+}
+
 -- glsl RenderPass.ApplyColorOverrides
 
 // Forward declare selection functionality.
 // XXX: Currently, the non-empty implementation of this is in hdx.
 FORWARD_DECL(vec4 ApplySelectionColor(vec4 color));
+FORWARD_DECL(vec4 ApplySelectionOpacity(vec4 color));
 
 // XXX: Make sure to update hdx/shaders/renderPass.glslfx when editing these
 // color override methods, since they're currently duplicated. This is because
@@ -230,7 +256,7 @@ vec4 ApplyColorOverridesPostLighting(vec4 color)
         vec4 indicatorColor = GetIndicatorColor();
         color.rgb = ApplyMaskColor(color.rgb, indicatorWeight, indicatorColor);
     #endif
-    return color;
+    return ApplySelectionOpacity(color);
 }
 
 -- glsl RenderPass.RenderOutput
@@ -310,40 +336,3 @@ void RenderNeye(vec3 Neye)
     // do nothing
 }
 
--- layout RenderPass.RenderIdNoIdAov
-
-[
-    ["out", "vec4", "primIdOut"],
-    ["out", "vec4", "instanceIdOut"]
-]
-
--- glsl RenderPass.RenderIdNoIdAov
-
-// XXX: This snippet is legacy code soon to be deprecated. It is used when the 
-// client asks for an id render using HdxRenderTaskParams rather than via an id 
-// aov.
-
-vec4 IntToVec4(int id)
-{
-    return vec4(((id >>  0) & 0xff) / 255.0,
-                ((id >>  8) & 0xff) / 255.0,
-                ((id >> 16) & 0xff) / 255.0,
-                ((id >> 24) & 0xff) / 255.0);
-}
-
-void RenderOutput(vec4 Peye, vec3 Neye, vec4 color, vec4 patchCoord)
-{
-    // Allow alpha threshold discard for ID renders regardless of material tag
-    if (ShouldDiscardByAlpha(color)) {
-        discard;
-    }
-
-    int primId = HdGet_primID();
-    primIdOut = IntToVec4(primId);
-
-    // instanceIndex is a tuple of integers (num nested levels).
-    // for picking, we store global instanceId (instanceIndex[0]) in the
-    // selection framebuffer and then reconstruct the tuple in postprocess.
-    int instanceId = GetDrawingCoord().instanceIndex[0];
-    instanceIdOut = IntToVec4(instanceId);
-}

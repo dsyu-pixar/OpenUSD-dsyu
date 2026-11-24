@@ -518,58 +518,114 @@ struct TestCase<VtArray<double> >
 };
 
 template <>
-struct TestCase<SdfTimeCode>
+struct TestCase<GfTimeCode>
 {
     static void AddTestCase(const UsdPrim& prim)
     {
         UsdAttribute attr = 
             prim.CreateAttribute(TfToken("testTimeCode"), SdfValueTypeNames->TimeCode);
-        TF_VERIFY(attr.Set(SdfTimeCode(0.0), UsdTimeCode(0.0)));
-        TF_VERIFY(attr.Set(SdfTimeCode(2.0), UsdTimeCode(2.0)));
+        TF_VERIFY(attr.Set(GfTimeCode(0.0), UsdTimeCode(0.0)));
+        TF_VERIFY(attr.Set(GfTimeCode(2.0), UsdTimeCode(2.0)));
     }
 
     static void TestLinearInterpolation(const UsdPrim& prim)
     {
         UsdAttribute attr = prim.GetAttribute(TfToken("testTimeCode"));
-        VerifyAttributeValue(attr, UsdTimeCode(0.0), SdfTimeCode(0.0));
-        VerifyAttributeValue(attr, UsdTimeCode(1.0), SdfTimeCode(1.0));
-        VerifyAttributeValue(attr, UsdTimeCode(2.0), SdfTimeCode(2.0));
+        VerifyAttributeValue(attr, UsdTimeCode(0.0), GfTimeCode(0.0));
+        VerifyAttributeValue(attr, UsdTimeCode(1.0), GfTimeCode(1.0));
+        VerifyAttributeValue(attr, UsdTimeCode(2.0), GfTimeCode(2.0));
     }
 
     static void TestHeldInterpolation(const UsdPrim& prim)
     {
         UsdAttribute attr = prim.GetAttribute(TfToken("testTimeCode"));
-        VerifyAttributeValue(attr, UsdTimeCode(0.0), SdfTimeCode(0.0));
-        VerifyAttributeValue(attr, UsdTimeCode(1.0), SdfTimeCode(0.0));
-        VerifyAttributeValue(attr, UsdTimeCode(2.0), SdfTimeCode(2.0));
+        VerifyAttributeValue(attr, UsdTimeCode(0.0), GfTimeCode(0.0));
+        VerifyAttributeValue(attr, UsdTimeCode(1.0), GfTimeCode(0.0));
+        VerifyAttributeValue(attr, UsdTimeCode(2.0), GfTimeCode(2.0));
     }
 };
 
 template <>
-struct TestCase<VtArray<SdfTimeCode> >
+struct TestCase<VtArray<GfTimeCode> >
 {
     static void AddTestCase(const UsdPrim& prim)
     {
         UsdAttribute attr = 
             prim.CreateAttribute(TfToken("testTimeCodeArray"), SdfValueTypeNames->TimeCodeArray);
-        TF_VERIFY(attr.Set(CreateVtArray(SdfTimeCode(0.0)), UsdTimeCode(0.0)));
-        TF_VERIFY(attr.Set(CreateVtArray(SdfTimeCode(2.0)), UsdTimeCode(2.0)));
+        TF_VERIFY(attr.Set(CreateVtArray(GfTimeCode(0.0)), UsdTimeCode(0.0)));
+        TF_VERIFY(attr.Set(CreateVtArray(GfTimeCode(2.0)), UsdTimeCode(2.0)));
     }
 
     static void TestLinearInterpolation(const UsdPrim& prim)
     {
         UsdAttribute attr = prim.GetAttribute(TfToken("testTimeCodeArray"));
-        VerifyAttributeValue(attr, UsdTimeCode(0.0), CreateVtArray(SdfTimeCode(0.0)));
-        VerifyAttributeValue(attr, UsdTimeCode(1.0), CreateVtArray(SdfTimeCode(1.0)));
-        VerifyAttributeValue(attr, UsdTimeCode(2.0), CreateVtArray(SdfTimeCode(2.0)));
+        VerifyAttributeValue(attr, UsdTimeCode(0.0), CreateVtArray(GfTimeCode(0.0)));
+        VerifyAttributeValue(attr, UsdTimeCode(1.0), CreateVtArray(GfTimeCode(1.0)));
+        VerifyAttributeValue(attr, UsdTimeCode(2.0), CreateVtArray(GfTimeCode(2.0)));
     }
 
     static void TestHeldInterpolation(const UsdPrim& prim)
     {
         UsdAttribute attr = prim.GetAttribute(TfToken("testTimeCodeArray"));
-        VerifyAttributeValue(attr, UsdTimeCode(0.0), CreateVtArray(SdfTimeCode(0.0)));
-        VerifyAttributeValue(attr, UsdTimeCode(1.0), CreateVtArray(SdfTimeCode(0.0)));
-        VerifyAttributeValue(attr, UsdTimeCode(2.0), CreateVtArray(SdfTimeCode(2.0)));
+        VerifyAttributeValue(attr, UsdTimeCode(0.0), CreateVtArray(GfTimeCode(0.0)));
+        VerifyAttributeValue(attr, UsdTimeCode(1.0), CreateVtArray(GfTimeCode(0.0)));
+        VerifyAttributeValue(attr, UsdTimeCode(2.0), CreateVtArray(GfTimeCode(2.0)));
+    }
+};
+
+template <>
+struct TestCase<GfDuration>
+{
+    static void AddTestCase(const UsdPrim& prim)
+    {
+        UsdAttribute attr = 
+            prim.CreateAttribute(TfToken("testDuration"), SdfValueTypeNames->Duration);
+        TF_VERIFY(attr.Set(GfDuration(0.0), UsdTimeCode(0.0)));
+        TF_VERIFY(attr.Set(GfDuration(2.0), UsdTimeCode(2.0)));
+    }
+
+    static void TestLinearInterpolation(const UsdPrim& prim)
+    {
+        UsdAttribute attr = prim.GetAttribute(TfToken("testDuration"));
+        VerifyAttributeValue(attr, UsdTimeCode(0.0), GfDuration(0.0));
+        VerifyAttributeValue(attr, UsdTimeCode(1.0), GfDuration(1.0));
+        VerifyAttributeValue(attr, UsdTimeCode(2.0), GfDuration(2.0));
+    }
+
+    static void TestHeldInterpolation(const UsdPrim& prim)
+    {
+        UsdAttribute attr = prim.GetAttribute(TfToken("testDuration"));
+        VerifyAttributeValue(attr, UsdTimeCode(0.0), GfDuration(0.0));
+        VerifyAttributeValue(attr, UsdTimeCode(1.0), GfDuration(0.0));
+        VerifyAttributeValue(attr, UsdTimeCode(2.0), GfDuration(2.0));
+    }
+};
+
+template <>
+struct TestCase<VtArray<GfDuration> >
+{
+    static void AddTestCase(const UsdPrim& prim)
+    {
+        UsdAttribute attr = 
+            prim.CreateAttribute(TfToken("testDurationArray"), SdfValueTypeNames->DurationArray);
+        TF_VERIFY(attr.Set(CreateVtArray(GfDuration(0.0)), UsdTimeCode(0.0)));
+        TF_VERIFY(attr.Set(CreateVtArray(GfDuration(2.0)), UsdTimeCode(2.0)));
+    }
+
+    static void TestLinearInterpolation(const UsdPrim& prim)
+    {
+        UsdAttribute attr = prim.GetAttribute(TfToken("testDurationArray"));
+        VerifyAttributeValue(attr, UsdTimeCode(0.0), CreateVtArray(GfDuration(0.0)));
+        VerifyAttributeValue(attr, UsdTimeCode(1.0), CreateVtArray(GfDuration(1.0)));
+        VerifyAttributeValue(attr, UsdTimeCode(2.0), CreateVtArray(GfDuration(2.0)));
+    }
+
+    static void TestHeldInterpolation(const UsdPrim& prim)
+    {
+        UsdAttribute attr = prim.GetAttribute(TfToken("testDurationArray"));
+        VerifyAttributeValue(attr, UsdTimeCode(0.0), CreateVtArray(GfDuration(0.0)));
+        VerifyAttributeValue(attr, UsdTimeCode(1.0), CreateVtArray(GfDuration(0.0)));
+        VerifyAttributeValue(attr, UsdTimeCode(2.0), CreateVtArray(GfDuration(2.0)));
     }
 };
 
@@ -1970,7 +2026,7 @@ TestInterpolation(const string &layerIdent)
     // value type is added without a corresponding TestCase<T> added,
     // this test won't compile. If a value type is removed, this
     // check will fail at runtime.
-    static const size_t numTestCasesExpected = 33;
+    static const size_t numTestCasesExpected = 34;
     const size_t numTestCasesAdded = AddTestCasesToPrim(testPrim);
     TF_VERIFY(numTestCasesAdded == numTestCasesExpected,
               "Expected %zd cases, got %zu.",
@@ -2056,7 +2112,7 @@ TestInterpolationWithLayerOffsets(const string &layerIdent)
     // Add test cases to the sub stage, using an edit target with the layer
     // offset we'll use when we add it as a sublayer. This should result in time
     // samples being authored at times 0.0 and 1.0 as the edit target will 
-    // invert the offset and apply it to the time samples. For SdfTimeCode
+    // invert the offset and apply it to the time samples. For GfTimeCode
     // value types this will also inverse scale the time sampled values 
     // themselves.
     const SdfLayerOffset testOffset(0.0, 2.0);

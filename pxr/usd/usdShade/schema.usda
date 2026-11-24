@@ -134,7 +134,15 @@ class Material "Material" (
     Finally, Material encapsulation also allows us to 
     \\ref UsdShadeMaterial_BaseMaterial "specialize" child materials from 
     parent materials.
-    
+
+    For UsdShade schema domain any connectable child prim of UsdShadeMaterial 
+    must be either UsdShadeShader derived or UsdShadeNodeGraph derived but not 
+    UsdShadeMaterial, that is, UsdShadeMaterial can not be nested. It also must
+    not contain any imageable prims as its descendants (UsdGeomScope,
+    UsdGeomCamera, UsdGeomMesh etc).
+
+    Other derived classes of UsdShadeNodeGraph from other schema domains may 
+    define their own stricter rules.
     """
     customData = {
         dictionary extraPlugInfo = {
@@ -244,7 +252,7 @@ class Shader "Shader" (
 #include "pxr/usd/usdShade/input.h"
 #include "pxr/usd/usdShade/output.h"
 #include "pxr/usd/usdShade/tokens.h"
-#include "pxr/usd/ndr/declare.h"
+#include "pxr/usd/sdr/declare.h"
 #include "pxr/usd/sdr/shaderNode.h"'''
     }
 ) {
@@ -267,7 +275,7 @@ class "NodeDefAPI"
 
     This schema provides properties that allow a prim to identify an external
     node definition, either by a direct identifier key into the SdrRegistry
-    (info:id), an asset to be parsed by a suitable NdrParserPlugin
+    (info:id), an asset to be parsed by a suitable SdrParserPlugin
     (info:sourceAsset), or an inline source code that must also be parsed
     (info:sourceCode); as well as a selector attribute to determine which
     specifier is active (info:implementationSource).
@@ -275,7 +283,7 @@ class "NodeDefAPI"
     customData = {
         token apiSchemaType = "singleApply"
         string extraIncludes = """
-#include "pxr/usd/ndr/declare.h"
+#include "pxr/usd/sdr/declare.h"
 #include "pxr/usd/sdr/shaderNode.h"
     """
         dictionary schemaTokens = {

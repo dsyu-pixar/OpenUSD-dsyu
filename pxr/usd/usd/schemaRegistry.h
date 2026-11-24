@@ -339,9 +339,9 @@ public:
     /// \note It's worth noting that
     /// GetTypeFromName("Sphere") == GetTypeFromName("UsdGeomSphere"), as
     /// this function resolves both the Schema's C++ class name and any
-    /// registered aliases from a libraries plugInfo.json file. However,
-    /// GetTypeFromName("Boundable") != GetTypeFromName("UsdGeomBoundable")
-    /// because type aliases don't get registered for abstract schema types.
+    /// registered aliases from a libraries plugInfo.json file. This applies
+    /// to abstract schema types as well, e.g.
+    /// GetTypeFromName("Boundable") == GetTypeFromName("UsdGeomBoundable").
     USD_API
     static TfType GetTypeFromName(const TfToken& typeName);
 
@@ -383,13 +383,14 @@ public:
         const TfToken &apiSchemaName,
         const TfToken &instanceName);
 
-    /// Returns a list of prim type names that the given \p apiSchemaName can
-    /// only be applied to. 
-    /// 
-    /// A non-empty list indicates that the API schema can only be applied to 
-    /// prim that are or derive from prim type names in the list. If the list
-    /// is empty, the API schema can be applied to prims of any type.
-    /// 
+    /// Returns a list of typed and/or applied API schema names that
+    /// \p apiSchemaName requires in order to be applied.
+    ///
+    /// A non-empty list indicates that the API schema can only be applied to
+    /// prims that derive from one or more typed schemas in the list, or have
+    /// one or more of the API schemas in the list applied. If the list is
+    /// empty, the API schema can be applied to any prim.
+    ///
     /// If a non-empty \p instanceName is provided, this will first look for
     /// a list of "can only apply to" names specific to that instance of the API
     /// schema and return that if found. If a list is not found for the specific
@@ -417,7 +418,7 @@ public:
     /// 
     /// These are separate from the auto-apply schemas that are built in to the 
     /// applied API schema types themselves and can be defined in any plugin to 
-    /// map any applied API schema to any concrete prim type.
+    /// map any applied API schema to any typed prim type.
     ///
     /// Note that GetAutoApplyAPISchemas will already include API schemas 
     /// collected from this method; this function is provided for clients that
@@ -493,6 +494,16 @@ public:
         const std::string &nameTemplate);
 
     /// Finds the prim definition for the given \p typeName token if 
+    /// \p typeName is a registered abstract typed schema type. Returns null if
+    /// it is not.
+    const UsdPrimDefinition* FindAbstractPrimDefinition(
+        const TfToken &typeName) const {
+        const auto it = _abstractTypedPrimDefinitions.find(typeName);
+        return it != _abstractTypedPrimDefinitions.end() ?
+            it->second.get() : nullptr;
+    }
+
+    /// Finds the prim definition for the given \p typeName token if 
     /// \p typeName is a registered concrete typed schema type. Returns null if
     /// it is not.
     const UsdPrimDefinition* FindConcretePrimDefinition(
@@ -554,12 +565,18 @@ private:
         const TfTokenVector &appliedAPISchemas,
         _FamilyAndInstanceToVersionMap *seenSchemaFamilyVersions) const;
 
+    TfTokenVector _PruneBaseClassPropertiesForPrimDefinition(
+        const UsdPrimDefinition *primDef, const TfToken &schemaName) const;
+
     // Private class for helping initialize the schema registry. Defined 
     // entirely in the implementation. Declared here for private access to the
     // registry.
     class _SchemaDefInitHelper;
 
     std::vector<SdfLayerRefPtr> _schematicsLayers;
+
+    std::unordered_map<TfToken, const std::unique_ptr<UsdPrimDefinition>,
+         TfHash> _abstractTypedPrimDefinitions;
 
     std::unordered_map<TfToken, const std::unique_ptr<UsdPrimDefinition>,
          TfHash> _concreteTypedPrimDefinitions;
